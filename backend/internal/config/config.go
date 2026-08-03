@@ -1234,6 +1234,8 @@ func (w GatewayOpenAIWSSchedulerScoreWeights) IsValid() bool {
 
 // GatewayOpenAISchedulerConfig OpenAI 高级调度器配置。
 type GatewayOpenAISchedulerConfig struct {
+	// OAuthFillFirstEnabled: OpenAI OAuth 账号按并发使用率从高到低填满，满后立即溢出。
+	OAuthFillFirstEnabled bool `mapstructure:"oauth_fill_first_enabled"`
 	// StickyEscapeEnabled: 是否允许 session_hash sticky 在账号健康度劣化时临时逃逸
 	StickyEscapeEnabled bool `mapstructure:"sticky_escape_enabled"`
 	// StickyEscapeTTFTMs: TTFT EWMA 超过该阈值时跳过 sticky
@@ -2268,6 +2270,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_ws.metadata_bridge_enabled", true)
 	viper.SetDefault("gateway.openai_ws.sticky_response_id_ttl_seconds", 3600)
 	viper.SetDefault("gateway.openai_ws.sticky_previous_response_ttl_seconds", 3600)
+	viper.SetDefault("gateway.openai_scheduler.oauth_fill_first_enabled", false)
 	viper.SetDefault("gateway.openai_ws.scheduler_score_weights.priority", 1.0)
 	viper.SetDefault("gateway.openai_ws.scheduler_score_weights.load", 1.0)
 	viper.SetDefault("gateway.openai_ws.scheduler_score_weights.queue", 0.7)

@@ -66,6 +66,8 @@ type openAIAdvancedSchedulerRuntimeSettings struct {
 var openAIAdvancedSchedulerSettingCache atomic.Value // *cachedOpenAIAdvancedSchedulerSetting
 var openAIAdvancedSchedulerSettingSF singleflight.Group
 
+var errOpenAIOAuthFillFirstNotApplicable = errors.New("openai oauth fill-first not applicable")
+
 type OpenAIAccountScheduleRequest struct {
 	GroupID                 *int64
 	Platform                string
@@ -74,6 +76,7 @@ type OpenAIAccountScheduleRequest struct {
 	StickyPreviousAccountID int64
 	StickyWeighted          bool
 	SubscriptionPriority    bool
+	OpenAIOAuthFillFirst    bool
 	PreserveStickyBinding   bool
 	PreviousResponseID      string
 	PreviousResponseCanMove bool
@@ -376,6 +379,25 @@ func (s *defaultOpenAIAccountScheduler) Select(
 		decision.LatencyMs = time.Since(start).Milliseconds()
 		s.metrics.recordSelect(decision)
 	}()
+
+	if req.OpenAIOAuthFillFirst {
+		selection, candidateCount, topK, loadSkew, err := s.selectByLoadBalance(ctx, req)
+		if !errors.Is(err, errOpenAIOAuthFillFirstNotApplicable) {
+			decision.Layer = openAIAccountScheduleLayerLoadBalance
+			decision.CandidateCount = candidateCount
+			decision.TopK = topK
+			decision.LoadSkew = loadSkew
+			if err != nil {
+				return nil, decision, err
+			}
+			if selection != nil && selection.Account != nil {
+				decision.SelectedAccountID = selection.Account.ID
+				decision.SelectedAccountType = selection.Account.Type
+			}
+			return selection, decision, nil
+		}
+		req.OpenAIOAuthFillFirst = false
+	}
 
 	previousResponseID := strings.TrimSpace(req.PreviousResponseID)
 	if previousResponseID != "" && normalizeOpenAICompatiblePlatform(req.Platform) == PlatformOpenAI &&
@@ -876,6 +898,11 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
 		loadRateSumSquares += loadRate * loadRate
 	}
 	plan.loadSkew = calcLoadSkewByMoments(loadRateSum, loadRateSumSquares, len(candidates))
+	if req.OpenAIOAuthFillFirst {
+		plan.selectionOrder = buildOpenAIOAuthFillFirstOrder(candidates)
+		plan.topK = len(plan.selectionOrder)
+		return plan
+	}
 
 	weights := s.service.openAIWSSchedulerWeightsForRequest(ctx)
 	now := time.Now()
@@ -982,6 +1009,31 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
 
 	plan.selectionOrder = s.buildOpenAISelectionOrder(req, plan)
 	return plan
+}
+
+func buildOpenAIOAuthFillFirstOrder(candidates []openAIAccountCandidateScore) []openAIAccountCandidateScore {
+	ordered := append([]openAIAccountCandidateScore(nil), candidates...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		left, right := ordered[i], ordered[j]
+		if left.account.Priority != right.account.Priority {
+			return left.account.Priority < right.account.Priority
+		}
+
+		leftMax := max(left.account.Concurrency, 1)
+		rightMax := max(right.account.Concurrency, 1)
+		leftCurrent := max(left.loadInfo.CurrentConcurrency, 0)
+		rightCurrent := max(right.loadInfo.CurrentConcurrency, 0)
+		leftRatio := int64(leftCurrent) * int64(rightMax)
+		rightRatio := int64(rightCurrent) * int64(leftMax)
+		if leftRatio != rightRatio {
+			return leftRatio > rightRatio
+		}
+		if leftCurrent != rightCurrent {
+			return leftCurrent > rightCurrent
+		}
+		return left.account.ID < right.account.ID
+	})
+	return ordered
 }
 
 func (s *defaultOpenAIAccountScheduler) buildOpenAISelectionOrder(
@@ -1330,6 +1382,18 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 	if len(accounts) == 0 {
 		return nil, 0, 0, 0, noAvailableOpenAISelectionError(req.RequestedModel, false, openAISelectionFilterStats{}.summary(""))
 	}
+	if req.OpenAIOAuthFillFirst {
+		oauthAccounts := make([]Account, 0, len(accounts))
+		for i := range accounts {
+			if accounts[i].Type == AccountTypeOAuth {
+				oauthAccounts = append(oauthAccounts, accounts[i])
+			}
+		}
+		if len(oauthAccounts) == 0 {
+			return nil, 0, 0, 0, errOpenAIOAuthFillFirstNotApplicable
+		}
+		accounts = oauthAccounts
+	}
 
 	// require_privacy_set: 获取分组信息
 	var schedGroup *Group
@@ -1393,7 +1457,7 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 		}
 	}
 
-	if req.SubscriptionPriority {
+	if req.SubscriptionPriority && !req.OpenAIOAuthFillFirst {
 		subscriptionAccounts, regularAccounts := partitionOpenAIChatGPTSubscriptionAccounts(filtered)
 		if len(subscriptionAccounts) > 0 {
 			attempt := s.trySelectByLoadBalancePool(ctx, req, subscriptionAccounts, loadMap, budget)
@@ -1578,6 +1642,9 @@ func (s *defaultOpenAIAccountScheduler) finishLoadBalanceSelectionFallback(
 
 	if len(attempt.selectionOrder) == 0 {
 		return nil, candidateCount, topK, loadSkew, noAvailableOpenAISelectionError(req.RequestedModel, attempt.compactBlocked, filterStats.summary("selection_order_empty"))
+	}
+	if req.OpenAIOAuthFillFirst {
+		return nil, candidateCount, topK, loadSkew, noAvailableOpenAISelectionError(req.RequestedModel, attempt.compactBlocked, filterStats.summary("fill_first_exhausted"))
 	}
 
 	if stickyFallback, stickyErr := s.tryFallbackToWeightedSticky(ctx, req); stickyErr != nil {
@@ -1966,7 +2033,7 @@ func (s *OpenAIGatewayService) getOpenAIAccountScheduler(ctx context.Context) Op
 	if s == nil {
 		return nil
 	}
-	if !s.isOpenAIAdvancedSchedulerEnabled(ctx) {
+	if !s.isOpenAIAdvancedSchedulerEnabled(ctx) && !s.isOpenAIOAuthFillFirstEnabled() {
 		return nil
 	}
 	s.openaiSchedulerOnce.Do(func() {
@@ -1978,6 +2045,10 @@ func (s *OpenAIGatewayService) getOpenAIAccountScheduler(ctx context.Context) Op
 		}
 	})
 	return s.openaiScheduler
+}
+
+func (s *OpenAIGatewayService) isOpenAIOAuthFillFirstEnabled() bool {
+	return s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIScheduler.OAuthFillFirstEnabled
 }
 
 func resetOpenAIAdvancedSchedulerSettingCacheForTest() {
@@ -2194,6 +2265,7 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerOnce(
 		StickyPreviousAccountID: stickyPreviousAccountID,
 		StickyWeighted:          stickyWeighted,
 		SubscriptionPriority:    subscriptionPriority,
+		OpenAIOAuthFillFirst:    s.isOpenAIOAuthFillFirstEnabled() && platform == PlatformOpenAI,
 		PreviousResponseID:      previousResponseID,
 		PreviousResponseCanMove: previousResponseCanMove,
 		UseUpstreamTokenCost:    useUpstreamTokenCost,
