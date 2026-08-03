@@ -7,11 +7,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/tidwall/gjson"
 )
 
 const (
 	openAIAccountStateUpdateTimeout       = 5 * time.Second
-	openAIOAuth429FallbackCooldown        = 5 * time.Second
+	openAIOAuthUsageLimitFallbackCooldown = 5 * time.Minute
 	openAIStopSchedulingBridgeCooldown    = 2 * time.Minute
 	openAIOAuth429StormWindow             = 10 * time.Second
 	openAIOAuth429StormThreshold          = 20
@@ -72,6 +74,14 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 	if s == nil || account == nil {
 		return false
 	}
+	ordinaryOpenAIOAuth429 := statusCode == http.StatusTooManyRequests && isOpenAIOAuthAccount(account) && !account.IsShadow()
+	oauth429Classification := openAIOAuth429Classification{}
+	if ordinaryOpenAIOAuth429 {
+		oauth429Classification = classifyOpenAIOAuth429(responseBody, time.Now())
+		// Count every ordinary OAuth 429, including ones consumed by a custom
+		// model rule below, so the existing storm guard sees the real pressure.
+		s.recordOpenAIOAuth429()
+	}
 	stateCtx = withTempUnschedulableModel(stateCtx, canonicalModel)
 	if s.rateLimitService != nil && len(canonicalModel) > 0 && s.rateLimitService.HandleUpstreamModelNotFound(stateCtx, account, canonicalModel[0], statusCode, responseBody) {
 		return true
@@ -84,7 +94,25 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 		return true
 	}
 	if statusCode == http.StatusTooManyRequests {
-		s.markOpenAIOAuth429RateLimited(stateCtx, account, headers, responseBody)
+		if ordinaryOpenAIOAuth429 {
+			if !oauth429Classification.HardUsageLimit {
+				model := ""
+				if len(canonicalModel) > 0 {
+					model = canonicalModel[0]
+				}
+				decision := s.recordOpenAIAccountModelTransientFailure(account, model, time.Now())
+				slog.Warn("openai_oauth_soft_429",
+					"account_id", account.ID,
+					"model", openAIAccountModelTransientModel(model),
+					"reason", oauth429Classification.Reason,
+					"failure_streak", decision.FailureStreak,
+					"cooldown_ms", decision.Cooldown.Milliseconds(),
+					"block_scope", "account_model",
+				)
+				return false
+			}
+			s.markOpenAIOAuth429RateLimited(stateCtx, account, headers, responseBody)
+		}
 	}
 	if s.rateLimitService == nil {
 		return false
@@ -119,6 +147,60 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 	return shouldDisable
 }
 
+type openAIOAuth429Classification struct {
+	HardUsageLimit bool
+	ResetAt        *time.Time
+	Reason         string
+}
+
+func classifyOpenAIOAuth429(responseBody []byte, now time.Time) openAIOAuth429Classification {
+	errType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(responseBody, "error.type").String()))
+	switch errType {
+	case "usage_limit_reached":
+		return openAIOAuth429Classification{
+			HardUsageLimit: true,
+			ResetAt:        openAI429BodyResetAt(responseBody, now),
+			Reason:         "usage_limit_reached",
+		}
+	case "":
+		message := strings.ToLower(strings.TrimSpace(gjson.GetBytes(responseBody, "error.message").String()))
+		resetAt := openAI429BodyResetAt(responseBody, now)
+		if resetAt != nil && isExplicitOpenAIUsageLimitMessage(message) {
+			return openAIOAuth429Classification{
+				HardUsageLimit: true,
+				ResetAt:        resetAt,
+				Reason:         "usage_limit_message_with_reset",
+			}
+		}
+		return openAIOAuth429Classification{Reason: "429_without_hard_usage_evidence"}
+	default:
+		// A structured upstream type is authoritative. In particular,
+		// rate_limit_exceeded stays soft even when its message mentions usage.
+		return openAIOAuth429Classification{Reason: errType}
+	}
+}
+
+func isExplicitOpenAIUsageLimitMessage(message string) bool {
+	message = strings.ToLower(strings.TrimSpace(message))
+	return strings.Contains(message, "usage limit has been reached") ||
+		strings.Contains(message, "usage limit reached") ||
+		strings.Contains(message, "usage quota has been exhausted") ||
+		strings.Contains(message, "usage quota exhausted")
+}
+
+func openAI429BodyResetAt(responseBody []byte, now time.Time) *time.Time {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	if resetUnix := parseOpenAIRateLimitResetTime(responseBody); resetUnix != nil {
+		resetAt := time.Unix(*resetUnix, 0)
+		if resetAt.After(now) {
+			return &resetAt
+		}
+	}
+	return nil
+}
+
 func shouldCooldownOpenAITransientUpstreamError(statusCode int, responseBody []byte) bool {
 	switch statusCode {
 	case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout, 520, 521, 522, 523, 524:
@@ -139,18 +221,13 @@ func (s *OpenAIGatewayService) markOpenAIOAuth429RateLimited(ctx context.Context
 	if account.IsShadow() {
 		return
 	}
-	s.recordOpenAIOAuth429()
-
-	cooldownUntil := time.Now().Add(openAIOAuth429FallbackCooldown)
+	now := time.Now()
+	cooldownUntil := now.Add(openAIOAuthUsageLimitFallbackCooldown)
 	if s.rateLimitService != nil {
-		if resetAt := s.rateLimitService.calculateOpenAI429ResetTime(headers); resetAt != nil && resetAt.After(time.Now()) {
+		if resetAt := s.rateLimitService.calculateOpenAI429ResetTime(headers); resetAt != nil && resetAt.After(now) {
 			cooldownUntil = *resetAt
-		} else if resetUnix := parseOpenAIRateLimitResetTime(responseBody); resetUnix != nil {
-			if resetAt := time.Unix(*resetUnix, 0); resetAt.After(time.Now()) {
-				cooldownUntil = resetAt
-			}
-		} else if cooldown, ok := s.rateLimitService.get429FallbackCooldown(ctx, account); ok && cooldown > 0 {
-			cooldownUntil = time.Now().Add(cooldown)
+		} else if resetAt := classifyOpenAIOAuth429(responseBody, now).ResetAt; resetAt != nil {
+			cooldownUntil = *resetAt
 		}
 	}
 	s.BlockAccountScheduling(account, cooldownUntil, "429")

@@ -47,7 +47,8 @@ type SuccessfulTestRecoveryResult struct {
 
 // AccountRecoveryOptions 控制账号恢复时的附加行为。
 type AccountRecoveryOptions struct {
-	InvalidateToken bool
+	InvalidateToken                    bool
+	PreserveFutureOpenAIOAuthRateLimit bool
 }
 
 type geminiUsageCacheEntry struct {
@@ -990,6 +991,16 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 				slog.Info("account_rate_limited", "account_id", account.ID, "platform", account.Platform, "reset_at", resetTime, "reset_in", time.Until(resetTime).Truncate(time.Second))
 				return
 			}
+			if classifyOpenAIOAuth429(responseBody, time.Now()).HardUsageLimit {
+				resetTime := time.Now().Add(openAIOAuthUsageLimitFallbackCooldown)
+				s.notifyAccountSchedulingBlocked(account, resetTime, "429")
+				if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetTime); err != nil {
+					slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
+					return
+				}
+				slog.Info("openai_usage_limit_fallback_applied", "account_id", account.ID, "reset_at", resetTime)
+				return
+			}
 		case PlatformGemini, PlatformAntigravity:
 			// 尝试解析 Gemini 格式（用于其他平台）
 			if resetAt := ParseGeminiRateLimitResetTime(responseBody); resetAt != nil {
@@ -1479,9 +1490,12 @@ func parseOpenAIRateLimitResetTime(body []byte) *int64 {
 		return nil
 	}
 
-	// 检查是否为 usage_limit_reached 或 rate_limit_exceeded 类型
+	// 结构化类型优先；缺失类型时，仅接受明确的额度耗尽文案。
 	errType, _ := errObj["type"].(string)
-	if errType != "usage_limit_reached" && errType != "rate_limit_exceeded" {
+	errType = strings.ToLower(strings.TrimSpace(errType))
+	message, _ := errObj["message"].(string)
+	if errType != "usage_limit_reached" && errType != "rate_limit_exceeded" &&
+		!(errType == "" && isExplicitOpenAIUsageLimitMessage(message)) {
 		return nil
 	}
 
@@ -1784,7 +1798,9 @@ func (s *RateLimitService) RecoverAccountState(ctx context.Context, accountID in
 		}
 	}
 
-	if hasRecoverableRuntimeState(account) {
+	preserveFutureOpenAIRateLimit := options.PreserveFutureOpenAIOAuthRateLimit &&
+		isOpenAIOAuthAccount(account) && account.RateLimitResetAt != nil && account.RateLimitResetAt.After(time.Now())
+	if hasRecoverableRuntimeState(account) && !preserveFutureOpenAIRateLimit {
 		if err := s.ClearRateLimit(ctx, accountID); err != nil {
 			return nil, err
 		}
@@ -1803,7 +1819,9 @@ func (s *RateLimitService) RecoverAccountState(ctx context.Context, accountID in
 // RecoverAccountAfterSuccessfulTest 将一次成功测试视为正常请求，
 // 按需恢复 error / rate-limit / overload / temp-unsched / model-rate-limit 等运行时状态。
 func (s *RateLimitService) RecoverAccountAfterSuccessfulTest(ctx context.Context, accountID int64) (*SuccessfulTestRecoveryResult, error) {
-	return s.RecoverAccountState(ctx, accountID, AccountRecoveryOptions{})
+	return s.RecoverAccountState(ctx, accountID, AccountRecoveryOptions{
+		PreserveFutureOpenAIOAuthRateLimit: true,
+	})
 }
 
 func (s *RateLimitService) ClearTempUnschedulable(ctx context.Context, accountID int64) error {

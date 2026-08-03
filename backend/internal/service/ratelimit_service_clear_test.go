@@ -266,6 +266,54 @@ func TestRateLimitService_RecoverAccountAfterSuccessfulTest_NoRecoverableStateIs
 	require.Empty(t, cache.deletedIDs)
 }
 
+func TestRateLimitService_RecoverAccountAfterSuccessfulTest_PreservesFutureOpenAIOAuthUsageLimit(t *testing.T) {
+	now := time.Now()
+	resetAt := now.Add(30 * time.Minute)
+	repo := &rateLimitClearRepoStub{
+		getByIDAccount: &Account{
+			ID:               8,
+			Platform:         PlatformOpenAI,
+			Type:             AccountTypeOAuth,
+			Status:           StatusActive,
+			RateLimitedAt:    &now,
+			RateLimitResetAt: &resetAt,
+		},
+	}
+	blocker := &runtimeBlockRecorder{}
+	svc := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	svc.SetAccountRuntimeBlocker(blocker)
+
+	result, err := svc.RecoverAccountAfterSuccessfulTest(context.Background(), 8)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, result.ClearedRateLimit)
+	require.Zero(t, repo.clearRateLimitCalls)
+	require.Empty(t, blocker.clearedIDs)
+}
+
+func TestRateLimitService_RecoverAccountAfterSuccessfulTest_ClearsExpiredOpenAIOAuthUsageLimit(t *testing.T) {
+	now := time.Now()
+	resetAt := now.Add(-time.Minute)
+	repo := &rateLimitClearRepoStub{
+		getByIDAccount: &Account{
+			ID:               10,
+			Platform:         PlatformOpenAI,
+			Type:             AccountTypeOAuth,
+			Status:           StatusActive,
+			RateLimitedAt:    &now,
+			RateLimitResetAt: &resetAt,
+		},
+	}
+	svc := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+
+	result, err := svc.RecoverAccountAfterSuccessfulTest(context.Background(), 10)
+
+	require.NoError(t, err)
+	require.True(t, result.ClearedRateLimit)
+	require.Equal(t, 1, repo.clearRateLimitCalls)
+}
+
 func TestRateLimitService_RecoverAccountAfterSuccessfulTest_ClearErrorFailed(t *testing.T) {
 	repo := &rateLimitClearRepoStub{
 		getByIDAccount: &Account{

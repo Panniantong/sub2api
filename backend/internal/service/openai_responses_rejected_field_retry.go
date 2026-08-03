@@ -16,7 +16,7 @@ const maxOpenAIResponsesRejectedFieldRetries = 6
 
 var (
 	openAIResponsesRejectedNamespaceParamPattern = regexp.MustCompile(`(?i)^input\[(\d+)\]\.namespace$`)
-	openAIResponsesRejectedMessageParamPattern   = regexp.MustCompile(`(?i)(?:unknown|unsupported)[ _-]+parameter\s*(?::|=|is)?\s*["']?(max_output_tokens|input\[\d+\]\.namespace)(?:["']|\b)`)
+	openAIResponsesRejectedMessageParamPattern   = regexp.MustCompile(`(?i)(?:unknown|unsupported)[ _-]+parameter\s*(?::|=|is)?\s*["']?(max_output_tokens|truncation|input\[\d+\]\.namespace)(?:["']|\b)`)
 )
 
 type openAIResponsesRejectedFieldRetryState struct {
@@ -79,6 +79,13 @@ func normalizeOpenAIResponsesRejectedFieldRetryBody(statusCode int, body, respon
 			return nil, "", false, fmt.Errorf("delete rejected max_output_tokens: %w", err)
 		}
 		return retryBody, "max_output_tokens parameter rejection", true, nil
+	}
+	if param == "truncation" && gjson.GetBytes(body, "truncation").Exists() {
+		retryBody, err := sjson.DeleteBytes(body, "truncation")
+		if err != nil {
+			return nil, "", false, fmt.Errorf("delete rejected truncation: %w", err)
+		}
+		return retryBody, "truncation parameter rejection", true, nil
 	}
 	return nil, "", false, nil
 }

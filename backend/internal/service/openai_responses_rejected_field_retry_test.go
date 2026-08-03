@@ -114,6 +114,30 @@ func TestNormalizeOpenAIResponsesRejectedFieldRetryBodyBindsMaxOutputTokensToRej
 	require.False(t, gjson.GetBytes(retryBody, "max_output_tokens").Exists())
 }
 
+func TestNormalizeOpenAIResponsesRejectedFieldRetryBodyRemovesExplicitlyRejectedTruncation(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.6-sol","truncation":"auto","input":"hello"}`)
+	responseBody := []byte(`{"error":{"code":"unsupported_parameter","message":"Unsupported parameter: truncation.","param":"truncation"}}`)
+
+	retryBody, reason, changed, err := normalizeOpenAIResponsesRejectedFieldRetryBody(http.StatusBadRequest, body, responseBody)
+
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, "truncation parameter rejection", reason)
+	require.False(t, gjson.GetBytes(retryBody, "truncation").Exists())
+	require.Equal(t, "hello", gjson.GetBytes(retryBody, "input").String())
+}
+
+func TestNormalizeOpenAIResponsesRejectedFieldRetryBodyDoesNotRemoveTruncationWithoutExplicitRejection(t *testing.T) {
+	body := []byte(`{"truncation":"auto","input":"hello"}`)
+	responseBody := []byte(`{"error":{"code":"invalid_request_error","message":"truncation is invalid","param":"truncation"}}`)
+
+	retryBody, _, changed, err := normalizeOpenAIResponsesRejectedFieldRetryBody(http.StatusBadRequest, body, responseBody)
+
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.Nil(t, retryBody)
+}
+
 func TestOpenAIGatewayService_APIKeyStripsAllIndexedNamespacesBeforeFirstForward(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.5","stream":false,"input":[{"type":"function_call","name":"first","namespace":"remove-first","arguments":"{}"},{"type":"custom_tool_call","name":"second","namespace":"remove-second","input":"{}"}]}`)
 	upstream := &httpUpstreamRecorder{responses: []*http.Response{
@@ -189,6 +213,27 @@ func TestOpenAIGatewayService_RetriesExplicitMaxOutputTokensRejection(t *testing
 	require.Equal(t, int64(4096), gjson.GetBytes(upstream.bodies[0], "max_output_tokens").Int())
 	require.False(t, gjson.GetBytes(upstream.bodies[1], "max_output_tokens").Exists())
 	require.Equal(t, "keep", gjson.GetBytes(upstream.bodies[1], "input.0.content.max_output_tokens").String())
+}
+
+func TestOpenAIGatewayService_RetriesExplicitTruncationRejectionOnce(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.6-sol","stream":false,"truncation":"auto","input":"hello"}`)
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		newOpenAIRejectedFieldTestResponse(http.StatusBadRequest, `{"error":{"code":"unsupported_parameter","message":"Unsupported parameter: truncation","param":"truncation"}}`),
+		newOpenAIRejectedFieldTestResponse(http.StatusOK, `{"output":[],"usage":{"input_tokens":1,"output_tokens":1,"input_tokens_details":{"cached_tokens":0}}}`),
+	}}
+
+	result, err := newOpenAIRejectedFieldTestService(upstream).Forward(
+		context.Background(),
+		newOpenAIRejectedFieldTestContext(body),
+		newOpenAIRejectedFieldTestAccount(),
+		body,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.bodies, 2)
+	require.Equal(t, "auto", gjson.GetBytes(upstream.bodies[0], "truncation").String())
+	require.False(t, gjson.GetBytes(upstream.bodies[1], "truncation").Exists())
 }
 
 func TestOpenAIGatewayService_ComposesProactiveNamespaceStripWithRejectedFieldRetry(t *testing.T) {

@@ -3026,7 +3026,13 @@ func TestOpenAIWSHTTPBridgeSSEErrorSideEffectsRunOncePerPlatform(t *testing.T) {
 			require.ErrorAs(t, err, &failoverErr)
 			require.Equal(t, http.StatusTooManyRequests, failoverErr.StatusCode)
 			require.Zero(t, writes)
-			require.Equal(t, 1, repo.rateLimitedCalls)
+			if platform == PlatformOpenAI {
+				require.Zero(t, repo.rateLimitedCalls)
+				require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
+				require.False(t, svc.isOpenAIAccountRequestRuntimeBlocked(account, "gpt-5"), "first soft 429 must not cool down yet")
+			} else {
+				require.Equal(t, 1, repo.rateLimitedCalls)
+			}
 		})
 	}
 }

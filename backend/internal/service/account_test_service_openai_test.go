@@ -368,7 +368,7 @@ func TestAccountTestService_OpenAI429ActiveAccountDoesNotClearError(t *testing.T
 	require.NotNil(t, account.RateLimitResetAt)
 }
 
-func TestAccountTestService_OpenAI429WithoutResetSignalDoesNotMutateRuntimeState(t *testing.T) {
+func TestAccountTestService_OpenAIUsageLimitWithoutResetUsesBoundedFallback(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := newTestContext()
 
@@ -389,11 +389,34 @@ func TestAccountTestService_OpenAI429WithoutResetSignalDoesNotMutateRuntimeState
 
 	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")
 	require.Error(t, err)
+	require.Equal(t, account.ID, repo.rateLimitedID)
+	require.NotNil(t, repo.rateLimitedAt)
+	require.WithinDuration(t, time.Now().Add(openAIOAuthUsageLimitFallbackCooldown), *repo.rateLimitedAt, 2*time.Second)
+	require.Equal(t, account.ID, repo.clearedErrorID)
+	require.Equal(t, StatusActive, account.Status)
+	require.Empty(t, account.ErrorMessage)
+	require.NotNil(t, account.RateLimitResetAt)
+}
+
+func TestAccountTestService_OpenAIRateLimitExceededDoesNotPersistAccountWideLimit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := newTestContext()
+	resp := newJSONResponse(http.StatusTooManyRequests, `{"error":{"type":"rate_limit_exceeded","message":"slow down","resets_in_seconds":30}}`)
+	repo := &openAIAccountTestRepo{}
+	svc := &AccountTestService{accountRepo: repo, httpUpstream: &queuedHTTPUpstream{responses: []*http.Response{resp}}}
+	account := &Account{
+		ID:          80,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Concurrency: 1,
+		Credentials: map[string]any{"access_token": "test-token"},
+	}
+
+	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")
+
+	require.Error(t, err)
 	require.Zero(t, repo.rateLimitedID)
-	require.Nil(t, repo.rateLimitedAt)
-	require.Zero(t, repo.clearedErrorID)
-	require.Equal(t, StatusError, account.Status)
-	require.Equal(t, "stale 403", account.ErrorMessage)
 	require.Nil(t, account.RateLimitResetAt)
 }
 

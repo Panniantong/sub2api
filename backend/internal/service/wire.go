@@ -192,6 +192,7 @@ func ProvideAccountTestService(
 		tlsFPProfileService,
 	)
 	service.agentIdentityWS = openAIGatewayService
+	service.openAIModelTransient = openAIGatewayService
 	return service
 }
 

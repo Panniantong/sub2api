@@ -75,6 +75,9 @@ type AccountTestService struct {
 	tlsFPProfileService       *TLSFingerprintProfileService
 	agentIdentityTaskMu       sync.Mutex
 	agentIdentityWS           agentIdentityWSConnectionInvalidator
+	openAIModelTransient      interface {
+		clearOpenAIAccountModelTransientState(accountID int64, model string)
+	}
 }
 
 // NewAccountTestService creates a new AccountTestService
@@ -530,7 +533,9 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	testModelID = account.GetMappedModel(testModelID)
 	if mode == AccountTestModeCompact {
 		testModelID = resolveOpenAICompactForwardModel(account, testModelID)
-		return s.testOpenAICompactConnection(c, account, testModelID)
+		err := s.testOpenAICompactConnection(c, account, testModelID)
+		s.clearOpenAIModelTransientAfterSuccessfulTest(account.ID, testModelID, err)
+		return err
 	}
 
 	// Route to image generation test if an image model is selected
@@ -540,9 +545,13 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 			imagePrompt = defaultOpenAIImageTestPrompt
 		}
 		if account.Type == "apikey" {
-			return s.testOpenAIImageAPIKey(c, ctx, account, testModelID, imagePrompt)
+			err := s.testOpenAIImageAPIKey(c, ctx, account, testModelID, imagePrompt)
+			s.clearOpenAIModelTransientAfterSuccessfulTest(account.ID, testModelID, err)
+			return err
 		}
-		return s.testOpenAIImageOAuth(c, ctx, account, testModelID, imagePrompt)
+		err := s.testOpenAIImageOAuth(c, ctx, account, testModelID, imagePrompt)
+		s.clearOpenAIModelTransientAfterSuccessfulTest(account.ID, testModelID, err)
+		return err
 	}
 
 	credentialAccount := account
@@ -702,7 +711,16 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	}
 
 	// Process SSE stream
-	return s.processOpenAIStream(c, resp.Body)
+	err = s.processOpenAIStream(c, resp.Body)
+	s.clearOpenAIModelTransientAfterSuccessfulTest(account.ID, testModelID, err)
+	return err
+}
+
+func (s *AccountTestService) clearOpenAIModelTransientAfterSuccessfulTest(accountID int64, model string, testErr error) {
+	if s == nil || testErr != nil || s.openAIModelTransient == nil {
+		return
+	}
+	s.openAIModelTransient.clearOpenAIAccountModelTransientState(accountID, model)
 }
 
 // testGrokAccountConnection tests a Grok OAuth or API-key account through xAI's Responses API.
@@ -1036,6 +1054,10 @@ func (s *AccountTestService) reconcileOpenAI429State(ctx context.Context, accoun
 	if s == nil || s.accountRepo == nil || account == nil {
 		return
 	}
+	classification := classifyOpenAIOAuth429(body, time.Now())
+	if !classification.HardUsageLimit {
+		return
+	}
 
 	persistOpenAI429PlanType(ctx, s.accountRepo, account, body)
 
@@ -1047,7 +1069,8 @@ func (s *AccountTestService) reconcileOpenAI429State(ctx context.Context, accoun
 		resetAt = &t
 	}
 	if resetAt == nil {
-		return
+		t := time.Now().Add(openAIOAuthUsageLimitFallbackCooldown)
+		resetAt = &t
 	}
 
 	if err := s.accountRepo.SetRateLimited(ctx, account.ID, *resetAt); err != nil {
