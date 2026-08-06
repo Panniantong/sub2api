@@ -493,7 +493,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				if !cls.ModelNotFound {
 					markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
 				}
-				h.handleStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
+				h.handleOpenAINoAvailableAccounts(c, cls, streamStarted)
 				return
 			}
 			if lastFailoverErr != nil {
@@ -508,7 +508,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			if !cls.ModelNotFound {
 				markOpsRoutingCapacityLimited(c)
 			}
-			h.handleStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
+			h.handleOpenAINoAvailableAccounts(c, cls, streamStarted)
 			return
 		}
 		if previousResponseID != "" && selection != nil && selection.Account != nil {
@@ -1498,6 +1498,24 @@ func (h *OpenAIGatewayHandler) handleOpenAILocalCapacityExhausted(c *gin.Context
 		"rate_limit_error",
 		"sub2_local_capacity_exhausted",
 		"Too many pending requests, please retry later",
+		streamStarted,
+		false,
+	)
+}
+
+func (h *OpenAIGatewayHandler) handleOpenAINoAvailableAccounts(c *gin.Context, cls noAccountErrorClassification, streamStarted bool) {
+	if cls.ModelNotFound || cls.Status != http.StatusServiceUnavailable {
+		h.handleStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
+		return
+	}
+	c.Header("Retry-After", "1")
+	c.Header("X-Sub2-Retry-Class", "no_available_accounts")
+	h.handleStreamingAwareErrorWithCode(
+		c,
+		cls.Status,
+		cls.ErrType,
+		"sub2_no_available_accounts",
+		cls.Message,
 		streamStarted,
 		false,
 	)

@@ -10,6 +10,7 @@ package handler
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
@@ -190,6 +191,25 @@ func TestLocalCapacityExhaustedReturnsMachineReadableRetryClass(t *testing.T) {
 	require.Equal(t, "1", w.Header().Get("Retry-After"))
 	require.Equal(t, "local_capacity", w.Header().Get("X-Sub2-Retry-Class"))
 	require.JSONEq(t, `{"error":{"type":"rate_limit_error","code":"sub2_local_capacity_exhausted","message":"Too many pending requests, please retry later"}}`, w.Body.String())
+}
+
+func TestNoAvailableAccountsReturnsMachineReadableRetryClass(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := &OpenAIGatewayHandler{}
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/v1/responses", nil)
+
+	h.handleOpenAINoAvailableAccounts(c, noAccountErrorClassification{
+		Status:  http.StatusServiceUnavailable,
+		ErrType: "api_error",
+		Message: "Service temporarily unavailable",
+	}, false)
+
+	require.Equal(t, http.StatusServiceUnavailable, w.Code)
+	require.Equal(t, "1", w.Header().Get("Retry-After"))
+	require.Equal(t, "no_available_accounts", w.Header().Get("X-Sub2-Retry-Class"))
+	require.JSONEq(t, `{"error":{"type":"api_error","code":"sub2_no_available_accounts","message":"Service temporarily unavailable"}}`, w.Body.String())
 }
 
 // scheduler 跳门条件依赖"CapabilityResponses 仅在显式生图意图时被要求"这一
