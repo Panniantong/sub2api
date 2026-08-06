@@ -144,6 +144,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 
 	maxAccountSwitches := h.maxAccountSwitches
 	switchCount := 0
+	localCapacityAttempts := 0
 	profitVetoCount := 0
 	failedAccountIDs := make(map[int64]struct{})
 	sameAccountRetryCount := make(map[int64]int)
@@ -187,7 +188,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 				if !cls.ModelNotFound {
 					markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
 				}
-				h.handleStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
+				h.handleOpenAINoAvailableAccounts(c, cls, streamStarted)
 				return
 			} else {
 				if lastFailoverErr != nil {
@@ -203,7 +204,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			if !cls.ModelNotFound {
 				markOpsRoutingCapacityLimited(c)
 			}
-			h.handleStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
+			h.handleOpenAINoAvailableAccounts(c, cls, streamStarted)
 			return
 		}
 		account := selection.Account
@@ -213,6 +214,21 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
 		accountReleaseFunc, slotResult := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
+		if slotResult == openAISlotAcquireCapacityFull {
+			failedAccountIDs[account.ID] = struct{}{}
+			localCapacityAttempts++
+			if localCapacityAttempts >= maxOpenAILocalCapacityAttempts || switchCount >= maxAccountSwitches {
+				h.handleOpenAILocalCapacityExhausted(c, streamStarted)
+				return
+			}
+			switchCount++
+			reqLog.Info("openai_chat_completions.local_capacity_switching_account",
+				zap.Int64("account_id", account.ID),
+				zap.Int("switch_count", switchCount),
+				zap.Int("max_switches", maxAccountSwitches),
+			)
+			continue
+		}
 		if slotResult == openAISlotAcquireProfitVetoed {
 			// 利润终检否决：排除该账号重新选号；否决次数达上限则按无可用账号终止。
 			if !recordOpenAIProfitVeto(failedAccountIDs, account.ID, &profitVetoCount) {
