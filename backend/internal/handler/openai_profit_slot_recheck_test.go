@@ -27,6 +27,18 @@ type profitCountingConcurrencyCache struct {
 	accountReleases atomic.Int64
 }
 
+type waitQueueFullConcurrencyCache struct {
+	profitCountingConcurrencyCache
+}
+
+func (c *waitQueueFullConcurrencyCache) AcquireAccountSlot(context.Context, int64, int, string) (bool, error) {
+	return false, nil
+}
+
+func (c *waitQueueFullConcurrencyCache) IncrementAccountWaitCount(context.Context, int64, int) (bool, error) {
+	return false, nil
+}
+
 func (c *profitCountingConcurrencyCache) ReleaseAccountSlot(context.Context, int64, string) error {
 	c.accountReleases.Add(1)
 	return nil
@@ -139,6 +151,45 @@ func TestAcquireResponsesAccountSlotProfitRecheck(t *testing.T) {
 		require.NotNil(t, release)
 		release()
 	})
+}
+
+func TestAcquireResponsesAccountSlotReturnsRetryableCapacityWithoutWritingResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cache := &waitQueueFullConcurrencyCache{}
+	h := &OpenAIGatewayHandler{
+		gatewayService:    &service.OpenAIGatewayService{},
+		concurrencyHelper: NewConcurrencyHelper(service.NewConcurrencyService(cache), SSEPingFormatClaude, 0),
+	}
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/v1/responses", nil)
+	streamStarted := false
+	account := profitSlotTestAccount(9, 0.3)
+	selection := &service.AccountSelectionResult{
+		Account:  account,
+		WaitPlan: &service.AccountWaitPlan{AccountID: account.ID, MaxConcurrency: 2, Timeout: time.Second, MaxWaiting: 2},
+	}
+
+	release, result := h.acquireResponsesAccountSlot(c, nil, "", selection, false, &streamStarted, zap.NewNop())
+
+	require.Nil(t, release)
+	require.Equal(t, openAISlotAcquireCapacityFull, result)
+	require.Zero(t, w.Body.Len(), "本地账号队列满应交给调用方换账号，不得提前写429")
+}
+
+func TestLocalCapacityExhaustedReturnsMachineReadableRetryClass(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := &OpenAIGatewayHandler{}
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/v1/responses", nil)
+
+	h.handleOpenAILocalCapacityExhausted(c, false)
+
+	require.Equal(t, 429, w.Code)
+	require.Equal(t, "1", w.Header().Get("Retry-After"))
+	require.Equal(t, "local_capacity", w.Header().Get("X-Sub2-Retry-Class"))
+	require.JSONEq(t, `{"error":{"type":"rate_limit_error","code":"sub2_local_capacity_exhausted","message":"Too many pending requests, please retry later"}}`, w.Body.String())
 }
 
 // scheduler 跳门条件依赖"CapabilityResponses 仅在显式生图意图时被要求"这一

@@ -991,7 +991,7 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 				slog.Info("account_rate_limited", "account_id", account.ID, "platform", account.Platform, "reset_at", resetTime, "reset_in", time.Until(resetTime).Truncate(time.Second))
 				return
 			}
-			if classifyOpenAIOAuth429(responseBody, time.Now()).HardUsageLimit {
+			if s.isOpenAIOAuthYield429Enabled() && classifyOpenAIOAuth429(responseBody, time.Now()).HardUsageLimit {
 				resetTime := time.Now().Add(openAIOAuthUsageLimitFallbackCooldown)
 				s.notifyAccountSchedulingBlocked(account, resetTime, "429")
 				if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetTime); err != nil {
@@ -1490,12 +1490,9 @@ func parseOpenAIRateLimitResetTime(body []byte) *int64 {
 		return nil
 	}
 
-	// 结构化类型优先；缺失类型时，仅接受明确的额度耗尽文案。
+	// 官方兼容语义：两种结构化 429 都可携带明确重置时间。
 	errType, _ := errObj["type"].(string)
-	errType = strings.ToLower(strings.TrimSpace(errType))
-	message, _ := errObj["message"].(string)
-	if errType != "usage_limit_reached" && errType != "rate_limit_exceeded" &&
-		!(errType == "" && isExplicitOpenAIUsageLimitMessage(message)) {
+	if errType != "usage_limit_reached" && errType != "rate_limit_exceeded" {
 		return nil
 	}
 
@@ -1798,7 +1795,7 @@ func (s *RateLimitService) RecoverAccountState(ctx context.Context, accountID in
 		}
 	}
 
-	preserveFutureOpenAIRateLimit := options.PreserveFutureOpenAIOAuthRateLimit &&
+	preserveFutureOpenAIRateLimit := s.isOpenAIOAuthYield429Enabled() && options.PreserveFutureOpenAIOAuthRateLimit &&
 		isOpenAIOAuthAccount(account) && account.RateLimitResetAt != nil && account.RateLimitResetAt.After(time.Now())
 	if hasRecoverableRuntimeState(account) && !preserveFutureOpenAIRateLimit {
 		if err := s.ClearRateLimit(ctx, accountID); err != nil {
@@ -1814,6 +1811,10 @@ func (s *RateLimitService) RecoverAccountState(ctx context.Context, accountID in
 	}
 
 	return result, nil
+}
+
+func (s *RateLimitService) isOpenAIOAuthYield429Enabled() bool {
+	return s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIScheduler.OAuthYield429Enabled
 }
 
 // RecoverAccountAfterSuccessfulTest 将一次成功测试视为正常请求，

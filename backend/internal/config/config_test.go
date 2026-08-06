@@ -57,6 +57,23 @@ func TestLoadOpenAIOAuthFillFirstConfig(t *testing.T) {
 	})
 }
 
+func TestLoadOpenAIOAuthYield429Config(t *testing.T) {
+	t.Run("disabled by default", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.False(t, cfg.Gateway.OpenAIScheduler.OAuthYield429Enabled)
+	})
+
+	t.Run("enabled by instance environment", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+		t.Setenv("GATEWAY_OPENAI_SCHEDULER_OAUTH_YIELD_429_ENABLED", "true")
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.True(t, cfg.Gateway.OpenAIScheduler.OAuthYield429Enabled)
+	})
+}
+
 func TestLoadRedisUsernameFromEnvironment(t *testing.T) {
 	resetViperWithJWTSecret(t)
 	t.Setenv("REDIS_USERNAME", "app-user")

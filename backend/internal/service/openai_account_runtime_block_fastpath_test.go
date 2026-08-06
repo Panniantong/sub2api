@@ -13,6 +13,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func openAIOAuthYield429TestConfig() *config.Config {
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAIScheduler.OAuthYield429Enabled = true
+	return cfg
+}
+
 func TestOpenAI429FastPath_UsageLimitReachedBlocksWholeOAuthAccount(t *testing.T) {
 	svc := &OpenAIGatewayService{}
 	account := &Account{ID: 42, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
@@ -29,7 +35,7 @@ func TestOpenAI429FastPath_UsageLimitReachedBlocksWholeOAuthAccount(t *testing.T
 }
 
 func TestOpenAI429FastPath_RateLimitExceededUsesAccountModelTransientCooldown(t *testing.T) {
-	svc := &OpenAIGatewayService{}
+	svc := &OpenAIGatewayService{cfg: openAIOAuthYield429TestConfig()}
 	account := &Account{ID: 44, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 	body := []byte(`{"error":{"type":"rate_limit_exceeded","message":"Please slow down"}}`)
 
@@ -43,8 +49,19 @@ func TestOpenAI429FastPath_RateLimitExceededUsesAccountModelTransientCooldown(t 
 	require.False(t, svc.isOpenAIAccountRequestRuntimeBlocked(account, "gpt-5.6-terra"))
 }
 
+func TestOpenAI429FastPath_YieldDisabledKeepsOfficialWholeAccountCooldown(t *testing.T) {
+	svc := &OpenAIGatewayService{cfg: &config.Config{}}
+	account := &Account{ID: 440, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	body := []byte(`{"error":{"type":"rate_limit_exceeded","message":"Please slow down"}}`)
+
+	shouldDisable := svc.handleOpenAIAccountUpstreamError(context.Background(), account, http.StatusTooManyRequests, http.Header{}, body, "gpt-5.6-sol")
+
+	require.False(t, shouldDisable)
+	require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
+}
+
 func TestOpenAI429FastPath_SuccessfulManagementTestClearsOnlyTestedSoftModel(t *testing.T) {
-	gateway := &OpenAIGatewayService{}
+	gateway := &OpenAIGatewayService{cfg: openAIOAuthYield429TestConfig()}
 	account := &Account{ID: 45, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 	body := []byte(`{"error":{"type":"rate_limit_exceeded","message":"Please slow down"}}`)
 	for _, model := range []string{"gpt-5.6-sol", "gpt-5.6-terra"} {

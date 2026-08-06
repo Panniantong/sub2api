@@ -74,7 +74,8 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 	if s == nil || account == nil {
 		return false
 	}
-	ordinaryOpenAIOAuth429 := statusCode == http.StatusTooManyRequests && isOpenAIOAuthAccount(account) && !account.IsShadow()
+	yield429Enabled := s.isOpenAIOAuthYield429Enabled()
+	ordinaryOpenAIOAuth429 := yield429Enabled && statusCode == http.StatusTooManyRequests && isOpenAIOAuthAccount(account) && !account.IsShadow()
 	oauth429Classification := openAIOAuth429Classification{}
 	if ordinaryOpenAIOAuth429 {
 		oauth429Classification = classifyOpenAIOAuth429(responseBody, time.Now())
@@ -111,6 +112,8 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 				)
 				return false
 			}
+			s.markOpenAIOAuth429RateLimited(stateCtx, account, headers, responseBody)
+		} else if !yield429Enabled {
 			s.markOpenAIOAuth429RateLimited(stateCtx, account, headers, responseBody)
 		}
 	}
@@ -198,6 +201,18 @@ func openAI429BodyResetAt(responseBody []byte, now time.Time) *time.Time {
 			return &resetAt
 		}
 	}
+	if resetUnix := gjson.GetBytes(responseBody, "error.resets_at"); resetUnix.Exists() {
+		resetAt := time.Unix(resetUnix.Int(), 0)
+		if resetAt.After(now) {
+			return &resetAt
+		}
+	}
+	if resetSeconds := gjson.GetBytes(responseBody, "error.resets_in_seconds"); resetSeconds.Exists() {
+		resetAt := now.Add(time.Duration(resetSeconds.Int()) * time.Second)
+		if resetAt.After(now) {
+			return &resetAt
+		}
+	}
 	return nil
 }
 
@@ -222,15 +237,26 @@ func (s *OpenAIGatewayService) markOpenAIOAuth429RateLimited(ctx context.Context
 		return
 	}
 	now := time.Now()
-	cooldownUntil := now.Add(openAIOAuthUsageLimitFallbackCooldown)
+	cooldownUntil := now.Add(5 * time.Second)
+	if s.isOpenAIOAuthYield429Enabled() {
+		cooldownUntil = now.Add(openAIOAuthUsageLimitFallbackCooldown)
+	}
 	if s.rateLimitService != nil {
 		if resetAt := s.rateLimitService.calculateOpenAI429ResetTime(headers); resetAt != nil && resetAt.After(now) {
 			cooldownUntil = *resetAt
-		} else if resetAt := classifyOpenAIOAuth429(responseBody, now).ResetAt; resetAt != nil {
-			cooldownUntil = *resetAt
+		} else if s.isOpenAIOAuthYield429Enabled() {
+			if resetAt := classifyOpenAIOAuth429(responseBody, now).ResetAt; resetAt != nil {
+				cooldownUntil = *resetAt
+			}
+		} else if cooldown, ok := s.rateLimitService.get429FallbackCooldown(ctx, account); ok && cooldown > 0 {
+			cooldownUntil = now.Add(cooldown)
 		}
 	}
 	s.BlockAccountScheduling(account, cooldownUntil, "429")
+}
+
+func (s *OpenAIGatewayService) isOpenAIOAuthYield429Enabled() bool {
+	return s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIScheduler.OAuthYield429Enabled
 }
 
 func (s *OpenAIGatewayService) BlockAccountScheduling(account *Account, until time.Time, reason string) {

@@ -45,6 +45,8 @@ type OpenAIGatewayHandler struct {
 	cfg                        *config.Config
 }
 
+const maxOpenAILocalCapacityAttempts = 3
+
 type openAIWSTurnChannelMappingSnapshot struct {
 	turn    int
 	mapping service.ChannelMappingResult
@@ -426,6 +428,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 
 	maxAccountSwitches := h.maxAccountSwitches
 	switchCount := 0
+	localCapacityAttempts := 0
 	firstOutputTimeoutSwitchCount := 0
 	profitVetoCount := 0
 	failedAccountIDs := make(map[int64]struct{})
@@ -526,6 +529,21 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
 		accountReleaseFunc, slotResult := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
+		if slotResult == openAISlotAcquireCapacityFull {
+			failedAccountIDs[account.ID] = struct{}{}
+			localCapacityAttempts++
+			if localCapacityAttempts >= maxOpenAILocalCapacityAttempts || switchCount >= maxAccountSwitches {
+				h.handleOpenAILocalCapacityExhausted(c, streamStarted)
+				return
+			}
+			switchCount++
+			reqLog.Info("openai.local_capacity_switching_account",
+				zap.Int64("account_id", account.ID),
+				zap.Int("switch_count", switchCount),
+				zap.Int("max_switches", maxAccountSwitches),
+			)
+			continue
+		}
 		if slotResult == openAISlotAcquireProfitVetoed {
 			// 利润终检否决：排除该账号重新选号，全池耗尽由下一轮选号报错；
 			// 否决次数达上限则直接终止，避免排队抢槽后才终检的延迟放大。
@@ -1007,6 +1025,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 
 	maxAccountSwitches := h.maxAccountSwitches
 	switchCount := 0
+	localCapacityAttempts := 0
 	profitVetoCount := 0
 	failedAccountIDs := make(map[int64]struct{})
 	sameAccountRetryCount := make(map[int64]int)
@@ -1083,6 +1102,21 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
 		accountReleaseFunc, slotResult := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
+		if slotResult == openAISlotAcquireCapacityFull {
+			failedAccountIDs[account.ID] = struct{}{}
+			localCapacityAttempts++
+			if localCapacityAttempts >= maxOpenAILocalCapacityAttempts || switchCount >= maxAccountSwitches {
+				h.handleOpenAILocalCapacityExhausted(c, streamStarted)
+				return
+			}
+			switchCount++
+			reqLog.Info("openai_messages.local_capacity_switching_account",
+				zap.Int64("account_id", account.ID),
+				zap.Int("switch_count", switchCount),
+				zap.Int("max_switches", maxAccountSwitches),
+			)
+			continue
+		}
 		if slotResult == openAISlotAcquireProfitVetoed {
 			// 利润终检否决：排除该账号重新选号，全池耗尽由下一轮选号报错；
 			// 否决次数达上限则直接终止，避免排队抢槽后才终检的延迟放大。
@@ -1389,6 +1423,10 @@ const (
 	openAISlotAcquireOK openAISlotAcquireResult = iota
 	// openAISlotAcquireFailed：错误响应已写出，调用方直接 return。
 	openAISlotAcquireFailed
+	// openAISlotAcquireCapacityFull：选中账号的本地等待队列已满，但尚未向
+	// 客户写出错误。调用方应排除该账号并在同一次 Sub2 请求内重新选号，
+	// 避免把整份大请求退回 New API 后重新走完整链路。
+	openAISlotAcquireCapacityFull
 	// openAISlotAcquireProfitVetoed：槽位获取成功后利润终检否决。槽位已释放、
 	// 未写任何响应；调用方应经 recordOpenAIProfitVeto 把该账号加入本请求排除集
 	// 后重新选号，全池耗尽由下一轮选号返回标准 no available accounts。
@@ -1448,6 +1486,21 @@ func (h *OpenAIGatewayHandler) handleOpenAIProfitVetoExhausted(
 	reqLog.Warn("openai.profit_veto_attempts_exhausted", zap.Int("profit_veto_count", vetoCount))
 	markOpsRoutingCapacityLimited(c)
 	h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", profitVetoExhaustedMessage, streamStarted)
+}
+
+func (h *OpenAIGatewayHandler) handleOpenAILocalCapacityExhausted(c *gin.Context, streamStarted bool) {
+	markOpsRoutingCapacityLimited(c)
+	c.Header("Retry-After", "1")
+	c.Header("X-Sub2-Retry-Class", "local_capacity")
+	h.handleStreamingAwareErrorWithCode(
+		c,
+		http.StatusTooManyRequests,
+		"rate_limit_error",
+		"sub2_local_capacity_exhausted",
+		"Too many pending requests, please retry later",
+		streamStarted,
+		false,
+	)
 }
 
 func (h *OpenAIGatewayHandler) acquireResponsesAccountSlot(
@@ -1532,8 +1585,7 @@ func (h *OpenAIGatewayHandler) acquireResponsesAccountSlot(
 			zap.Int64("account_id", account.ID),
 			zap.Int("max_waiting", selection.WaitPlan.MaxWaiting),
 		)
-		h.handleStreamingAwareError(c, http.StatusTooManyRequests, "rate_limit_error", "Too many pending requests, please retry later", *streamStarted)
-		return nil, openAISlotAcquireFailed
+		return nil, openAISlotAcquireCapacityFull
 	}
 
 	accountWaitCounted := waitErr == nil && canWait
