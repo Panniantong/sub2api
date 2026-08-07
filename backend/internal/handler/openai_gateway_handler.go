@@ -652,7 +652,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 						return
 					}
 					switchCount++
-					if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount, &oauth429FailoverState) {
+					if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount, &oauth429FailoverState, failoverErr) {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
@@ -1215,7 +1215,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 						return
 					}
 					switchCount++
-					if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount, &oauth429FailoverState) {
+					if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount, &oauth429FailoverState, failoverErr) {
 						h.handleAnthropicFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
@@ -1909,7 +1909,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			return false
 		}
 		switchCount++
-		if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount, &oauth429FailoverState) {
+		if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount, &oauth429FailoverState, failoverErr) {
 			closeOpenAIWSFailoverExhausted(wsConn, failoverErr)
 			return false
 		}

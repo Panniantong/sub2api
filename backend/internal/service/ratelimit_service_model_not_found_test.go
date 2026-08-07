@@ -319,7 +319,7 @@ func openAIModelNotFoundTempAccount() *Account {
 	}
 }
 
-func TestRateLimitService_HandleUpstreamError_CodexPlanGatedModelUsesModelRateLimit(t *testing.T) {
+func TestRateLimitService_HandleUpstreamError_CodexPlanGatedModelDoesNotPersistCooldown(t *testing.T) {
 	repo := &modelNotFoundAccountRepoStub{}
 	svc := &RateLimitService{accountRepo: repo}
 	account := openAICodexPlanGatedOAuthAccount()
@@ -333,17 +333,12 @@ func TestRateLimitService_HandleUpstreamError_CodexPlanGatedModelUsesModelRateLi
 		"gpt-5.6-sol",
 	)
 
-	require.True(t, handled)
+	require.False(t, handled)
 	require.Zero(t, repo.tempCalls)
-	require.Len(t, repo.modelRateLimitCalls, 1)
-	call := repo.modelRateLimitCalls[0]
-	require.Equal(t, account.ID, call.accountID)
-	require.Equal(t, "gpt-5.6-sol", call.scope)
-	require.Equal(t, upstreamCodexPlanGatedModelReason, call.reason)
-	require.WithinDuration(t, time.Now().Add(upstreamCodexPlanGatedModelCooldown), call.resetAt, 5*time.Second)
+	require.Empty(t, repo.modelRateLimitCalls)
 }
 
-func TestRateLimitService_HandleUpstreamError_CodexPlanGatedModelRespectsModelMapping(t *testing.T) {
+func TestRateLimitService_HandleUpstreamError_CodexPlanGatedMappedModelDoesNotPersistCooldown(t *testing.T) {
 	repo := &modelNotFoundAccountRepoStub{}
 	svc := &RateLimitService{accountRepo: repo}
 	account := openAICodexPlanGatedOAuthAccount()
@@ -358,9 +353,8 @@ func TestRateLimitService_HandleUpstreamError_CodexPlanGatedModelRespectsModelMa
 		"gpt-5.6-sol",
 	)
 
-	require.True(t, handled)
-	require.Len(t, repo.modelRateLimitCalls, 1)
-	require.Equal(t, "gpt-5.6-sol-upstream", repo.modelRateLimitCalls[0].scope)
+	require.False(t, handled)
+	require.Empty(t, repo.modelRateLimitCalls)
 }
 
 func TestRateLimitService_HandleUpstreamError_CodexPlanGatedModelIgnoresAPIKeyAccount(t *testing.T) {

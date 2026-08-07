@@ -20,11 +20,11 @@ const (
 	openAIOAuth429StormMaxAccountSwitches = 1
 )
 
-// OpenAIOAuth429FailoverState tracks the request-local follow-up budget after
-// the first Grok OAuth 429. Once that 429 occurs, exactly one different account
-// may be attempted; any failure from that follow-up account ends failover.
+// OpenAIOAuth429FailoverState tracks request-local follow-up budgets for the
+// Grok OAuth 429 path and ambiguous Codex plan-gated responses.
 type OpenAIOAuth429FailoverState struct {
 	grokOAuth429FollowupPending bool
+	planGatedFollowupsRemaining int
 }
 
 func openAIAccountStateContext(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -84,6 +84,18 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 		s.recordOpenAIOAuth429()
 	}
 	stateCtx = withTempUnschedulableModel(stateCtx, canonicalModel)
+	if isOpenAIOAuthAccount(account) && len(canonicalModel) > 0 && strings.TrimSpace(canonicalModel[0]) != "" &&
+		isOpenAICodexPlanGatedModelError(statusCode, responseBody) {
+		decision := s.recordOpenAIPlanGatedModelFailure(account, canonicalModel[0], time.Now())
+		slog.Warn("openai_codex_plan_gated_transient",
+			"account_id", account.ID,
+			"model", openAIAccountModelTransientModel(canonicalModel[0]),
+			"failure_streak", decision.FailureStreak,
+			"cooldown_ms", decision.Cooldown.Milliseconds(),
+			"block_scope", "account_model",
+		)
+		return true
+	}
 	if s.rateLimitService != nil && len(canonicalModel) > 0 && s.rateLimitService.HandleUpstreamModelNotFound(stateCtx, account, canonicalModel[0], statusCode, responseBody) {
 		return true
 	}
@@ -362,6 +374,21 @@ func (s *OpenAIGatewayService) getOpenAIAccountModelTransientState() *openAIAcco
 	return s.openaiModelTransient
 }
 
+func (s *OpenAIGatewayService) getOpenAIPlanGatedModelTransientState() *openAIAccountModelTransientState {
+	if s == nil {
+		return nil
+	}
+	s.openaiPlanGatedTransientOnce.Do(func() {
+		if s.openaiPlanGatedTransient == nil {
+			s.openaiPlanGatedTransient = newOpenAIAccountModelTransientStateWithPolicy(
+				openAIModelTransientDefaultMax,
+				openAIPlanGatedTransientPolicy(),
+			)
+		}
+	})
+	return s.openaiPlanGatedTransient
+}
+
 func canonicalOpenAIAccountSchedulingModel(account *Account, requestedModel string) string {
 	model := strings.TrimSpace(requestedModel)
 	if account == nil || model == "" {
@@ -388,12 +415,24 @@ func (s *OpenAIGatewayService) recordOpenAIAccountModelTransientFailure(account 
 	return state.recordFailure(account.ID, openAIAccountModelTransientModel(canonicalModel), now)
 }
 
-func (s *OpenAIGatewayService) clearOpenAIAccountModelTransientState(accountID int64, model string) {
-	state := s.getOpenAIAccountModelTransientState()
-	if state == nil {
-		return
+func (s *OpenAIGatewayService) recordOpenAIPlanGatedModelFailure(account *Account, canonicalModel string, now time.Time) openAIAccountModelTransientDecision {
+	if s == nil || account == nil {
+		return openAIAccountModelTransientDecision{}
 	}
-	state.recordSuccess(accountID, model)
+	state := s.getOpenAIPlanGatedModelTransientState()
+	if state == nil {
+		return openAIAccountModelTransientDecision{}
+	}
+	return state.recordFailure(account.ID, openAIAccountModelTransientModel(canonicalModel), now)
+}
+
+func (s *OpenAIGatewayService) clearOpenAIAccountModelTransientState(accountID int64, model string) {
+	if state := s.getOpenAIAccountModelTransientState(); state != nil {
+		state.recordSuccess(accountID, model)
+	}
+	if state := s.getOpenAIPlanGatedModelTransientState(); state != nil {
+		state.recordSuccess(accountID, model)
+	}
 }
 
 func (s *OpenAIGatewayService) isOpenAIAccountModelRuntimeBlocked(account *Account, requestedModel string) bool {
@@ -401,11 +440,14 @@ func (s *OpenAIGatewayService) isOpenAIAccountModelRuntimeBlocked(account *Accou
 		return false
 	}
 	state := s.getOpenAIAccountModelTransientState()
-	if state == nil {
-		return false
-	}
 	canonicalModel := canonicalOpenAIAccountSchedulingModel(account, requestedModel)
-	return state.isBlocked(account.ID, openAIAccountModelTransientModel(canonicalModel), time.Now())
+	normalizedModel := openAIAccountModelTransientModel(canonicalModel)
+	now := time.Now()
+	if state != nil && state.isBlocked(account.ID, normalizedModel, now) {
+		return true
+	}
+	planGatedState := s.getOpenAIPlanGatedModelTransientState()
+	return planGatedState != nil && planGatedState.isBlocked(account.ID, normalizedModel, now)
 }
 
 func (s *OpenAIGatewayService) isOpenAIAccountRequestRuntimeBlocked(account *Account, requestedModel string) bool {
@@ -438,7 +480,17 @@ func (s *OpenAIGatewayService) isOpenAIOAuth429Storm() bool {
 	return s.openaiOAuth429WindowCount.Load() >= openAIOAuth429StormThreshold
 }
 
-func (s *OpenAIGatewayService) ShouldStopOpenAIOAuth429Failover(account *Account, statusCode int, failedSwitches int, state *OpenAIOAuth429FailoverState) bool {
+func (s *OpenAIGatewayService) ShouldStopOpenAIOAuth429Failover(account *Account, statusCode int, failedSwitches int, state *OpenAIOAuth429FailoverState, failure ...*UpstreamFailoverError) bool {
+	if state != nil {
+		if state.planGatedFollowupsRemaining > 0 {
+			state.planGatedFollowupsRemaining--
+			return state.planGatedFollowupsRemaining == 0
+		}
+		if len(failure) > 0 && failure[0] != nil && isOpenAICodexPlanGatedModelError(failure[0].StatusCode, failure[0].ResponseBody) {
+			state.planGatedFollowupsRemaining = 2
+			return false
+		}
+	}
 	if failedSwitches < openAIOAuth429StormMaxAccountSwitches {
 		return false
 	}

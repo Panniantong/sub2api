@@ -49,6 +49,49 @@ func TestOpenAI429FastPath_RateLimitExceededUsesAccountModelTransientCooldown(t 
 	require.False(t, svc.isOpenAIAccountRequestRuntimeBlocked(account, "gpt-5.6-terra"))
 }
 
+func TestOpenAIPlanGated400_UsesShortModelTransientInsteadOfPersistentCooldown(t *testing.T) {
+	repo := &modelNotFoundAccountRepoStub{}
+	rateLimitService := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	svc := &OpenAIGatewayService{rateLimitService: rateLimitService}
+	account := openAICodexPlanGatedOAuthAccount()
+	body := []byte(`{"detail":"The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account."}`)
+
+	shouldSwitchAccount := svc.handleOpenAIAccountUpstreamError(
+		context.Background(),
+		account,
+		http.StatusBadRequest,
+		http.Header{},
+		body,
+		"gpt-5.6-sol",
+	)
+
+	require.True(t, shouldSwitchAccount)
+	require.Empty(t, repo.modelRateLimitCalls, "one ambiguous 400 must not persist a 30-minute model cooldown")
+	require.True(t, svc.isOpenAIAccountRequestRuntimeBlocked(account, "gpt-5.6-sol"))
+	require.False(t, svc.isOpenAIAccountRequestRuntimeBlocked(account, "gpt-5.6-terra"))
+
+	svc.ReportOpenAIAccountScheduleResult(account.ID, "gpt-5.6-sol", true, nil)
+
+	require.False(t, svc.isOpenAIAccountRequestRuntimeBlocked(account, "gpt-5.6-sol"), "a successful in-flight request must clear the cooldown immediately")
+}
+
+func TestOpenAIPlanGated400_FailoverStopsAfterTwoDifferentAccounts(t *testing.T) {
+	svc := &OpenAIGatewayService{}
+	account := openAICodexPlanGatedOAuthAccount()
+	planGatedFailure := &UpstreamFailoverError{
+		StatusCode: http.StatusBadRequest,
+		ResponseBody: []byte(
+			`{"detail":"The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account."}`,
+		),
+	}
+	followupFailure := &UpstreamFailoverError{StatusCode: http.StatusBadGateway}
+	var state OpenAIOAuth429FailoverState
+
+	require.False(t, svc.ShouldStopOpenAIOAuth429Failover(account, planGatedFailure.StatusCode, 1, &state, planGatedFailure))
+	require.False(t, svc.ShouldStopOpenAIOAuth429Failover(account, followupFailure.StatusCode, 2, &state, followupFailure))
+	require.True(t, svc.ShouldStopOpenAIOAuth429Failover(account, followupFailure.StatusCode, 3, &state, followupFailure))
+}
+
 func TestOpenAI429FastPath_YieldDisabledKeepsOfficialWholeAccountCooldown(t *testing.T) {
 	svc := &OpenAIGatewayService{cfg: &config.Config{}}
 	account := &Account{ID: 440, Platform: PlatformOpenAI, Type: AccountTypeOAuth}

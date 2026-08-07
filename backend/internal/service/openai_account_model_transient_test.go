@@ -86,6 +86,54 @@ func TestOpenAIModelTransient_StaleStreakExpires(t *testing.T) {
 	assert.Zero(t, decision.Cooldown)
 }
 
+func TestOpenAIPlanGatedTransient_UsesProgressiveCooldowns(t *testing.T) {
+	state := newOpenAIAccountModelTransientStateWithPolicy(128, openAIPlanGatedTransientPolicy())
+	now := time.Date(2026, 8, 7, 10, 0, 0, 0, time.UTC)
+
+	first := state.recordFailure(35, "gpt-5.6-sol", now)
+	second := state.recordFailure(35, "gpt-5.6-sol", now.Add(3*time.Second))
+	third := state.recordFailure(35, "gpt-5.6-sol", now.Add(34*time.Second))
+	fourth := state.recordFailure(35, "gpt-5.6-sol", now.Add(5*time.Minute+35*time.Second))
+
+	assert.Equal(t, 1, first.FailureStreak)
+	assert.Equal(t, 5*time.Second, first.Cooldown)
+	assert.Equal(t, 2, second.FailureStreak)
+	assert.Equal(t, 30*time.Second, second.Cooldown)
+	assert.Equal(t, 3, third.FailureStreak)
+	assert.Equal(t, 5*time.Minute, third.Cooldown)
+	assert.Equal(t, 4, fourth.FailureStreak)
+	assert.Equal(t, 30*time.Minute, fourth.Cooldown)
+	assert.True(t, state.isBlocked(35, "gpt-5.6-sol", now.Add(6*time.Minute)))
+	assert.False(t, state.isBlocked(35, "gpt-5.6-terra", now.Add(6*time.Minute)))
+}
+
+func TestOpenAIPlanGatedTransient_DeduplicatesBurstFailures(t *testing.T) {
+	state := newOpenAIAccountModelTransientStateWithPolicy(128, openAIPlanGatedTransientPolicy())
+	now := time.Date(2026, 8, 7, 10, 0, 0, 0, time.UTC)
+	first := state.recordFailure(35, "gpt-5.6-sol", now)
+
+	duplicate := state.recordFailure(35, "gpt-5.6-sol", now.Add(time.Second))
+
+	assert.Equal(t, 1, duplicate.FailureStreak)
+	assert.Equal(t, first.BlockUntil, duplicate.BlockUntil)
+	assert.True(t, state.isBlocked(35, "gpt-5.6-sol", now.Add(4*time.Second)))
+	assert.False(t, state.isBlocked(35, "gpt-5.6-sol", now.Add(6*time.Second)))
+}
+
+func TestOpenAIPlanGatedTransient_SuccessImmediatelyClearsCooldown(t *testing.T) {
+	state := newOpenAIAccountModelTransientStateWithPolicy(128, openAIPlanGatedTransientPolicy())
+	now := time.Date(2026, 8, 7, 10, 0, 0, 0, time.UTC)
+	state.recordFailure(35, "gpt-5.6-sol", now)
+	require.True(t, state.isBlocked(35, "gpt-5.6-sol", now.Add(time.Second)))
+
+	state.recordSuccess(35, "gpt-5.6-sol")
+
+	assert.False(t, state.isBlocked(35, "gpt-5.6-sol", now.Add(time.Second)))
+	decision := state.recordFailure(35, "gpt-5.6-sol", now.Add(2*time.Second))
+	assert.Equal(t, 1, decision.FailureStreak)
+	assert.Equal(t, 5*time.Second, decision.Cooldown)
+}
+
 func TestOpenAIModelTransient_IgnoresInvalidKeys(t *testing.T) {
 	state := newOpenAIAccountModelTransientState(128)
 	now := time.Date(2026, 7, 10, 10, 0, 0, 0, time.UTC)

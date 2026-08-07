@@ -10,9 +10,56 @@ const (
 	openAIModelTransientFailureWindow = time.Minute
 	openAIModelTransientShortCooldown = 10 * time.Second
 	openAIModelTransientLongCooldown  = 45 * time.Second
+	openAIPlanGatedFailureWindow      = 10 * time.Minute
+	openAIPlanGatedDedupWindow        = 2 * time.Second
+	openAIPlanGatedFirstCooldown      = 5 * time.Second
+	openAIPlanGatedSecondCooldown     = 30 * time.Second
+	openAIPlanGatedThirdCooldown      = 5 * time.Minute
+	openAIPlanGatedLongCooldown       = 30 * time.Minute
 	openAIModelTransientDefaultMax    = 4096
 	openAIModelTransientMaxModelBytes = 512
 )
+
+type openAIAccountModelTransientPolicy struct {
+	failureWindow time.Duration
+	dedupWindow   time.Duration
+	cooldowns     []time.Duration
+}
+
+func defaultOpenAIAccountModelTransientPolicy() openAIAccountModelTransientPolicy {
+	return openAIAccountModelTransientPolicy{
+		failureWindow: openAIModelTransientFailureWindow,
+		cooldowns: []time.Duration{
+			0,
+			openAIModelTransientShortCooldown,
+			openAIModelTransientLongCooldown,
+		},
+	}
+}
+
+func openAIPlanGatedTransientPolicy() openAIAccountModelTransientPolicy {
+	return openAIAccountModelTransientPolicy{
+		failureWindow: openAIPlanGatedFailureWindow,
+		dedupWindow:   openAIPlanGatedDedupWindow,
+		cooldowns: []time.Duration{
+			openAIPlanGatedFirstCooldown,
+			openAIPlanGatedSecondCooldown,
+			openAIPlanGatedThirdCooldown,
+			openAIPlanGatedLongCooldown,
+		},
+	}
+}
+
+func (p openAIAccountModelTransientPolicy) cooldownForFailureStreak(streak int) time.Duration {
+	if streak <= 0 || len(p.cooldowns) == 0 {
+		return 0
+	}
+	index := streak - 1
+	if index >= len(p.cooldowns) {
+		index = len(p.cooldowns) - 1
+	}
+	return p.cooldowns[index]
+}
 
 type openAIAccountModelKey struct {
 	AccountID int64
@@ -36,15 +83,24 @@ type openAIAccountModelTransientState struct {
 	mu         sync.Mutex
 	entries    map[openAIAccountModelKey]openAIAccountModelTransientEntry
 	maxEntries int
+	policy     openAIAccountModelTransientPolicy
 }
 
 func newOpenAIAccountModelTransientState(maxEntries int) *openAIAccountModelTransientState {
+	return newOpenAIAccountModelTransientStateWithPolicy(maxEntries, defaultOpenAIAccountModelTransientPolicy())
+}
+
+func newOpenAIAccountModelTransientStateWithPolicy(maxEntries int, policy openAIAccountModelTransientPolicy) *openAIAccountModelTransientState {
 	if maxEntries <= 0 {
 		maxEntries = openAIModelTransientDefaultMax
+	}
+	if policy.failureWindow <= 0 {
+		policy = defaultOpenAIAccountModelTransientPolicy()
 	}
 	return &openAIAccountModelTransientState{
 		entries:    make(map[openAIAccountModelKey]openAIAccountModelTransientEntry),
 		maxEntries: maxEntries,
+		policy:     policy,
 	}
 }
 
@@ -86,7 +142,15 @@ func (s *openAIAccountModelTransientState) recordFailure(accountID int64, model 
 	if !exists {
 		s.evictOldestLocked()
 	}
-	if !exists || entry.lastFailure.IsZero() || now.Sub(entry.lastFailure) > openAIModelTransientFailureWindow || now.Before(entry.lastFailure) {
+	if exists && s.policy.dedupWindow > 0 && !entry.lastFailure.IsZero() && !now.Before(entry.lastFailure) && now.Sub(entry.lastFailure) < s.policy.dedupWindow {
+		entry.lastTouched = now
+		s.entries[key] = entry
+		return openAIAccountModelTransientDecision{
+			FailureStreak: entry.failureStreak,
+			BlockUntil:    entry.blockUntil,
+		}
+	}
+	if !exists || entry.lastFailure.IsZero() || now.Sub(entry.lastFailure) > s.policy.failureWindow || now.Before(entry.lastFailure) {
 		entry.failureStreak = 0
 		entry.blockUntil = time.Time{}
 	}
@@ -94,13 +158,7 @@ func (s *openAIAccountModelTransientState) recordFailure(accountID int64, model 
 	entry.lastFailure = now
 	entry.lastTouched = now
 
-	cooldown := time.Duration(0)
-	switch {
-	case entry.failureStreak >= 3:
-		cooldown = openAIModelTransientLongCooldown
-	case entry.failureStreak == 2:
-		cooldown = openAIModelTransientShortCooldown
-	}
+	cooldown := s.policy.cooldownForFailureStreak(entry.failureStreak)
 	if cooldown > 0 {
 		entry.blockUntil = now.Add(cooldown)
 	} else {
@@ -139,7 +197,7 @@ func (s *openAIAccountModelTransientState) isBlocked(accountID int64, model stri
 	if !exists {
 		return false
 	}
-	if !entry.lastFailure.IsZero() && now.Sub(entry.lastFailure) > openAIModelTransientFailureWindow {
+	if !entry.lastFailure.IsZero() && now.Sub(entry.lastFailure) > s.policy.failureWindow && (entry.blockUntil.IsZero() || !now.Before(entry.blockUntil)) {
 		delete(s.entries, key)
 		return false
 	}
