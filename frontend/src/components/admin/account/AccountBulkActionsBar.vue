@@ -42,11 +42,31 @@
         </button>
       </template>
     </div>
-    <div class="flex gap-2">
+    <div class="flex flex-wrap justify-end gap-2">
       <template v-if="selectedIds.length > 0">
         <button @click="$emit('delete')" class="btn btn-danger btn-sm">{{ t('admin.accounts.bulkActions.delete') }}</button>
         <button @click="$emit('reset-status')" class="btn btn-secondary btn-sm">{{ t('admin.accounts.bulkActions.resetStatus') }}</button>
         <button @click="$emit('refresh-token')" class="btn btn-secondary btn-sm">{{ t('admin.accounts.bulkActions.refreshToken') }}</button>
+        <button
+          data-test="batch-test-accounts"
+          class="btn btn-secondary btn-sm relative overflow-hidden"
+          :disabled="batchTesting"
+          :aria-busy="batchTesting"
+          @click="$emit('batch-test')"
+        >
+          <span v-if="batchTesting" class="mr-1.5 inline-block h-2 w-2 animate-pulse rounded-full bg-current" />
+          {{
+            batchTesting
+              ? t('admin.accounts.bulkActions.batchTesting', { processed: batchTestProcessed, total: batchTestTotal })
+              : t('admin.accounts.bulkActions.batchTest')
+          }}
+          <span
+            v-if="batchTesting"
+            data-test="batch-test-progress"
+            class="absolute inset-x-0 bottom-0 h-0.5 origin-left bg-primary-500 transition-[width] duration-500"
+            :style="{ width: `${batchTestProgressPercent}%` }"
+          />
+        </button>
         <button @click="$emit('probe-upstream-billing')" class="btn btn-secondary btn-sm">{{ t('admin.accounts.bulkActions.probeUpstreamBilling') }}</button>
         <button @click="$emit('toggle-schedulable', true)" class="btn btn-success btn-sm">{{ t('admin.accounts.bulkActions.enableScheduling') }}</button>
         <button @click="$emit('toggle-schedulable', false)" class="btn btn-warning btn-sm">{{ t('admin.accounts.bulkActions.disableScheduling') }}</button>
@@ -60,14 +80,24 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
-defineProps<{
+const props = defineProps<{
   selectedIds: number[]
   totalResults: number
   selectingAll: boolean
   allResultsSelected: boolean
+  batchTesting?: boolean
+  batchTestProcessed?: number
+  batchTestTotal?: number
 }>()
+
+const batchTestProgressPercent = computed(() => {
+  const total = props.batchTestTotal ?? 0
+  if (total <= 0) return 0
+  return Math.min(100, Math.max(0, ((props.batchTestProcessed ?? 0) / total) * 100))
+})
 
 defineEmits([
   'delete',
@@ -79,7 +109,8 @@ defineEmits([
   'toggle-schedulable',
   'reset-status',
   'refresh-token',
-  'probe-upstream-billing'
+  'probe-upstream-billing',
+  'batch-test'
 ])
 
 const { t } = useI18n()

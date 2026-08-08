@@ -8,17 +8,23 @@ const {
   listWithEtag,
   getBatchTodayStats,
   getUpstreamBillingProbeSettings,
+  createBatchTest,
+  getBatchTest,
   getAllProxies,
   getAllGroups,
-  showError
+  showError,
+  showSuccess
 } = vi.hoisted(() => ({
   listAccounts: vi.fn(),
   listWithEtag: vi.fn(),
   getBatchTodayStats: vi.fn(),
   getUpstreamBillingProbeSettings: vi.fn(),
+  createBatchTest: vi.fn(),
+  getBatchTest: vi.fn(),
   getAllProxies: vi.fn(),
   getAllGroups: vi.fn(),
-  showError: vi.fn()
+  showError: vi.fn(),
+  showSuccess: vi.fn()
 }))
 
 vi.mock('@/api/admin', () => ({
@@ -31,7 +37,9 @@ vi.mock('@/api/admin', () => ({
       batchDelete: vi.fn(),
       batchClearError: vi.fn(),
       batchRefresh: vi.fn(),
-      bulkUpdate: vi.fn()
+      bulkUpdate: vi.fn(),
+      createBatchTest,
+      getBatchTest
     },
     proxies: {
       getAll: getAllProxies
@@ -45,7 +53,7 @@ vi.mock('@/api/admin', () => ({
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
     showError,
-    showSuccess: vi.fn(),
+    showSuccess,
     showInfo: vi.fn()
   })
 }))
@@ -78,16 +86,19 @@ const makeAccounts = (count: number) => Array.from({ length: count }, (_, index)
 }))
 
 const AccountBulkActionsBarStub = {
-  props: ['selectedIds', 'totalResults', 'selectingAll', 'allResultsSelected'],
-  emits: ['select-all-results', 'select-page', 'clear'],
+  props: ['selectedIds', 'totalResults', 'selectingAll', 'allResultsSelected', 'batchTesting', 'batchTestProcessed', 'batchTestTotal'],
+  emits: ['select-all-results', 'select-page', 'clear', 'batch-test'],
   template: `
     <div>
       <span data-test="selected-count">{{ selectedIds.length }}</span>
       <span data-test="total-results">{{ totalResults }}</span>
       <span data-test="all-results-selected">{{ String(allResultsSelected) }}</span>
+      <span data-test="batch-testing">{{ String(batchTesting) }}</span>
+      <span data-test="batch-progress">{{ batchTestProcessed }}/{{ batchTestTotal }}</span>
       <button data-test="select-page" @click="$emit('select-page')">select page</button>
       <button data-test="select-all-results" @click="$emit('select-all-results')">select all</button>
       <button data-test="clear" @click="$emit('clear')">clear</button>
+      <button data-test="batch-test" @click="$emit('batch-test')">batch test</button>
     </div>
   `
 }
@@ -141,9 +152,12 @@ describe('admin AccountsView select all filtered results', () => {
     listWithEtag.mockReset()
     getBatchTodayStats.mockReset()
     getUpstreamBillingProbeSettings.mockReset()
+    createBatchTest.mockReset()
+    getBatchTest.mockReset()
     getAllProxies.mockReset()
     getAllGroups.mockReset()
     showError.mockReset()
+    showSuccess.mockReset()
 
     listWithEtag.mockResolvedValue({
       notModified: true,
@@ -154,6 +168,14 @@ describe('admin AccountsView select all filtered results', () => {
     getUpstreamBillingProbeSettings.mockResolvedValue({ enabled: true, interval_minutes: 30 })
     getAllProxies.mockResolvedValue([])
     getAllGroups.mockResolvedValue([])
+    createBatchTest.mockResolvedValue({
+      job_id: 'job-1', state: 'running', model: 'gpt-5.4-mini', total: 20,
+      processed: 0, success: 0, failed: 0, created_at: '2026-08-08T00:00:00Z'
+    })
+    getBatchTest.mockResolvedValue({
+      job_id: 'job-1', state: 'completed', model: 'gpt-5.4-mini', total: 20,
+      processed: 20, success: 18, failed: 2, created_at: '2026-08-08T00:00:00Z', completed_at: '2026-08-08T00:01:00Z'
+    })
   })
 
   it('selects all matching IDs in one commit and clears the selection when filters change', async () => {
@@ -224,5 +246,39 @@ describe('admin AccountsView select all filtered results', () => {
     expect(wrapper.get('[data-test="selected-count"]').text()).toBe('20')
     expect(wrapper.get('[data-test="all-results-selected"]').text()).toBe('false')
     expect(showError).toHaveBeenCalledWith('admin.accounts.bulkActions.selectAllFailed')
+  })
+
+  it('starts a batch test and polls progress until completion', async () => {
+    vi.useFakeTimers()
+    try {
+      const currentPage = makeAccounts(20)
+      listAccounts.mockResolvedValue({
+        items: currentPage,
+        total: 20,
+        page: 1,
+        page_size: 20,
+        pages: 1
+      })
+
+      const wrapper = mountView()
+      await flushPromises()
+      await wrapper.get('[data-test="select-page"]').trigger('click')
+      await wrapper.get('[data-test="batch-test"]').trigger('click')
+      await flushPromises()
+
+      expect(createBatchTest).toHaveBeenCalledWith(currentPage.map(account => account.id))
+      expect(wrapper.get('[data-test="batch-testing"]').text()).toBe('true')
+      expect(wrapper.get('[data-test="batch-progress"]').text()).toBe('0/20')
+
+      await vi.advanceTimersByTimeAsync(1000)
+      await flushPromises()
+
+      expect(getBatchTest).toHaveBeenCalledWith('job-1')
+      expect(wrapper.get('[data-test="batch-testing"]').text()).toBe('false')
+      expect(wrapper.get('[data-test="batch-progress"]').text()).toBe('20/20')
+      expect(showError).toHaveBeenCalledWith('admin.accounts.bulkActions.batchTestCompletedWithFailures')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

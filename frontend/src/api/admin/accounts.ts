@@ -245,6 +245,30 @@ export async function testAccount(id: number): Promise<{
   return data
 }
 
+export interface BatchAccountTestJob {
+  job_id: string
+  state: 'running' | 'completed'
+  model: string
+  total: number
+  processed: number
+  success: number
+  failed: number
+  created_at: string
+  completed_at?: string
+}
+
+export async function createBatchTest(accountIds: number[]): Promise<BatchAccountTestJob> {
+  const { data } = await apiClient.post<BatchAccountTestJob>('/admin/accounts/batch-test', {
+    account_ids: accountIds
+  })
+  return data
+}
+
+export async function getBatchTest(jobId: string): Promise<BatchAccountTestJob> {
+  const { data } = await apiClient.get<BatchAccountTestJob>(`/admin/accounts/batch-test/${encodeURIComponent(jobId)}`)
+  return data
+}
+
 /**
  * Refresh account credentials
  * @param id - Account ID
@@ -981,6 +1005,8 @@ export const accountsAPI = {
   delete: deleteAccount,
   toggleStatus,
   testAccount,
+  createBatchTest,
+  getBatchTest,
   refreshCredentials,
   applyOAuthCredentials,
   getStats,

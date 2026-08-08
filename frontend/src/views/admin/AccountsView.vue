@@ -180,10 +180,14 @@
           :total-results="pagination.total"
           :selecting-all="selectingAllResults"
           :all-results-selected="allResultsSelected"
+          :batch-testing="batchTesting"
+          :batch-test-processed="batchTestJob?.processed ?? 0"
+          :batch-test-total="batchTestJob?.total ?? 0"
           @delete="handleBulkDelete"
           @reset-status="handleBulkResetStatus"
           @refresh-token="handleBulkRefreshToken"
           @probe-upstream-billing="handleBulkProbeUpstreamBilling"
+          @batch-test="handleBatchTest"
           @edit-selected="openBulkEditSelected"
           @edit-filtered="openBulkEditFiltered"
           @clear="clearSelection"
@@ -487,6 +491,7 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { adminAPI } from '@/api/admin'
+import type { BatchAccountTestJob } from '@/api/admin/accounts'
 import { useTableLoader } from '@/composables/useTableLoader'
 import { useSwipeSelect, type SwipeSelectVirtualContext } from '@/composables/useSwipeSelect'
 import { useTableSelection } from '@/composables/useTableSelection'
@@ -606,6 +611,10 @@ const togglingSchedulable = ref<number | null>(null)
 const menu = reactive<{show:boolean, acc:Account|null, pos:{top:number, left:number}|null}>({ show: false, acc: null, pos: null })
 const exportingData = ref(false)
 const probingUpstreamBilling = reactive(new Set<number>())
+const batchTestJob = ref<BatchAccountTestJob | null>(null)
+const batchTesting = computed(() => batchTestJob.value?.state === 'running')
+let batchTestPollTimer: ReturnType<typeof setTimeout> | null = null
+let batchTestPollingActive = false
 const upstreamBillingProbeGloballyEnabled = ref<boolean | undefined>(undefined)
 const upstreamBillingNow = ref(Date.now())
 let lastUpstreamBillingSortRefreshMinute = -1
@@ -1582,6 +1591,63 @@ const handleBulkRefreshToken = async () => {
     appStore.showError(String(error))
   }
 }
+
+const stopBatchTestPolling = () => {
+  batchTestPollingActive = false
+  if (batchTestPollTimer !== null) {
+    clearTimeout(batchTestPollTimer)
+    batchTestPollTimer = null
+  }
+}
+
+const finishBatchTest = async (job: BatchAccountTestJob) => {
+  stopBatchTestPolling()
+  batchTestJob.value = job
+  if (job.failed > 0) {
+    appStore.showError(t('admin.accounts.bulkActions.batchTestCompletedWithFailures', {
+      success: job.success,
+      failed: job.failed
+    }))
+  } else {
+    appStore.showSuccess(t('admin.accounts.bulkActions.batchTestCompleted', { count: job.success }))
+  }
+  await reload()
+}
+
+const pollBatchTest = async (jobId: string) => {
+  if (!batchTestPollingActive) return
+  try {
+    const job = await adminAPI.accounts.getBatchTest(jobId)
+    if (!batchTestPollingActive) return
+    batchTestJob.value = job
+    if (job.state === 'completed') {
+      await finishBatchTest(job)
+      return
+    }
+    batchTestPollTimer = setTimeout(() => pollBatchTest(jobId), 1000)
+  } catch (error) {
+    stopBatchTestPolling()
+    appStore.showError(extractApiErrorMessage(error, t('admin.accounts.bulkActions.batchTestInterrupted')))
+  }
+}
+
+const handleBatchTest = async () => {
+  const accountIds = [...selIds.value]
+  if (accountIds.length === 0 || batchTesting.value) return
+  try {
+    stopBatchTestPolling()
+    const job = await adminAPI.accounts.createBatchTest(accountIds)
+    batchTestJob.value = job
+    if (job.state === 'completed') {
+      await finishBatchTest(job)
+      return
+    }
+    batchTestPollingActive = true
+    batchTestPollTimer = setTimeout(() => pollBatchTest(job.job_id), 1000)
+  } catch (error) {
+    appStore.showError(extractApiErrorMessage(error, t('admin.accounts.bulkActions.batchTestStartFailed')))
+  }
+}
 const handleBulkProbeUpstreamBilling = async () => {
   const accountIDs = [...selIds.value]
   if (accountIDs.length === 0) {
@@ -2205,6 +2271,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  stopBatchTestPolling()
   window.removeEventListener('scroll', handleScroll, true)
   window.removeEventListener('resize', handleViewportResize)
   document.removeEventListener('click', handleClickOutside)

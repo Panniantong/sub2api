@@ -64,6 +64,8 @@ type AccountHandler struct {
 	grokImportProber        grokImportProber
 	upstreamBillingProbe    *service.UpstreamBillingProbeService
 	ollamaCloudUsage        *service.OllamaCloudUsageService
+	batchTestJobsInit       sync.Once
+	batchTestJobs           *accountBatchTestJobStore
 }
 
 // SetUpstreamBillingProbeService attaches the optional remote billing probe service.
