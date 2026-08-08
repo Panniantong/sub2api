@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sub2API 批量账号探活设计</title>
+  <style>
+    :root { color-scheme: light dark; --ink: #172033; --muted: #64748b; --line: #dfe6ee; --card: #ffffff; --wash: #f5f8fb; --accent: #0f9f8f; --accent-soft: #e8f8f5; }
+    @media (prefers-color-scheme: dark) { :root { --ink: #e5edf5; --muted: #9aa9bb; --line: #2c3948; --card: #131c27; --wash: #0c131c; --accent: #31c7b5; --accent-soft: #123832; } }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--wash); color: var(--ink); font: 15px/1.68 ui-sans-serif, system-ui, sans-serif; }
+    main { max-width: 920px; margin: 46px auto; padding: 38px 42px; background: var(--card); border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 16px 46px rgba(15, 23, 42, .08); }
+    h1, h2 { line-height: 1.25; } h1 { margin: 0 0 8px; font-size: 30px; } h2 { margin: 30px 0 10px; font-size: 19px; }
+    p { margin: 8px 0; } code { padding: 2px 6px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); }
+    .scope { color: var(--muted); }
+    .flow { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin: 18px 0; }
+    .step { padding: 13px 10px; border: 1px solid var(--line); border-radius: 10px; text-align: center; background: var(--wash); font-size: 13px; }
+    .callout { padding: 16px 18px; border-left: 4px solid var(--accent); border-radius: 10px; background: var(--accent-soft); }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { padding: 10px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-size: 13px; }
+    ul, ol { padding-left: 22px; }
+    @media (max-width: 720px) { main { margin: 0; padding: 26px 20px; border-radius: 0; } .flow { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Sub2API 批量账号探活</h1>
+  <p class="scope">适用范围：GT2 的 8080、8081、8082 三套独立 Sub2API；三套实例使用同一份实现，各自处理本实例账号。</p>
+
+  <h2>目标</h2>
+  <p>管理员选中任意数量的 OpenAI 账号后，点击“批量测试”，系统使用固定模型 <code>gpt-5.4-mini</code> 对每个账号执行一次真实探活。批量层只负责调度和展示进度，账号状态变化完全沿用现有单账号测试逻辑。</p>
+
+  <h2>交互</h2>
+  <div class="flow">
+    <div class="step">选择账号</div>
+    <div class="step">点击批量测试</div>
+    <div class="step">后台并发 10 个</div>
+    <div class="step">每秒刷新进度</div>
+    <div class="step">完成并刷新列表</div>
+  </div>
+  <ul>
+    <li>按钮位于现有批量操作栏，名称为“批量测试”。</li>
+    <li>运行时按钮禁用并显示“测试中 50 / 700”，同时显示紧凑进度条。</li>
+    <li>完成后提示“测试完成：成功 X，失败 Y”，刷新账号列表并保留当前选择，方便管理员查看状态。</li>
+    <li>前端关闭或刷新不会取消后台任务；重新进入页面不自动追踪旧任务。</li>
+  </ul>
+
+  <h2>最小后端设计</h2>
+  <table>
+    <thead><tr><th>接口</th><th>职责</th></tr></thead>
+    <tbody>
+      <tr><td><code>POST /admin/accounts/batch-test</code></td><td>校验并去重账号 ID，创建内存任务，立即返回任务 ID、总数。</td></tr>
+      <tr><td><code>GET /admin/accounts/batch-test/:job_id</code></td><td>返回任务状态、总数、已处理、成功和失败数量。</td></tr>
+    </tbody>
+  </table>
+  <p>任务仅保存在当前 Sub2 进程内，不建表。后台固定 10 个 worker，完成一个再领取下一个；单账号复用 <code>RunTestBackground</code>，每项设置 2 分钟上限。完成任务保留 30 分钟后清理。</p>
+
+  <h2>账号状态语义</h2>
+  <div class="callout">批量测试不新增账号判定规则：401 继续按现有逻辑标记错误，429 继续按现有逻辑记录限流；其他失败只计入本次失败数，不强制改成“错误”。测试成功时沿用现有单账号测试的恢复行为。</div>
+  <p>固定 GPT 模型只适用于 OpenAI 账号。误选其他平台时，该账号直接计为失败，不发送不匹配的上游请求。</p>
+
+  <h2>边界与失败处理</h2>
+  <ul>
+    <li>不限制选中总数；并发始终为 10，避免一次性请求风暴。</li>
+    <li>重复 ID 只测试一次；非法或不存在的 ID 计为失败。</li>
+    <li>Sub2 进程重启会丢失正在运行的内存任务，前端显示“任务已中断，请重新发起”，不做持久化恢复。</li>
+    <li>不自动重试、不保存逐账号测试报告、不新增错误分组、不增加配置项。</li>
+  </ul>
+
+  <h2>验收</h2>
+  <ol>
+    <li>选中 700 个账号后接口立即受理，实际同时执行的测试不超过 10 个。</li>
+    <li>进度中的 <code>processed = success + failed</code>，单调递增，最终等于总数。</li>
+    <li>前端每秒更新进度，完成后停止轮询并刷新账号列表。</li>
+    <li>真实 OpenAI 探活模型为 <code>gpt-5.4-mini</code>；非 OpenAI 账号不发送上游请求。</li>
+    <li>现有单账号测试、批量操作和三实例部署行为保持不变。</li>
+  </ol>
+
+  <h2>发布与回滚</h2>
+  <p>在当前定制分支构建一个新镜像，按 8080 → 8081 → 8082 顺序更新，仅重建 Sub2API 应用容器。回滚恢复上一镜像标签；本功能无数据库迁移。</p>
+</main>
+</body>
+</html>
