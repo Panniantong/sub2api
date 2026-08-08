@@ -7,7 +7,19 @@ import (
 )
 
 const (
-	openAIModelTransientFailureWindow = time.Minute
+	// openAIModelTransientStreakTTL bounds how long a failure streak survives
+	// without a new failure. It exists only so the map does not keep state for
+	// account+model pairs that stopped being used; a streak is otherwise reset
+	// by recordSuccess alone.
+	//
+	// It must stay well above the cooldowns. Resetting the streak on a short
+	// wall-clock window makes the breaker's sensitivity depend on request rate:
+	// a gateway called less often than the window never reaches streak 2, so a
+	// broken upstream is never cooled down and every request pays a failed
+	// attempt plus a failover before reaching a healthy account. Low-traffic
+	// deployments were hit hardest, which is the opposite of what a breaker
+	// should do.
+	openAIModelTransientStreakTTL     = 30 * time.Minute
 	openAIModelTransientShortCooldown = 10 * time.Second
 	openAIModelTransientLongCooldown  = 45 * time.Second
 	openAIPlanGatedFailureWindow      = 10 * time.Minute
@@ -28,7 +40,7 @@ type openAIAccountModelTransientPolicy struct {
 
 func defaultOpenAIAccountModelTransientPolicy() openAIAccountModelTransientPolicy {
 	return openAIAccountModelTransientPolicy{
-		failureWindow: openAIModelTransientFailureWindow,
+		failureWindow: openAIModelTransientStreakTTL,
 		cooldowns: []time.Duration{
 			0,
 			openAIModelTransientShortCooldown,
@@ -150,6 +162,8 @@ func (s *openAIAccountModelTransientState) recordFailure(accountID int64, model 
 			BlockUntil:    entry.blockUntil,
 		}
 	}
+	// The streak is cleared by recordSuccess. Only drop it here when the
+	// policy-specific window expires, or when the clock moved backwards.
 	if !exists || entry.lastFailure.IsZero() || now.Sub(entry.lastFailure) > s.policy.failureWindow || now.Before(entry.lastFailure) {
 		entry.failureStreak = 0
 		entry.blockUntil = time.Time{}

@@ -386,3 +386,23 @@ func openAICodexPlanGatedOAuthAccount() *Account {
 		Credentials: map[string]any{},
 	}
 }
+
+// 确定性的 404 model-not-found 即使是图片模型也照常冷却。
+func TestRateLimitService_HandleUpstreamError_ModelNotFoundImageModelStillCoolsDown(t *testing.T) {
+	repo := &modelNotFoundAccountRepoStub{}
+	svc := &RateLimitService{accountRepo: repo}
+	account := openAICodexPlanGatedOAuthAccount()
+
+	handled := svc.HandleUpstreamError(
+		context.Background(),
+		account,
+		http.StatusNotFound,
+		http.Header{},
+		[]byte(`{"error":{"message":"The model 'gpt-image-2' does not exist","code":"model_not_found"}}`),
+		"gpt-image-2",
+	)
+
+	require.True(t, handled)
+	require.Len(t, repo.modelRateLimitCalls, 1)
+	require.Equal(t, upstreamModelNotFoundReason, repo.modelRateLimitCalls[0].reason)
+}
