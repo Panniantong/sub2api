@@ -1,9 +1,86 @@
 package service
 
 import (
+	"bytes"
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
+	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
 )
+
+type codexSnapshotBlockingStreamUpstream struct {
+	body io.ReadCloser
+}
+
+func (u *codexSnapshotBlockingStreamUpstream) Do(_ *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+	headers := make(http.Header)
+	headers.Set("Content-Type", "text/event-stream")
+	headers.Set("x-codex-primary-used-percent", "41")
+	headers.Set("x-codex-primary-reset-after-seconds", "600000")
+	headers.Set("x-codex-primary-window-minutes", "10080")
+	headers.Set("x-codex-secondary-used-percent", "0")
+	headers.Set("x-codex-secondary-reset-after-seconds", "0")
+	headers.Set("x-codex-secondary-window-minutes", "300")
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     headers,
+		Body:       u.body,
+	}, nil
+}
+
+func (u *codexSnapshotBlockingStreamUpstream) DoWithTLS(req *http.Request, proxyURL string, accountID int64, concurrency int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+	return u.Do(req, proxyURL, accountID, concurrency)
+}
+
+func TestOpenAIGatewayService_Forward_PersistsCodexSnapshotBeforeStreamCompletes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	reader, writer := io.Pipe()
+	repo := &openAICodexSnapshotAsyncRepo{updateExtraCh: make(chan map[string]any, 1)}
+	svc := &OpenAIGatewayService{
+		accountRepo: repo,
+		cfg: &config.Config{Gateway: config.GatewayConfig{
+			MaxLineSize: defaultMaxLineSize,
+		}},
+		httpUpstream:          &codexSnapshotBlockingStreamUpstream{body: reader},
+		codexSnapshotThrottle: newAccountWriteThrottle(time.Hour),
+	}
+	body := []byte(`{"model":"gpt-5.6-sol","stream":true,"input":"hello"}`)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	account := &Account{
+		ID: 1906, Name: "oauth-test", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+		Status: StatusActive, Schedulable: true, Concurrency: 1,
+		Credentials: map[string]any{"access_token": "test-token", "chatgpt_account_id": "test-account"},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := svc.Forward(context.Background(), c, account, body)
+		done <- err
+	}()
+
+	select {
+	case updates := <-repo.updateExtraCh:
+		require.Equal(t, 41.0, updates["codex_7d_used_percent"])
+	case <-time.After(500 * time.Millisecond):
+		_ = writer.Close()
+		<-done
+		t.Fatal("Codex usage snapshot was not persisted before the stream completed")
+	}
+
+	_, err := writer.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_snapshot\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n"))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	require.NoError(t, <-done)
+}
 
 func TestCodexSnapshotBaseTime(t *testing.T) {
 	fallback := time.Date(2026, 2, 20, 9, 0, 0, 0, time.UTC)
