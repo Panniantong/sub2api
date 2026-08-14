@@ -75,7 +75,7 @@ func normalizeKnownOpenAICodexModel(model string) string {
 		return "gpt-5.6-sol"
 	case strings.HasPrefix(normalized, "gpt-5.6-"):
 		suffix := strings.TrimPrefix(normalized, "gpt-5.6-")
-		if suffix == "max" || isKnownCodexModelSuffix(suffix) {
+		if suffix == "max" || suffix == "wm" || isKnownCodexModelSuffix(suffix) {
 			return "gpt-5.6-sol"
 		}
 		return ""
@@ -113,7 +113,7 @@ func isOpenAIGPT56Model(model string) bool {
 	if normalized == "gpt-5.6" {
 		return true
 	}
-	if suffix, ok := strings.CutPrefix(normalized, "gpt-5.6-"); ok && (suffix == "max" || isKnownCodexModelSuffix(suffix)) {
+	if suffix, ok := strings.CutPrefix(normalized, "gpt-5.6-"); ok && (suffix == "max" || suffix == "wm" || isKnownCodexModelSuffix(suffix)) {
 		return true
 	}
 	for _, prefix := range []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {

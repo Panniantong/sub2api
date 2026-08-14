@@ -38,6 +38,9 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
 	upstreamPassthroughModel := ""
+	if bodyModel := strings.TrimSpace(gjson.GetBytes(body, "model").String()); bodyModel != "" && bodyModel != strings.TrimSpace(reqModel) {
+		upstreamPassthroughModel = bodyModel
+	}
 	if isOpenAIResponsesCompactPath(c) {
 		compactMappedModel := resolveOpenAICompactForwardModel(account, reqModel)
 		if compactMappedModel != "" && compactMappedModel != reqModel {
@@ -451,6 +454,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	// （User-Agent / originator / version 同源自洽），客户端自报身份不会到达上游。
 	if account.Type == AccountTypeOAuth {
 		enforceCodexIdentityHeadersWithUA(req.Header, s.codexIdentityOverrideUA(account))
+		applyCodexWorkModeIdentity(c, account, req.Header)
 	}
 
 	if req.Header.Get("content-type") == "" {

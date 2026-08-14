@@ -269,6 +269,13 @@ gateway:
   #
   # 注意：开启后会影响所有客户端的行为（不仅限于 VS Code / Codex CLI），请谨慎开启。
   force_codex_cli: false
+  # GPT-5.6 Work Mode is enabled by default for OAuth Responses requests.
+  # GPT-5.6 OAuth Responses 请求默认启用 Work Mode。
+  #
+  # Set true to keep ordinary Codex identity by default. Explicit model names
+  # ending in `-wm` still opt in. API-key, non-GPT-5.6 and image requests are unchanged.
+  # 设为 true 可关闭默认开启；显式 `-wm` 仍会开启。API Key、非 GPT-5.6 和生图请求不受影响。
+  disable_codex_work_mode: false
   # Stop rewriting load-shed Codex originators to the official CLI identity.
   # 关闭「把落在上游降载桶的 Codex originator 改写为官方 CLI 身份（codex_cli_rs）」。
   #

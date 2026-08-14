@@ -57,6 +57,23 @@ func TestLoadOpenAIOAuthFillFirstConfig(t *testing.T) {
 	})
 }
 
+func TestLoadCodexWorkModeConfig(t *testing.T) {
+	t.Run("enabled by default", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.False(t, cfg.Gateway.DisableCodexWorkMode)
+	})
+
+	t.Run("can disable default while explicit suffix remains a request decision", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+		t.Setenv("GATEWAY_DISABLE_CODEX_WORK_MODE", "true")
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.True(t, cfg.Gateway.DisableCodexWorkMode)
+	})
+}
+
 func TestLoadOpenAIOAuthYield429Config(t *testing.T) {
 	t.Run("disabled by default", func(t *testing.T) {
 		resetViperWithJWTSecret(t)

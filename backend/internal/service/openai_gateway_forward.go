@@ -102,7 +102,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	originalBody := body
 	requestView := newOpenAIRequestView(body)
 	reqModel, reqStream, promptCacheKey := requestView.Model, requestView.Stream, requestView.PromptCacheKey
-	originalModel := reqModel
+	originalModel := codexWorkModeClientModel(c, reqModel)
 
 	if account.Platform == PlatformGrok {
 		return s.forwardGrokResponses(ctx, c, account, body, originalModel, reqStream, startTime)
@@ -121,7 +121,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			originalBody = sanitizedBody
 			requestView = newOpenAIRequestView(sanitizedBody)
 			reqModel, reqStream, promptCacheKey = requestView.Model, requestView.Stream, requestView.PromptCacheKey
-			originalModel = reqModel
+			originalModel = codexWorkModeClientModel(c, reqModel)
 		}
 	}
 
@@ -144,7 +144,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			account.Type,
 			normalizeOpenAIWSLogValue(string(wsDecision.Transport)),
 			normalizeOpenAIWSLogValue(wsDecision.Reason),
-			reqModel,
+			originalModel,
 			reqStream,
 		)
 	}
@@ -186,7 +186,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			account,
 			originalBody,
 			canonicalImageIntentBody,
-			reqModel,
+			originalModel,
 			attemptImageIntentInvalidated,
 			reasoningEffort,
 			reqStream,
@@ -1152,6 +1152,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	// 客户端自报身份不参与构造，浏览器型 UA 也因此不会再到达上游（原浏览器 UA 兜底已被吸收）。
 	if account.Type == AccountTypeOAuth {
 		enforceCodexIdentityHeadersWithUA(req.Header, s.codexIdentityOverrideUA(account))
+		applyCodexWorkModeIdentity(c, account, req.Header)
 	}
 
 	// Ensure required headers exist
