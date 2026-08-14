@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sub2API GPT-5.6 Work Mode 全入口支持设计</title>
+  <style>
+    :root { color-scheme: light; --ink:#172033; --muted:#64748b; --line:#dbe3ef; --accent:#6d28d9; --ok:#047857; --bg:#f7f8fc; }
+    body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { max-width:920px; margin:40px auto; padding:0 22px 50px; }
+    header,.card { background:white; border:1px solid var(--line); border-radius:18px; padding:24px 28px; margin-bottom:16px; box-shadow:0 8px 28px rgba(30,41,59,.05); }
+    h1 { margin:0 0 8px; font-size:28px; } h2 { margin:0 0 10px; font-size:19px; }
+    p { margin:8px 0; } ul,ol { margin:8px 0 0; padding-left:22px; }
+    code { background:#f1f5f9; border-radius:6px; padding:2px 6px; }
+    .tag { display:inline-block; color:var(--accent); background:#f3e8ff; border-radius:999px; padding:3px 10px; font-weight:650; }
+    .flow { padding:14px 16px; border-left:4px solid var(--accent); background:#faf7ff; border-radius:8px; }
+    .ok { color:var(--ok); font-weight:700; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="tag">已由 Neo 确认方向</span>
+    <h1>GPT-5.6 Work Mode 全入口支持</h1>
+    <p>目标：让符合条件的 OAuth 请求明确以 Work Mode 身份发往上游，并能从模型名、出站身份与成功 usage 三层证据验收。</p>
+  </header>
+
+  <section class="card">
+    <h2>一、正确链路</h2>
+    <p class="flow"><code>客户端 gpt-5.6-sol</code> → New API 映射为 <code>gpt-5.6-sol-wm</code> → Sub2 在选号前归一为 <code>gpt-5.6-sol</code> → OAuth 出站写入 <code>originator: codex_work_desktop</code> 与 Codex Desktop User-Agent → 客户端仍看到原请求模型。</p>
+  </section>
+
+  <section class="card">
+    <h2>二、实现范围</h2>
+    <ul>
+      <li>覆盖 <code>/v1/responses</code> HTTP、Responses WebSocket，以及两个 Chat Completions handler。</li>
+      <li><code>gpt-5.6</code>、Sol、Terra、Luna 默认启用；显式 <code>*-wm</code> 始终启用。</li>
+      <li>在 composite/channel/account 选择前统一使用基础模型，避免 <code>model_not_found</code>。</li>
+      <li>OAuth 的 Responses 出站注入 Work 身份；API Key、非 GPT-5.6 和生图请求不注入。</li>
+      <li>usage 的 requested/client model 保留客户端名称；upstream/billing/scheduling 使用基础模型。</li>
+      <li><code>gateway.disable_codex_work_mode=true</code> 只关闭普通模型的默认启用，不关闭显式 <code>*-wm</code>。</li>
+    </ul>
+  </section>
+
+  <section class="card">
+    <h2>三、失败与回滚</h2>
+    <ul>
+      <li>任何入口仍把 <code>*-wm</code> 送入账号能力匹配，即视为失败，不部署。</li>
+      <li>真实请求只有 200、但无法证明 Work 身份，不算验收通过。</li>
+      <li>渠道映射最后开启；若 Chat/Responses 任一出现新增 404，立即恢复已保存的渠道 6–10 映射快照。</li>
+      <li>四实例逐个滚动替换，保持其余实例承接流量；不操作 edge-gw。</li>
+    </ul>
+  </section>
+
+  <section class="card">
+    <h2>四、测试与生产验收</h2>
+    <ol>
+      <li>单测：默认开启、配置关闭、显式后缀、Chat 流式/非流式、Responses HTTP/WS、API Key 不受影响、响应模型与 usage 语义。</li>
+      <li>回归：<code>internal/service</code>、<code>internal/handler</code>、<code>internal/config</code> 全包通过。</li>
+      <li>部署后开启渠道 6–10 的 Sol/Terra/Luna 显式 <code>→ *-wm</code> 映射。</li>
+      <li>真实验收至少包含一笔 Chat 和一笔 Responses 成功请求；数据库必须显示 <code>requested_model=*-wm</code>、<code>upstream_model=基础模型</code>。</li>
+      <li>出站 capture 或等价脱敏证据必须确认 <code>originator=codex_work_desktop</code> 和 Codex Desktop UA。</li>
+      <li>观察 404、503、502、成功率、FRT 和实例重启次数；全部无回归后才宣告完成。</li>
+    </ol>
+  </section>
+
+  <section class="card">
+    <h2>五、完成定义</h2>
+    <p class="ok">不是“模型能返回”，而是 Chat 与 Responses 都成功、显式 WM 可审计、出站身份可证明、普通请求无新增回归，并保留可立即恢复的生产映射快照。</p>
+  </section>
+</main>
+</body>
+</html>
