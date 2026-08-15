@@ -62,18 +62,19 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	startTime := time.Now()
 
 	// 1. Parse minimal fields needed for routing/billing
-	originalModel := gjson.GetBytes(body, "model").String()
-	if originalModel == "" {
+	routingModel := gjson.GetBytes(body, "model").String()
+	if routingModel == "" {
 		writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", "model is required")
 		return nil, fmt.Errorf("missing model in request")
 	}
+	originalModel := codexWorkModeClientModel(c, routingModel)
 	clientStream := gjson.GetBytes(body, "stream").Bool()
 
 	// 1b. Extract service tier from the raw body before any transformation.
 	serviceTier := extractOpenAIServiceTierFromBody(body)
 
 	// 2. Resolve model mapping (same as ForwardAsChatCompletions)
-	billingModel := resolveOpenAIForwardModel(account, originalModel, defaultMappedModel)
+	billingModel := resolveOpenAIForwardModel(account, routingModel, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
 	grokCacheIdentity := ""
 	if account.Platform == PlatformGrok {
@@ -81,13 +82,13 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 		// anchored to the client's stable conversation prefix.
 		grokCacheIdentity = resolveGrokCacheIdentity(c, body, "", upstreamModel)
 	}
-	reasoningEffort := extractOpenAIReasoningEffortFromBody(body, upstreamModel, billingModel, originalModel)
+	reasoningEffort := extractOpenAIReasoningEffortFromBody(body, upstreamModel, billingModel, routingModel)
 	// 国产模型默认 effort 补充：需要 mappedModel 判定，推迟到 billingModel 算出之后。
 	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, billingModel)
 
 	// 3. Rewrite model in body (no protocol conversion)
 	upstreamBody := body
-	if upstreamModel != originalModel {
+	if upstreamModel != routingModel {
 		upstreamBody = ReplaceModelInBody(body, upstreamModel)
 	}
 	if normalizedBody, normalized := NormalizeGLMOpenAIReasoningEffort(upstreamBody, upstreamModel); normalized {
@@ -262,6 +263,7 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 		observer = beginUpstreamResponseModelObservation(c)
 	}
 	requestID := resp.Header.Get("x-request-id")
+	_, preserveClientModel := codexWorkModeBoundClientModel(c)
 	writeStreamHeaders := s.newStreamHeaderWriter(c, resp.Header)
 	scanner := s.newUpstreamSSEScanner(resp.Body)
 
@@ -320,6 +322,7 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 					firstTokenMs = &elapsed
 				}
 			}
+			line = rewriteRawChatCompletionsSSEModel(line, payload, originalModel, preserveClientModel)
 		}
 
 		writeLine(line)
@@ -380,6 +383,18 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 	}, nil
 }
 
+func rewriteRawChatCompletionsSSEModel(line string, payload string, clientModel string, preserveClientModel bool) string {
+	clientModel = strings.TrimSpace(clientModel)
+	if !preserveClientModel || clientModel == "" || strings.TrimSpace(payload) == "[DONE]" || !gjson.Get(payload, "model").Exists() {
+		return line
+	}
+	rewritten, err := sjson.Set(payload, "model", clientModel)
+	if err != nil {
+		return line
+	}
+	return strings.Replace(line, payload, rewritten, 1)
+}
+
 // ensureOpenAIChatStreamUsage 确保 raw Chat Completions 流式请求会让上游返回 usage。
 // usage 也会继续向下游透传，支持级联代理和下游计费系统。
 func ensureOpenAIChatStreamUsage(body []byte) ([]byte, error) {
@@ -429,6 +444,7 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
+	_, preserveClientModel := codexWorkModeBoundClientModel(c)
 
 	respBody, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
@@ -455,6 +471,11 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+	}
+	if preserveClientModel && strings.TrimSpace(originalModel) != "" && gjson.GetBytes(respBody, "model").Exists() {
+		if rewritten, rewriteErr := sjson.SetBytes(respBody, "model", originalModel); rewriteErr == nil {
+			respBody = rewritten
+		}
 	}
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
 		c.Writer.Header().Set("Content-Type", ct)

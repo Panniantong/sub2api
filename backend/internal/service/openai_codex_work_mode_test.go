@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestResolveCodexWorkMode(t *testing.T) {
@@ -45,6 +46,48 @@ func TestCodexWorkModeModelNormalizationAndBilling(t *testing.T) {
 	require.Equal(t, "gpt-5.6-terra", normalizeCodexModel("gpt-5.6-terra-wm"))
 	require.Equal(t, "gpt-5.6-luna", normalizeCodexModel("gpt-5.6-luna-wm"))
 	require.Contains(t, usageBillingModelCandidates("gpt-5.6-terra-wm"), "gpt-5.6-terra")
+}
+
+func TestNormalizeCodexWorkModeRequestForChatCompletions(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	body := []byte(`{"model":"gpt-5.6-sol-wm","messages":[{"role":"user","content":"hello"}]}`)
+
+	decision, normalized := NormalizeCodexWorkModeRequest(c, body, "gpt-5.6-sol-wm", true)
+
+	require.Equal(t, "gpt-5.6-sol", decision.RoutingModel)
+	require.True(t, decision.Enabled)
+	require.True(t, decision.Explicit)
+	require.Equal(t, "gpt-5.6-sol", gjson.GetBytes(normalized, "model").String())
+	require.True(t, isCodexWorkModeRequest(c))
+	require.Equal(t, "gpt-5.6-sol-wm", codexWorkModeClientModel(c, decision.RoutingModel))
+}
+
+func TestNormalizeCodexWorkModeRequestRespectsDefaultDisable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	body := []byte(`{"model":"gpt-5.6-sol","messages":[]}`)
+
+	decision, normalized := NormalizeCodexWorkModeRequest(c, body, "gpt-5.6-sol", true)
+
+	require.Equal(t, "gpt-5.6-sol", decision.RoutingModel)
+	require.False(t, decision.Enabled)
+	require.Equal(t, "gpt-5.6-sol", gjson.GetBytes(normalized, "model").String())
+	require.False(t, isCodexWorkModeRequest(c))
+}
+
+func TestNormalizeCodexWorkModeRequestDefaultsPlainChatModelOn(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	body := []byte(`{"model":"gpt-5.6","messages":[]}`)
+
+	decision, normalized := NormalizeCodexWorkModeRequest(c, body, "gpt-5.6", false)
+
+	require.Equal(t, "gpt-5.6-sol", decision.RoutingModel)
+	require.True(t, decision.Enabled)
+	require.Equal(t, "gpt-5.6-sol", gjson.GetBytes(normalized, "model").String())
+	require.True(t, isCodexWorkModeRequest(c))
+	require.Equal(t, "gpt-5.6", codexWorkModeClientModel(c, decision.RoutingModel))
 }
 
 func TestApplyCodexWorkModeIdentity(t *testing.T) {

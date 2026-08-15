@@ -100,12 +100,13 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	if err := json.Unmarshal(body, &chatReq); err != nil {
 		return nil, fmt.Errorf("parse chat completions request: %w", err)
 	}
-	originalModel := chatReq.Model
+	routingModel := chatReq.Model
+	originalModel := codexWorkModeClientModel(c, routingModel)
 	clientStream := chatReq.Stream
 
 	// 2. Resolve model mapping early so compat prompt_cache_key injection can
 	// derive a stable seed from the final upstream model family.
-	billingModel := resolveOpenAIForwardModel(account, originalModel, defaultMappedModel)
+	billingModel := resolveOpenAIForwardModel(account, routingModel, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
 
 	promptCacheKey = strings.TrimSpace(promptCacheKey)

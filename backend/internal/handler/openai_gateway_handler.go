@@ -363,7 +363,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// Codex 在所有请求中被动声明 image_gen namespace，宽泛检测会导致禁了生图的
 	// 分组中所有 Codex 请求被 403（#4447），并误占生图并发槽位。
 	imageIntent := service.IsExplicitImageGenerationIntent("/v1/responses", routingModel, body)
-	service.BindCodexWorkMode(c, workMode.Enabled && !imageIntent)
+	service.BindCodexWorkModePolicy(c, workMode.Enabled && !imageIntent, workMode.Explicit && !imageIntent)
 	if routingModel != strings.TrimSpace(reqModel) {
 		service.BindCodexWorkModeClientModel(c, reqModel)
 	}
@@ -504,18 +504,29 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			}
 			if lastFailoverErr != nil {
 				h.handleFailoverExhausted(c, lastFailoverErr, streamStarted)
+			} else if codexWorkModeOAuthSelectionExhausted(c, lastFailoverErr) {
+				markOpsRoutingCapacityLimited(c)
+				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available OpenAI OAuth accounts for Work Mode", streamStarted)
 			} else {
 				h.handleFailoverExhaustedSimple(c, 502, streamStarted)
 			}
 			return
 		}
 		if selection == nil || selection.Account == nil {
+			if codexWorkModeOAuthSelectionExhausted(c, lastFailoverErr) {
+				markOpsRoutingCapacityLimited(c)
+				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available OpenAI OAuth accounts for Work Mode", streamStarted)
+				return
+			}
 			cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, reqModel, routingModel, requestPlatform)
 			if !cls.ModelNotFound {
 				markOpsRoutingCapacityLimited(c)
 			}
 			h.handleOpenAINoAvailableAccounts(c, cls, streamStarted)
 			return
+		}
+		if excludeIneligibleCodexWorkModeSelection(c, selection, failedAccountIDs) {
+			continue
 		}
 		if previousResponseID != "" && selection != nil && selection.Account != nil {
 			reqLog.Debug("openai.account_selected_with_previous_response_id", zap.Int64("account_id", selection.Account.ID))
@@ -1813,7 +1824,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	}
 
 	imageIntent := service.IsExplicitImageGenerationIntent("/v1/responses", routingModel, firstMessage)
-	service.BindCodexWorkMode(c, workMode.Enabled && !imageIntent)
+	service.BindCodexWorkModePolicy(c, workMode.Enabled && !imageIntent, workMode.Explicit && !imageIntent)
 	if routingModel != strings.TrimSpace(reqModel) {
 		service.BindCodexWorkModeClientModel(c, reqModel)
 	}
@@ -1999,6 +2010,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "no available account")
 			}
 			return
+		}
+		if excludeIneligibleCodexWorkModeSelection(c, selection, failedAccountIDs) {
+			continue
 		}
 
 		account := selection.Account

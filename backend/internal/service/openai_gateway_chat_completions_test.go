@@ -279,6 +279,120 @@ func TestForwardAsChatCompletions_OAuthDoesNotInjectDefaultInstructions(t *testi
 	require.NotContains(t, string(upstream.lastBody), "Communicate with the user by streaming thinking")
 }
 
+func TestForwardAsChatCompletions_CodexWorkModeUsesBaseUpstreamAndPreservesClientModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	clientBody := []byte(`{"model":"gpt-5.6-sol-wm","messages":[{"role":"user","content":"hello"}],"stream":false}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(clientBody))
+	c.Request.Header.Set("Content-Type", "application/json")
+	_, body := NormalizeCodexWorkModeRequest(c, clientBody, "gpt-5.6-sol-wm", true)
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_chat_work_mode"}},
+		Body: io.NopCloser(strings.NewReader(
+			`data: {"type":"response.completed","response":{"id":"resp_wm","object":"response","model":"gpt-5.6-sol","status":"completed","output":[{"type":"message","id":"msg_wm","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":11,"output_tokens":5,"total_tokens":16}}}` + "\n\n",
+		)),
+	}}
+	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	account := &Account{
+		ID:          31,
+		Name:        "openai-oauth-work-mode",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token":       "oauth-token",
+			"chatgpt_account_id": "chatgpt-acc",
+		},
+	}
+
+	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "")
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "gpt-5.6-sol-wm", result.Model)
+	require.Equal(t, "gpt-5.6-sol", result.BillingModel)
+	require.Equal(t, "gpt-5.6-sol", result.UpstreamModel)
+	require.Equal(t, "gpt-5.6-sol", gjson.GetBytes(upstream.lastBody, "model").String())
+	require.Equal(t, codexWorkModeOriginator, upstream.lastReq.Header.Get("originator"))
+	require.Equal(t, codexWorkModeClientName+"/"+codexCLIVersion+codexWorkModeUserAgentSuffix, upstream.lastReq.Header.Get("user-agent"))
+	require.Equal(t, "gpt-5.6-sol-wm", gjson.Get(rec.Body.String(), "model").String())
+}
+
+func TestRewriteRawChatCompletionsSSEModel(t *testing.T) {
+	line := `data: {"id":"chatcmpl_1","model":"gpt-5.6-sol","choices":[]}`
+	got := rewriteRawChatCompletionsSSEModel(line, `{"id":"chatcmpl_1","model":"gpt-5.6-sol","choices":[]}`, "gpt-5.6-sol-wm", true)
+	require.Equal(t, "gpt-5.6-sol-wm", gjson.Get(strings.TrimPrefix(got, "data: "), "model").String())
+	require.Equal(t, "data: [DONE]", rewriteRawChatCompletionsSSEModel("data: [DONE]", "[DONE]", "gpt-5.6-sol-wm", true))
+	require.Equal(t, line, rewriteRawChatCompletionsSSEModel(line, `{"id":"chatcmpl_1","model":"mapped-model","choices":[]}`, "requested-model", false))
+}
+
+func TestBufferRawChatCompletionsPreservesClientModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	BindCodexWorkModeClientModel(c, "gpt-5.6-sol-wm")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body: io.NopCloser(strings.NewReader(
+			`{"id":"chatcmpl_1","object":"chat.completion","model":"gpt-5.6-sol","choices":[],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}`,
+		)),
+	}
+	svc := &OpenAIGatewayService{cfg: &config.Config{}}
+
+	result, err := svc.bufferRawChatCompletions(
+		c,
+		resp,
+		&Account{ID: 44, Platform: PlatformOpenAI, Type: AccountTypeAPIKey},
+		"gpt-5.6-sol-wm",
+		"gpt-5.6-sol",
+		"gpt-5.6-sol",
+		nil,
+		nil,
+		time.Now(),
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, "gpt-5.6-sol-wm", result.Model)
+	require.Equal(t, "gpt-5.6-sol", result.UpstreamResponseModel)
+	require.Equal(t, "gpt-5.6-sol-wm", gjson.Get(rec.Body.String(), "model").String())
+}
+
+func TestBufferRawChatCompletionsNonWorkRequestKeepsUpstreamResponseModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body: io.NopCloser(strings.NewReader(
+			`{"id":"chatcmpl_mapped","object":"chat.completion","model":"provider-mapped-model","choices":[],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}`,
+		)),
+	}
+	svc := &OpenAIGatewayService{cfg: &config.Config{}}
+
+	_, err := svc.bufferRawChatCompletions(
+		c,
+		resp,
+		&Account{ID: 45, Platform: PlatformOpenAI, Type: AccountTypeAPIKey},
+		"client-requested-model",
+		"provider-mapped-model",
+		"provider-mapped-model",
+		nil,
+		nil,
+		time.Now(),
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, "provider-mapped-model", gjson.Get(rec.Body.String(), "model").String())
+}
+
 func forwardOAuthChatCompletionsForUpstreamBody(t *testing.T, body []byte) []byte {
 	t.Helper()
 

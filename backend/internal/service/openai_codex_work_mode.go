@@ -9,6 +9,7 @@ import (
 
 const (
 	codexWorkModeContextKey      = "openai_codex_work_mode"
+	codexWorkModeExplicitKey     = "openai_codex_work_mode_explicit"
 	codexWorkModeClientModelKey  = "openai_codex_work_mode_client_model"
 	codexWorkModeOriginator      = "codex_work_desktop"
 	codexWorkModeClientName      = "Codex Desktop"
@@ -50,14 +51,33 @@ func ResolveCodexWorkMode(model string, disabled bool) CodexWorkModeDecision {
 	}
 }
 
+// NormalizeCodexWorkModeRequest binds the Work Mode decision and rewrites the
+// request body to the canonical model before channel and account matching.
+func NormalizeCodexWorkModeRequest(c *gin.Context, body []byte, requestedModel string, disabled bool) (CodexWorkModeDecision, []byte) {
+	decision := ResolveCodexWorkMode(requestedModel, disabled)
+	normalizedBody := ReplaceModelInBody(body, decision.RoutingModel)
+	BindCodexWorkModePolicy(c, decision.Enabled, decision.Explicit)
+	if decision.RoutingModel != strings.TrimSpace(requestedModel) {
+		BindCodexWorkModeClientModel(c, requestedModel)
+	}
+	return decision, normalizedBody
+}
+
 // BindCodexWorkMode records the per-request decision after the handler has
 // ruled out image-generation intent. The marker is consumed only by OAuth
 // upstream builders; API-key requests remain untouched.
 func BindCodexWorkMode(c *gin.Context, enabled bool) {
+	BindCodexWorkModePolicy(c, enabled, false)
+}
+
+// BindCodexWorkModePolicy records both activation and whether the client used
+// an explicit -wm model. Explicit Work Mode must never downgrade to API key.
+func BindCodexWorkModePolicy(c *gin.Context, enabled bool, explicit bool) {
 	if c == nil {
 		return
 	}
 	c.Set(codexWorkModeContextKey, enabled)
+	c.Set(codexWorkModeExplicitKey, enabled && explicit)
 }
 
 // BindCodexWorkModeClientModel preserves an explicit -wm name for downstream
@@ -70,18 +90,25 @@ func BindCodexWorkModeClientModel(c *gin.Context, model string) {
 }
 
 func codexWorkModeClientModel(c *gin.Context, fallback string) string {
-	if c == nil {
-		return fallback
-	}
-	value, ok := c.Get(codexWorkModeClientModelKey)
-	if !ok {
-		return fallback
-	}
-	model, _ := value.(string)
-	if model = strings.TrimSpace(model); model != "" {
+	if model, ok := codexWorkModeBoundClientModel(c); ok {
 		return model
 	}
 	return fallback
+}
+
+func codexWorkModeBoundClientModel(c *gin.Context) (string, bool) {
+	if c == nil {
+		return "", false
+	}
+	value, ok := c.Get(codexWorkModeClientModelKey)
+	if !ok {
+		return "", false
+	}
+	model, _ := value.(string)
+	if model = strings.TrimSpace(model); model != "" {
+		return model, true
+	}
+	return "", false
 }
 
 func isCodexWorkModeRequest(c *gin.Context) bool {
@@ -94,6 +121,21 @@ func isCodexWorkModeRequest(c *gin.Context) bool {
 	}
 	value, _ := enabled.(bool)
 	return value
+}
+
+// CodexWorkModeAccountEligible rejects silent API-key downgrade only for an
+// explicit -wm request. Plain GPT-5.6 requests retain existing API-key routing;
+// when they select OAuth, the default Work Mode identity is still applied.
+func CodexWorkModeAccountEligible(c *gin.Context, account *Account) bool {
+	if c == nil {
+		return true
+	}
+	explicit, _ := c.Get(codexWorkModeExplicitKey)
+	requireOAuth, _ := explicit.(bool)
+	if !requireOAuth {
+		return true
+	}
+	return account != nil && account.Platform == PlatformOpenAI && account.Type == AccountTypeOAuth
 }
 
 func codexWorkModeIdentity() codexOutboundIdentity {
