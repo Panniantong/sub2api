@@ -1180,12 +1180,37 @@ func (s *RateLimitService) apply429FallbackRateLimit(ctx context.Context, accoun
 		return
 	}
 
-	resetAt := time.Now().Add(cooldown)
+	now := time.Now()
+	if account.Platform == PlatformOpenAI {
+		if resetAt := exhaustedOpenAIQuotaResetAt(account, now); resetAt != nil {
+			slog.Warn("openai_429_quota_snapshot_reset_used", "account_id", account.ID, "reason", reason, "reset_at", *resetAt)
+			s.notifyAccountSchedulingBlocked(account, *resetAt, "429_quota_snapshot")
+			if err := s.accountRepo.SetRateLimited(ctx, account.ID, *resetAt); err != nil {
+				slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
+			}
+			return
+		}
+	}
+
+	resetAt := now.Add(cooldown)
 	slog.Warn("rate_limit_429_fallback_used", "account_id", account.ID, "platform", account.Platform, "reason", reason, "using_default", cooldown.String())
 	s.notifyAccountSchedulingBlocked(account, resetAt, "429_fallback")
 	if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetAt); err != nil {
 		slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
 	}
+}
+
+// exhaustedOpenAIQuotaResetAt turns an already-observed upstream 429 into the
+// matching Codex quota-window cooldown when the account carries a fresh,
+// identity-trusted 100% usage snapshot. The snapshot alone never changes runtime
+// status; it is only a better reset source than the generic five-second fallback.
+func exhaustedOpenAIQuotaResetAt(account *Account, now time.Time) *time.Time {
+	winner := pickLatestResetSchedulingCandidate(openAIThresholdCandidates(account, now), 100, now)
+	if winner == nil || winner.until == nil {
+		return nil
+	}
+	resetAt := *winner.until
+	return &resetAt
 }
 
 func (s *RateLimitService) get429FallbackCooldown(ctx context.Context, account *Account) (time.Duration, bool) {
