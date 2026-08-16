@@ -2531,7 +2531,8 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 	}
 
 	clearProbeSnapshot := upstreamBillingProbeExplicitlyDisabled(updates) || upstreamBillingProbeSnapshotClearRequested(updates)
-	durableSchedulerChange := shouldEnqueueSchedulerOutboxForExtraUpdates(updates) || clearProbeSnapshot
+	exhaustedCodexResetAt := codexExhaustedResetAtFromExtraUpdates(updates, time.Now())
+	durableSchedulerChange := shouldEnqueueSchedulerOutboxForExtraUpdates(updates) || clearProbeSnapshot || exhaustedCodexResetAt != nil
 	baseCtx := ctx
 	contextTx := dbent.TxFromContext(ctx)
 	client := clientFromContext(ctx, r.client)
@@ -2554,8 +2555,16 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 	}
 	result, err := client.ExecContext(
 		ctx,
-		"UPDATE accounts SET extra = "+extraExpression+", updated_at = NOW() WHERE id = $2 AND deleted_at IS NULL",
-		string(payload), id,
+		`UPDATE accounts
+		 SET extra = `+extraExpression+`,
+		     rate_limited_at = CASE WHEN $3::timestamptz IS NOT NULL THEN NOW() ELSE rate_limited_at END,
+		     rate_limit_reset_at = CASE
+		       WHEN $3::timestamptz IS NULL THEN rate_limit_reset_at
+		       ELSE GREATEST(COALESCE(rate_limit_reset_at, $3::timestamptz), $3::timestamptz)
+		     END,
+		     updated_at = NOW()
+		 WHERE id = $2 AND deleted_at IS NULL`,
+		string(payload), id, exhaustedCodexResetAt,
 	)
 
 	if err != nil {
@@ -2590,6 +2599,55 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 		}
 	}
 	return nil
+}
+
+// codexExhaustedResetAtFromExtraUpdates returns the latest still-active reset
+// among Codex windows that the freshly probed snapshot reports as exhausted.
+// UpdateExtra uses it to make the runtime status and the account-list "active"
+// filter agree with the red 100% usage card immediately, without waiting for a
+// second upstream 429 after the snapshot refresh.
+func codexExhaustedResetAtFromExtraUpdates(updates map[string]any, now time.Time) *time.Time {
+	var latest *time.Time
+	for _, window := range []string{"5h", "7d"} {
+		used, ok := repositoryFloat64(updates["codex_"+window+"_used_percent"])
+		if !ok || used < 100 {
+			continue
+		}
+		resetRaw, ok := updates["codex_"+window+"_reset_at"].(string)
+		if !ok {
+			continue
+		}
+		resetAt, err := time.Parse(time.RFC3339, strings.TrimSpace(resetRaw))
+		if err != nil || !resetAt.After(now) {
+			continue
+		}
+		if latest == nil || resetAt.After(*latest) {
+			candidate := resetAt
+			latest = &candidate
+		}
+	}
+	return latest
+}
+
+func repositoryFloat64(value any) (float64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return v, true
+	case float32:
+		return float64(v), true
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case json.Number:
+		parsed, err := v.Float64()
+		return parsed, err == nil
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
 }
 
 // UpdateUpstreamBillingProbeSnapshot stores a probe result only while the
