@@ -81,6 +81,58 @@ func TestHandle429_FallbackUsesDBSeconds(t *testing.T) {
 	require.True(t, !accountRepo.lastRateLimitReset.Before(before.Add(12*time.Second)) && !accountRepo.lastRateLimitReset.After(after.Add(12*time.Second)))
 }
 
+func TestHandle429_OpenAINoResetUsesExhaustedQuotaSnapshotReset(t *testing.T) {
+	accountRepo := &rateLimit429AccountRepoStub{}
+	settingRepo := newMockSettingRepo()
+	data, _ := json.Marshal(RateLimit429CooldownSettings{Enabled: true, CooldownSeconds: 5})
+	settingRepo.data[SettingKeyRateLimit429CooldownSettings] = string(data)
+
+	settingSvc := NewSettingService(settingRepo, &config.Config{})
+	svc := NewRateLimitService(accountRepo, nil, &config.Config{}, nil, nil)
+	svc.SetSettingService(settingSvc)
+
+	resetAt := time.Now().UTC().Add(6 * 24 * time.Hour).Truncate(time.Second)
+	account := &Account{
+		ID:       47,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Extra: map[string]any{
+			"codex_7d_used_percent":  100,
+			"codex_7d_reset_at":      resetAt.Format(time.RFC3339),
+			"codex_usage_updated_at": time.Now().UTC().Format(time.RFC3339),
+		},
+	}
+
+	svc.handle429(context.Background(), account, http.Header{}, []byte(`{"error":{"type":"rate_limit_error","message":"Rate limit exceeded"}}`))
+
+	require.Equal(t, 1, accountRepo.rateLimitCalls)
+	require.Equal(t, int64(47), accountRepo.lastRateLimitID)
+	require.WithinDuration(t, resetAt, accountRepo.lastRateLimitReset, time.Second)
+}
+
+func TestHandle429_OpenAINoResetIgnoresNonExhaustedQuotaSnapshot(t *testing.T) {
+	accountRepo := &rateLimit429AccountRepoStub{}
+	svc := NewRateLimitService(accountRepo, nil, &config.Config{}, nil, nil)
+
+	account := &Account{
+		ID:       48,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Extra: map[string]any{
+			"codex_7d_used_percent":  99,
+			"codex_7d_reset_at":      time.Now().UTC().Add(6 * 24 * time.Hour).Format(time.RFC3339),
+			"codex_usage_updated_at": time.Now().UTC().Format(time.RFC3339),
+		},
+	}
+
+	before := time.Now()
+	svc.handle429(context.Background(), account, http.Header{}, []byte(`{"error":{"type":"rate_limit_error","message":"Rate limit exceeded"}}`))
+	after := time.Now()
+
+	require.Equal(t, 1, accountRepo.rateLimitCalls)
+	require.True(t, !accountRepo.lastRateLimitReset.Before(before.Add(5*time.Second)) && !accountRepo.lastRateLimitReset.After(after.Add(5*time.Second)))
+}
+
 func TestHandle429_FallbackDisabledSkipsLocalMark(t *testing.T) {
 	accountRepo := &rateLimit429AccountRepoStub{}
 	settingRepo := newMockSettingRepo()
