@@ -1493,7 +1493,7 @@ func (s *AccountRepoSuite) TestUpdateExtra_SchedulerNeutralSkipsOutboxAndSyncsFr
 	s.Require().Equal("2026-03-11T10:00:00Z", cacheRecorder.accounts[account.ID].Extra["codex_usage_updated_at"])
 }
 
-func (s *AccountRepoSuite) TestUpdateExtra_ExhaustedCodexSnapshotSyncsSchedulerCache() {
+func (s *AccountRepoSuite) TestUpdateExtra_ExhaustedCodexSnapshotSetsRuntimeBlock() {
 	account := mustCreateAccount(s.T(), s.client, &service.Account{
 		Name:     "acc-extra-codex-exhausted",
 		Platform: service.PlatformOpenAI,
@@ -1505,20 +1505,23 @@ func (s *AccountRepoSuite) TestUpdateExtra_ExhaustedCodexSnapshotSyncsSchedulerC
 	_, err := s.repo.sql.ExecContext(s.ctx, "TRUNCATE scheduler_outbox")
 	s.Require().NoError(err)
 
+	resetAt := time.Now().UTC().Add(24 * time.Hour).Truncate(time.Second)
 	s.Require().NoError(s.repo.UpdateExtra(s.ctx, account.ID, map[string]any{
 		"codex_7d_used_percent":        100.0,
-		"codex_7d_reset_at":            "2026-03-12T13:00:00Z",
+		"codex_7d_reset_at":            resetAt.Format(time.RFC3339),
 		"codex_7d_reset_after_seconds": 86400,
 	}))
 
 	var count int
 	err = scanSingleRow(s.ctx, s.repo.sql, "SELECT COUNT(*) FROM scheduler_outbox", nil, &count)
 	s.Require().NoError(err)
-	s.Require().Equal(0, count)
+	s.Require().Equal(1, count)
 	s.Require().Len(cacheRecorder.setAccounts, 1)
 	s.Require().Equal(account.ID, cacheRecorder.setAccounts[0].ID)
 	s.Require().Equal(service.StatusActive, cacheRecorder.setAccounts[0].Status)
 	s.Require().Equal(100.0, cacheRecorder.setAccounts[0].Extra["codex_7d_used_percent"])
+	s.Require().NotNil(cacheRecorder.setAccounts[0].RateLimitResetAt)
+	s.Require().WithinDuration(resetAt, *cacheRecorder.setAccounts[0].RateLimitResetAt, time.Second)
 }
 
 func (s *AccountRepoSuite) TestUpdateExtra_SchedulerRelevantStillEnqueuesOutbox() {
