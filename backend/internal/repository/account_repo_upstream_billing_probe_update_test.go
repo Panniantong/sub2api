@@ -248,7 +248,7 @@ func TestUpdateExtraExplicitProbeDisableRemovesSnapshot(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec(`(?s)UPDATE accounts SET extra = .* - 'upstream_billing_probe'`).
-		WithArgs(`{"upstream_billing_probe_enabled":false}`, int64(27)).
+		WithArgs(`{"upstream_billing_probe_enabled":false}`, int64(27), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO scheduler_outbox")).
 		WithArgs(service.SchedulerOutboxEventAccountChanged, int64(27), nil, nil, sqlmock.AnyArg()).
@@ -271,7 +271,7 @@ func TestUpdateExtraNilProbeRemovesKeyInsteadOfWritingJSONNull(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec(`(?s)UPDATE accounts SET extra = .* - 'upstream_billing_probe'`).
-		WithArgs(`{"upstream_billing_probe":null}`, int64(27)).
+		WithArgs(`{"upstream_billing_probe":null}`, int64(27), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO scheduler_outbox")).
 		WithArgs(service.SchedulerOutboxEventAccountChanged, int64(27), nil, nil, sqlmock.AnyArg()).
@@ -416,7 +416,7 @@ func TestUpdateExtraRollsBackWhenOutboxFails(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec(`(?s)UPDATE accounts SET extra = .* - 'upstream_billing_probe'`).
-		WithArgs(`{"upstream_billing_probe_enabled":false}`, int64(27)).
+		WithArgs(`{"upstream_billing_probe_enabled":false}`, int64(27), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO scheduler_outbox")).WillReturnError(errors.New("outbox failed"))
 	mock.ExpectRollback()
