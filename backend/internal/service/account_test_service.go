@@ -148,6 +148,9 @@ type AccountTestService struct {
 	tlsFPProfileService       *TLSFingerprintProfileService
 	agentIdentityTaskMu       sync.Mutex
 	agentIdentityWS           agentIdentityWSConnectionInvalidator
+	openAIModelTransient      interface {
+		clearOpenAIAccountModelTransientState(accountID int64, model string)
+	}
 	// grokWSDialer is optional; realtime account tests use the default OpenAI-style
 	// WS dialer when nil (supports proxy + coder/websocket handshake).
 	grokWSDialer openAIWSClientDialer
@@ -788,7 +791,16 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	}
 
 	// Process SSE stream
-	return s.processOpenAIStream(c, resp.Body)
+	err = s.processOpenAIStream(c, resp.Body)
+	s.clearOpenAIModelTransientAfterSuccessfulTest(account.ID, testModelID, err)
+	return err
+}
+
+func (s *AccountTestService) clearOpenAIModelTransientAfterSuccessfulTest(accountID int64, model string, testErr error) {
+	if s == nil || testErr != nil || s.openAIModelTransient == nil {
+		return
+	}
+	s.openAIModelTransient.clearOpenAIAccountModelTransientState(accountID, model)
 }
 
 // testGrokAccountConnection routes Grok admin connectivity tests by explicit mode first,
