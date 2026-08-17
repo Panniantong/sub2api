@@ -518,8 +518,19 @@ func TestOpenAIRuntimeBlock_ClearAccountSchedulingBlock(t *testing.T) {
 	require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
 }
 
+func TestShouldStopOpenAIOAuth429Failover_YieldDisabledStopsCurrentRequest(t *testing.T) {
+	svc := &OpenAIGatewayService{cfg: &config.Config{}}
+	oauthAccount := &Account{ID: 41, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	apiKeyAccount := &Account{ID: 42, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+	var state OpenAIOAuth429FailoverState
+
+	require.True(t, svc.ShouldStopOpenAIOAuth429Failover(oauthAccount, http.StatusTooManyRequests, 1, &state))
+	require.False(t, svc.ShouldStopOpenAIOAuth429Failover(oauthAccount, http.StatusInternalServerError, 1, &state))
+	require.False(t, svc.ShouldStopOpenAIOAuth429Failover(apiKeyAccount, http.StatusTooManyRequests, 1, &state))
+}
+
 func TestShouldStopOpenAIOAuth429Failover_OnlyDuringStorm(t *testing.T) {
-	svc := &OpenAIGatewayService{}
+	svc := &OpenAIGatewayService{cfg: openAIOAuthYield429TestConfig()}
 	account := &Account{ID: 42, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 	apiKeyAccount := &Account{ID: 43, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
 	var state OpenAIOAuth429FailoverState

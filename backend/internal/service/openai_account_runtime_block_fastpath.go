@@ -491,6 +491,14 @@ func (s *OpenAIGatewayService) ShouldStopOpenAIOAuth429Failover(account *Account
 			return false
 		}
 	}
+	// When Yield-first is disabled, a soft OpenAI OAuth 429 still cools the
+	// account for five seconds, but this request must not fan out through more
+	// accounts. Future requests can use the other accounts normally.
+	if statusCode == http.StatusTooManyRequests && account != nil &&
+		account.Platform == PlatformOpenAI && isOpenAIOAuthAccount(account) &&
+		!account.IsShadow() && !s.isOpenAIOAuthYield429Enabled() {
+		return true
+	}
 	if failedSwitches < openAIOAuth429StormMaxAccountSwitches {
 		return false
 	}
