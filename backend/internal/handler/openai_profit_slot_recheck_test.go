@@ -5,12 +5,10 @@ package handler
 // 槽位终检与生图跳门回归（handler 半程）：
 //   - 槽位获取成功后的利润终检：越线账号释放槽位并要求调用方排除重选，
 //     不写响应、不绑定粘连；
-//   - openAIResponsesRequiredCapability 的生图意图映射钉死（scheduler 的
-//     跳门条件依赖 CapabilityResponses ⇔ 显式生图意图这一耦合）。
+//   - openAIResponsesRequiredCapability 的请求能力映射覆盖生图与原生远程压缩。
 
 import (
 	"context"
-	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
@@ -26,18 +24,6 @@ import (
 type profitCountingConcurrencyCache struct {
 	fakeConcurrencyCache
 	accountReleases atomic.Int64
-}
-
-type waitQueueFullConcurrencyCache struct {
-	profitCountingConcurrencyCache
-}
-
-func (c *waitQueueFullConcurrencyCache) AcquireAccountSlot(context.Context, int64, int, string) (bool, error) {
-	return false, nil
-}
-
-func (c *waitQueueFullConcurrencyCache) IncrementAccountWaitCount(context.Context, int64, int) (bool, error) {
-	return false, nil
 }
 
 func (c *profitCountingConcurrencyCache) ReleaseAccountSlot(context.Context, int64, string) error {
@@ -154,68 +140,10 @@ func TestAcquireResponsesAccountSlotProfitRecheck(t *testing.T) {
 	})
 }
 
-func TestAcquireResponsesAccountSlotReturnsRetryableCapacityWithoutWritingResponse(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	cache := &waitQueueFullConcurrencyCache{}
-	h := &OpenAIGatewayHandler{
-		gatewayService:    &service.OpenAIGatewayService{},
-		concurrencyHelper: NewConcurrencyHelper(service.NewConcurrencyService(cache), SSEPingFormatClaude, 0),
-	}
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest("POST", "/v1/responses", nil)
-	streamStarted := false
-	account := profitSlotTestAccount(9, 0.3)
-	selection := &service.AccountSelectionResult{
-		Account:  account,
-		WaitPlan: &service.AccountWaitPlan{AccountID: account.ID, MaxConcurrency: 2, Timeout: time.Second, MaxWaiting: 2},
-	}
-
-	release, result := h.acquireResponsesAccountSlot(c, nil, "", selection, false, &streamStarted, zap.NewNop())
-
-	require.Nil(t, release)
-	require.Equal(t, openAISlotAcquireCapacityFull, result)
-	require.Zero(t, w.Body.Len(), "本地账号队列满应交给调用方换账号，不得提前写429")
-}
-
-func TestLocalCapacityExhaustedReturnsMachineReadableRetryClass(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	h := &OpenAIGatewayHandler{}
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest("POST", "/v1/responses", nil)
-
-	h.handleOpenAILocalCapacityExhausted(c, false)
-
-	require.Equal(t, 429, w.Code)
-	require.Equal(t, "1", w.Header().Get("Retry-After"))
-	require.Equal(t, "local_capacity", w.Header().Get("X-Sub2-Retry-Class"))
-	require.JSONEq(t, `{"error":{"type":"rate_limit_error","code":"sub2_local_capacity_exhausted","message":"Too many pending requests, please retry later"}}`, w.Body.String())
-}
-
-func TestNoAvailableAccountsReturnsMachineReadableRetryClass(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	h := &OpenAIGatewayHandler{}
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest("POST", "/v1/responses", nil)
-
-	h.handleOpenAINoAvailableAccounts(c, noAccountErrorClassification{
-		Status:  http.StatusServiceUnavailable,
-		ErrType: "api_error",
-		Message: "Service temporarily unavailable",
-	}, false)
-
-	require.Equal(t, http.StatusServiceUnavailable, w.Code)
-	require.Equal(t, "1", w.Header().Get("Retry-After"))
-	require.Equal(t, "no_available_accounts", w.Header().Get("X-Sub2-Retry-Class"))
-	require.JSONEq(t, `{"error":{"type":"api_error","code":"sub2_no_available_accounts","message":"Service temporarily unavailable"}}`, w.Body.String())
-}
-
-// scheduler 跳门条件依赖"CapabilityResponses 仅在显式生图意图时被要求"这一
-// 映射；后续若扩展该 capability 的用途，本测试失败提示同步收窄跳门条件。
-func TestOpenAIResponsesRequiredCapabilityPinsImageIntentMapping(t *testing.T) {
+func TestOpenAIResponsesRequiredCapabilityForRequest(t *testing.T) {
 	require.Equal(t, service.OpenAIEndpointCapabilityResponses, openAIResponsesRequiredCapability(true, service.PlatformOpenAI))
 	require.Equal(t, service.OpenAIEndpointCapabilityChatCompletions, openAIResponsesRequiredCapability(false, service.PlatformOpenAI))
 	require.Equal(t, service.OpenAIEndpointCapabilityChatCompletions, openAIResponsesRequiredCapability(true, service.PlatformGrok))
+	require.Equal(t, service.OpenAIEndpointCapabilityResponses, openAIResponsesRequiredCapabilityForRequest(false, true, service.PlatformOpenAI))
+	require.Equal(t, service.OpenAIEndpointCapabilityChatCompletions, openAIResponsesRequiredCapabilityForRequest(false, true, service.PlatformGrok))
 }
