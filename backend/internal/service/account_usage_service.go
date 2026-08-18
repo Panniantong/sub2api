@@ -153,6 +153,10 @@ type UsageProgress struct {
 	WindowStats      *WindowStats `json:"window_stats,omitempty"` // 窗口期统计（从窗口开始到当前的使用量）
 	UsedRequests     int64        `json:"used_requests,omitempty"`
 	LimitRequests    int64        `json:"limit_requests,omitempty"`
+	OverdraftActive  bool         `json:"overdraft_active,omitempty"`
+	OverdraftStats   *WindowStats `json:"overdraft_stats,omitempty"`
+	OverdraftStarted *time.Time   `json:"overdraft_started_at,omitempty"`
+	OverdraftRecover *time.Time   `json:"overdraft_recover_at,omitempty"`
 }
 
 // AntigravityModelQuota Antigravity 单个模型的配额信息
@@ -182,18 +186,19 @@ type AICredit struct {
 
 // UsageInfo 账号使用量信息
 type UsageInfo struct {
-	Source             string         `json:"source,omitempty"`               // "passive" or "active"
-	UpdatedAt          *time.Time     `json:"updated_at,omitempty"`           // 更新时间
-	FiveHour           *UsageProgress `json:"five_hour"`                      // 5小时窗口
-	SevenDay           *UsageProgress `json:"seven_day,omitempty"`            // 7天窗口
-	SevenDaySonnet     *UsageProgress `json:"seven_day_sonnet,omitempty"`     // 7天Sonnet窗口
-	SevenDayFable      *UsageProgress `json:"seven_day_fable,omitempty"`      // 7天Fable窗口（响应头 7d_oi）
-	GeminiSharedDaily  *UsageProgress `json:"gemini_shared_daily,omitempty"`  // Gemini shared pool RPD (Google One / Code Assist)
-	GeminiProDaily     *UsageProgress `json:"gemini_pro_daily,omitempty"`     // Gemini Pro 日配额
-	GeminiFlashDaily   *UsageProgress `json:"gemini_flash_daily,omitempty"`   // Gemini Flash 日配额
-	GeminiSharedMinute *UsageProgress `json:"gemini_shared_minute,omitempty"` // Gemini shared pool RPM (Google One / Code Assist)
-	GeminiProMinute    *UsageProgress `json:"gemini_pro_minute,omitempty"`    // Gemini Pro RPM
-	GeminiFlashMinute  *UsageProgress `json:"gemini_flash_minute,omitempty"`  // Gemini Flash RPM
+	Source              string                         `json:"source,omitempty"`           // "passive" or "active"
+	UpdatedAt           *time.Time                     `json:"updated_at,omitempty"`       // 更新时间
+	FiveHour            *UsageProgress                 `json:"five_hour"`                  // 5小时窗口
+	SevenDay            *UsageProgress                 `json:"seven_day,omitempty"`        // 7天窗口
+	SevenDaySonnet      *UsageProgress                 `json:"seven_day_sonnet,omitempty"` // 7天Sonnet窗口
+	SevenDayFable       *UsageProgress                 `json:"seven_day_fable,omitempty"`  // 7天Fable窗口（响应头 7d_oi）
+	CodexQuotaOverdraft *CodexQuotaOverdraftProbeState `json:"codex_quota_overdraft,omitempty"`
+	GeminiSharedDaily   *UsageProgress                 `json:"gemini_shared_daily,omitempty"`  // Gemini shared pool RPD (Google One / Code Assist)
+	GeminiProDaily      *UsageProgress                 `json:"gemini_pro_daily,omitempty"`     // Gemini Pro 日配额
+	GeminiFlashDaily    *UsageProgress                 `json:"gemini_flash_daily,omitempty"`   // Gemini Flash 日配额
+	GeminiSharedMinute  *UsageProgress                 `json:"gemini_shared_minute,omitempty"` // Gemini shared pool RPM (Google One / Code Assist)
+	GeminiProMinute     *UsageProgress                 `json:"gemini_pro_minute,omitempty"`    // Gemini Pro RPM
+	GeminiFlashMinute   *UsageProgress                 `json:"gemini_flash_minute,omitempty"`  // Gemini Flash RPM
 
 	// Antigravity 多模型配额
 	AntigravityQuota map[string]*AntigravityModelQuota `json:"antigravity_quota,omitempty"`
@@ -302,6 +307,7 @@ type AccountUsageService struct {
 	cache                   *UsageCache
 	identityCache           IdentityCache
 	tlsFPProfileService     *TLSFingerprintProfileService
+	codexQuotaOverdraft     *CodexQuotaOverdraftCoordinator
 	agentIdentityTaskMu     sync.Mutex
 	agentIdentityWS         agentIdentityWSConnectionInvalidator
 }
@@ -711,6 +717,7 @@ func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Accou
 	}
 
 	applyExtraToUsage(usage, account.Extra, now)
+	usage.CodexQuotaOverdraft, _ = codexQuotaOverdraftStateFromAccount(account)
 
 	if (force || shouldRefreshOpenAICodexSnapshot(account, usage, now)) && s.shouldProbeOpenAICodexSnapshot(account.ID, now, force) {
 		if account.IsShadow() {
@@ -741,6 +748,10 @@ func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Accou
 		}
 	}
 
+	if s.codexQuotaOverdraft != nil {
+		s.codexQuotaOverdraft.ObserveAccount(account, "")
+	}
+	usage.CodexQuotaOverdraft, _ = codexQuotaOverdraftStateFromAccount(account)
 	if s.usageLogRepo == nil {
 		return usage, nil
 	}
@@ -758,6 +769,8 @@ func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Accou
 		}
 		usage.SevenDay.WindowStats = windowStatsFromAccountStats(stats)
 	}
+
+	applyCodexQuotaOverdraftUsage(ctx, s.usageLogRepo, account, usage, now)
 
 	return usage, nil
 }

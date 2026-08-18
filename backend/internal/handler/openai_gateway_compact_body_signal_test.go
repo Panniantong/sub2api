@@ -115,6 +115,31 @@ func TestNormalizeOpenAIResponsesCompactRequest_RemoteV2PathAliasesStayOnRespons
 	}
 }
 
+func TestShouldEnableCodexQuotaOverdraftForResponsesExcludesCompactAndImage(t *testing.T) {
+	tests := []struct {
+		name          string
+		legacyCompact bool
+		nativeV2      bool
+		imageIntent   bool
+		want          bool
+	}{
+		{name: "ordinary_responses", want: true},
+		{name: "legacy_compact", legacyCompact: true},
+		{name: "native_compact_v2", nativeV2: true},
+		{name: "image_generation", imageIntent: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, shouldEnableCodexQuotaOverdraftForResponses(
+				tt.legacyCompact,
+				tt.nativeV2,
+				tt.imageIntent,
+			))
+		})
+	}
+}
+
 func TestOpenAIResponsesCompactionRoutingFlags(t *testing.T) {
 	h := &OpenAIGatewayHandler{}
 	tests := []struct {

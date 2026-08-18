@@ -84,6 +84,9 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 		s.recordOpenAIOAuth429()
 	}
 	stateCtx = withTempUnschedulableModel(stateCtx, canonicalModel)
+	if s.handleCodexQuotaOverdraftUpstream429(stateCtx, account, statusCode, headers, responseBody, canonicalModel) {
+		return false
+	}
 	if isOpenAIOAuthAccount(account) && len(canonicalModel) > 0 && strings.TrimSpace(canonicalModel[0]) != "" &&
 		isOpenAICodexPlanGatedModelError(statusCode, responseBody) {
 		decision := s.recordOpenAIPlanGatedModelFailure(account, canonicalModel[0], time.Now())

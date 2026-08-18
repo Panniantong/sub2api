@@ -106,6 +106,33 @@ describe('AccountStatusIndicator', () => {
     expect(wrapper.text()).not.toContain('admin.accounts.status.tempUnschedulable')
   })
 
+  it('Codex 透支确认失败时优先显示额度暂停', () => {
+    const wrapper = mount(AccountStatusIndicator, {
+      props: {
+        account: makeAccount({
+          id: 6,
+          platform: 'openai',
+          rate_limited_at: '2026-08-15T00:00:00Z',
+          rate_limit_reset_at: '2099-08-15T05:00:00Z',
+          temp_unschedulable_until: '2099-08-15T05:00:00Z',
+          temp_unschedulable_reason: JSON.stringify({
+            source: 'codex_quota_overdraft',
+            error_message: 'five real overdraft probes confirmed quota exhaustion'
+          })
+        })
+      },
+      global: {
+        stubs: {
+          Icon: true
+        }
+      }
+    })
+
+    expect(wrapper.find('.badge-warning').text()).toBe('admin.accounts.status.codexQuotaPaused')
+    expect(wrapper.text()).toContain('admin.accounts.status.tempUnschedulableUntil')
+    expect(wrapper.text()).not.toContain('admin.accounts.status.rateLimitedAutoResume')
+  })
+
   it('模型限流 + overages 启用 + 无 AICredits key → 显示 ⚡ (credits_active)', () => {
     const wrapper = mount(AccountStatusIndicator, {
       props: {

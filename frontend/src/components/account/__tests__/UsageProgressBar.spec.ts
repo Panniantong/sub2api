@@ -146,4 +146,26 @@ describe('UsageProgressBar', () => {
     expect(wrapper.get('.h-1\\.5 > div').attributes('style')).toContain('width: 100%')
     expect(wrapper.get('.h-1\\.5 > div').classes()).toContain('bg-red-500')
   })
+
+  it('透支期会显示请求、Token 和账号金额', () => {
+    const wrapper = mount(UsageProgressBar, {
+      props: {
+        label: '5h',
+        utilization: 100,
+        color: 'indigo',
+        overdraftActive: true,
+        overdraftRecoverAt: '2026-03-17T02:30:00Z',
+        overdraftStats: {
+          requests: 12,
+          tokens: 3456,
+          cost: 1.23
+        }
+      }
+    })
+
+    expect(wrapper.text()).toContain('usage.overdraftActive')
+    expect(wrapper.text()).toContain('12 req')
+    expect(wrapper.text()).toContain('3.5K')
+    expect(wrapper.text()).toContain('$1.23')
+  })
 })

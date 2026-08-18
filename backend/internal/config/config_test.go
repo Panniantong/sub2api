@@ -106,6 +106,23 @@ func TestLoadOpenAIOAuthYield429Config(t *testing.T) {
 	})
 }
 
+func TestLoadCodexQuotaOverdraftConfig(t *testing.T) {
+	t.Run("disabled by default", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.False(t, cfg.Gateway.CodexQuotaOverdraftEnabled)
+	})
+
+	t.Run("enabled by instance environment", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+		t.Setenv("GATEWAY_CODEX_QUOTA_OVERDRAFT_ENABLED", "true")
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.True(t, cfg.Gateway.CodexQuotaOverdraftEnabled)
+	})
+}
+
 func TestLoadRedisUsernameFromEnvironment(t *testing.T) {
 	resetViperWithJWTSecret(t)
 	t.Setenv("REDIS_USERNAME", "app-user")
