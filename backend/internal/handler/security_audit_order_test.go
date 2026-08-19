@@ -58,6 +58,15 @@ func TestPromptAuditGatePrecedesAccountBillingAndUpstreamSideEffects(t *testing.
 	}
 }
 
+func TestCyberSessionBlockPrecedesResponsesUserSlot(t *testing.T) {
+	functionSource := stripGoComments(goFunctionSource(t, "openai_gateway_handler.go", "Responses"))
+	blockIndex := strings.Index(functionSource, "rejectIfCyberSessionBlocked(")
+	slotIndex := strings.Index(functionSource, "acquireResponsesUserSlot(")
+	require.NotEqual(t, -1, blockIndex, "missing cyber session block gate")
+	require.NotEqual(t, -1, slotIndex, "missing responses user concurrency gate")
+	require.Less(t, blockIndex, slotIndex, "blocked sessions must be rejected before they consume shared user concurrency")
+}
+
 func stripGoComments(source string) string {
 	source = regexp.MustCompile(`(?s)/\*.*?\*/`).ReplaceAllString(source, "")
 	return regexp.MustCompile(`(?m)//.*$`).ReplaceAllString(source, "")

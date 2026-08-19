@@ -13,6 +13,11 @@ import (
 // handler 在 Forward 返回后读取以触发风控记录、邮件与 tokens=0 用量行。
 const opsCyberPolicyKey = "ops_cyber_policy"
 
+// OpenAIUsagePolicySessionBlockCode marks an explicit upstream usage-policy
+// rejection that should block the current session without creating a formal
+// cyber-risk moderation event, violation count, or notification email.
+const OpenAIUsagePolicySessionBlockCode = "openai_usage_policy_session_block"
+
 // errOpenAICyberPolicyForwarded 表示 cyber_policy 已按当前端点格式透传给客户端
 // （error 已写出/下发）。compat 路径 ForwardAsChatCompletions / ForwardAsAnthropic 出口
 // 据此丢弃 result 并返回该哨兵，使 handler 落入 tokens=0 免费用量行（对齐 /v1/responses），
@@ -38,7 +43,9 @@ func MarkOpsCyberPolicy(c *gin.Context, mark CyberPolicyMark) {
 	if GetOpsCyberPolicy(c) != nil {
 		return
 	}
-	mark.Code = "cyber_policy"
+	if mark.Code != OpenAIUsagePolicySessionBlockCode {
+		mark.Code = "cyber_policy"
+	}
 	mark.Message = strings.TrimSpace(mark.Message)
 	mark.Body = strings.TrimSpace(mark.Body)
 	c.Set(opsCyberPolicyKey, &mark)
@@ -70,9 +77,19 @@ func ClearOpsCyberPolicy(c *gin.Context) {
 	c.Set(opsCyberPolicyKey, (*CyberPolicyMark)(nil))
 }
 
-// detectOpenAICyberPolicy 精确识别 cyber_policy（对齐 codex api_bridge.rs:145 /
-// sse/responses.rs:529）。命中返回 (true, "cyber_policy", message)。
+// detectOpenAICyberPolicy 精确识别结构化 cyber_policy，以及上游明确返回的
+// usage-policy prompt rejection。两者都会触发会话屏蔽，但只有前者进入正式
+// cyber 风控记录、违规计数和通知链路。
 func detectOpenAICyberPolicy(payload []byte) (bool, string, string) {
+	msg := gjson.GetBytes(payload, "error.message").String()
+	if msg == "" {
+		msg = gjson.GetBytes(payload, "response.error.message").String()
+	}
+	msg = strings.TrimSpace(msg)
+	if strings.Contains(strings.ToLower(msg), "invalid prompt: your prompt was flagged as potentially violating our usage policy") {
+		return true, OpenAIUsagePolicySessionBlockCode, msg
+	}
+
 	code := gjson.GetBytes(payload, "error.code").String()
 	if code == "" {
 		code = gjson.GetBytes(payload, "response.error.code").String()
@@ -80,9 +97,5 @@ func detectOpenAICyberPolicy(payload []byte) (bool, string, string) {
 	if !strings.EqualFold(strings.TrimSpace(code), "cyber_policy") {
 		return false, "", ""
 	}
-	msg := gjson.GetBytes(payload, "error.message").String()
-	if msg == "" {
-		msg = gjson.GetBytes(payload, "response.error.message").String()
-	}
-	return true, "cyber_policy", strings.TrimSpace(msg)
+	return true, "cyber_policy", msg
 }

@@ -151,6 +151,13 @@ func TestRecordCyberPolicyIfMarked_BlockKeyPlumbed(t *testing.T) {
 	})
 }
 
+func TestShouldRecordCyberPolicyModeration(t *testing.T) {
+	require.True(t, shouldRecordCyberPolicyModeration(&service.CyberPolicyMark{Code: "cyber_policy"}))
+	require.False(t, shouldRecordCyberPolicyModeration(&service.CyberPolicyMark{Code: service.OpenAIUsagePolicySessionBlockCode}),
+		"usage-policy session isolation must not create violation counts or notification emails")
+	require.False(t, shouldRecordCyberPolicyModeration(nil))
+}
+
 // TestBuildCyberPolicyOpsErrorEntry_StatusCode verifies F6: the ops error log
 // records the status the codex client actually received (400 non-stream / 200 stream),
 // not a hardcoded 403.
@@ -158,14 +165,17 @@ func TestBuildCyberPolicyOpsErrorEntry_StatusCode(t *testing.T) {
 	for _, tc := range []struct {
 		name           string
 		upstreamStatus int
+		code           string
+		wantErrorType  string
 	}{
-		{"non_stream_400", 400},
-		{"stream_200", 200},
-		{"zero_value", 0},
+		{"non_stream_400", 400, "cyber_policy", "cyber_policy"},
+		{"stream_200", 200, "cyber_policy", "cyber_policy"},
+		{"zero_value", 0, "cyber_policy", "cyber_policy"},
+		{"usage_policy_session_block", 200, service.OpenAIUsagePolicySessionBlockCode, service.OpenAIUsagePolicySessionBlockCode},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mark := &service.CyberPolicyMark{
-				Code:           "cyber_policy",
+				Code:           tc.code,
 				Message:        "blocked",
 				UpstreamStatus: tc.upstreamStatus,
 			}
@@ -173,7 +183,7 @@ func TestBuildCyberPolicyOpsErrorEntry_StatusCode(t *testing.T) {
 				RequestID: "req-1", Model: "gpt-5", RequestPath: "/openai/v1/responses",
 			}, mark)
 			require.Equal(t, tc.upstreamStatus, entry.StatusCode)
-			require.Equal(t, "cyber_policy", entry.ErrorType)
+			require.Equal(t, tc.wantErrorType, entry.ErrorType)
 			require.Equal(t, "request", entry.ErrorPhase)
 		})
 	}

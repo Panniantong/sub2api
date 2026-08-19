@@ -420,6 +420,13 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	subscription, _ := middleware2.GetSubscriptionFromContext(c)
 	requestPlatform := openAICompatibleRequestPlatform(c.Request.Context(), apiKey)
 
+	// Reject a previously blocked policy-violating session before it can occupy
+	// the shared user concurrency queue or an upstream account slot.
+	sessionHash := h.gatewayService.GenerateSessionHash(c, sessionHashBody)
+	if h.rejectIfCyberSessionBlocked(c, apiKey, sessionHashBody, reqModel, cyberBlockFormatResponses) {
+		return
+	}
+
 	service.SetOpsLatencyMs(c, service.OpsAuthLatencyMsKey, time.Since(requestStart).Milliseconds())
 	routingStart := time.Now()
 
@@ -443,11 +450,6 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		return
 	}
 
-	// Generate session hash (header first; fallback to prompt_cache_key)
-	sessionHash := h.gatewayService.GenerateSessionHash(c, sessionHashBody)
-	if h.rejectIfCyberSessionBlocked(c, apiKey, sessionHashBody, reqModel, cyberBlockFormatResponses) {
-		return
-	}
 	requireCompact := legacyCompact
 
 	maxAccountSwitches := h.maxAccountSwitches
@@ -3063,6 +3065,10 @@ type cyberPolicyOpsErrorMeta struct {
 // (400 non-stream / 200 stream), per F6.
 func buildCyberPolicyOpsErrorEntry(meta cyberPolicyOpsErrorMeta, mark *service.CyberPolicyMark) *service.OpsInsertErrorLogInput {
 	rt := int16(service.RequestTypeCyberBlocked)
+	errorType := strings.TrimSpace(mark.Code)
+	if errorType == "" {
+		errorType = "cyber_policy"
+	}
 	entry := &service.OpsInsertErrorLogInput{
 		RequestID:         meta.RequestID,
 		ClientRequestID:   meta.ClientRequestID,
@@ -3075,11 +3081,11 @@ func buildCyberPolicyOpsErrorEntry(meta cyberPolicyOpsErrorMeta, mark *service.C
 		UserAgent:         meta.UserAgent,
 		APIKeyPrefix:      meta.APIKeyPrefix,
 		ErrorPhase:        "request",
-		ErrorType:         "cyber_policy",
+		ErrorType:         errorType,
 		Severity:          "P3",
 		StatusCode:        mark.UpstreamStatus,
 		IsBusinessLimited: true,
-		ErrorMessage:      "cyber_policy: " + mark.Message,
+		ErrorMessage:      errorType + ": " + mark.Message,
 		// 原始 body 直接入队；ops service 落库前统一走 sanitizeErrorBodyForStorage 脱敏与截断。
 		ErrorBody:   mark.Body,
 		ErrorSource: "upstream_http",
@@ -3178,8 +3184,8 @@ func (h *OpenAIGatewayHandler) rejectIfCyberSessionBlocked(c *gin.Context, apiKe
 	if !h.gatewayService.IsCyberSessionBlocked(c.Request.Context(), key) {
 		return false
 	}
-	// body-signal compact 心跳可能已把响应头提交为 200（cyber 检查在用户槽位
-	// 长等待之后执行）：以 response.failed 终止事件回传；未提交时停拍后照常
+	// body-signal compact 心跳可能已把响应头提交为 200：以 response.failed
+	// 终止事件回传；未提交时停拍后照常
 	// 写 JSON（#3887）。
 	if service.StopOpenAICompactSSEKeepaliveCommitted(c) {
 		service.MarkOpsStreamError(c, "permission_error", cyberSessionBlockedClientMsg, http.StatusForbidden)
@@ -3253,6 +3259,7 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey 
 		return
 	}
 	c.Set(cyberPolicyRecordedKey, true)
+	recordModeration := shouldRecordCyberPolicyModeration(mark)
 	model = clientRequestedModel(c, model)
 
 	requestID := c.Writer.Header().Get("X-Request-Id")
@@ -3329,7 +3336,7 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey 
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if cmSvc != nil {
+		if recordModeration && cmSvc != nil {
 			cmSvc.RecordCyberPolicyEvent(ctx, service.CyberPolicyRecordInput{
 				RequestID:       requestID,
 				UserID:          userID,
@@ -3347,7 +3354,7 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey 
 				UpstreamOutTok:  mark.UpstreamOutTok,
 			})
 		}
-		if forwardErrored && gwSvc != nil {
+		if recordModeration && forwardErrored && gwSvc != nil {
 			gwSvc.RecordCyberPolicyUsageLog(ctx, service.CyberPolicyUsageInput{
 				APIKey:             apiKey,
 				Account:            account,
@@ -3374,6 +3381,10 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey 
 			enqueueOpsErrorLog(opsSvc, buildCyberPolicyOpsErrorEntry(opsMeta, mark))
 		}
 	}()
+}
+
+func shouldRecordCyberPolicyModeration(mark *service.CyberPolicyMark) bool {
+	return mark != nil && mark.Code != service.OpenAIUsagePolicySessionBlockCode
 }
 
 // clearCyberPolicyTurnState resets the cyber mark and the per-request recorded
