@@ -741,8 +741,8 @@ const redisPoolSizeValue = computed<number | null>(() => {
 })
 
 const redisUsagePercent = computed<number | null>(() => {
-  if (redisConnTotalValue.value == null || redisPoolSizeValue.value == null || redisPoolSizeValue.value <= 0) return null
-  return Math.min(100, Math.max(0, (redisConnTotalValue.value / redisPoolSizeValue.value) * 100))
+  if (redisConnActiveValue.value == null || redisPoolSizeValue.value == null || redisPoolSizeValue.value <= 0) return null
+  return Math.min(100, Math.max(0, (redisConnActiveValue.value / redisPoolSizeValue.value) * 100))
 })
 
 const redisMiddleLabel = computed(() => {
@@ -1495,8 +1495,7 @@ function handleToolbarRefresh() {
             {{ redisMiddleLabel }}
           </div>
           <div v-if="!props.fullscreen" class="mt-1 text-[10px] text-gray-500 dark:text-gray-400">
-            {{ t('admin.ops.conns') }} {{ redisConnTotalValue ?? '-' }} / {{ redisPoolSizeValue ?? '-' }}
-            <span v-if="redisConnActiveValue != null"> · {{ t('admin.ops.active') }} {{ redisConnActiveValue }} </span>
+            {{ t('admin.ops.conns') }} {{ redisConnActiveValue ?? '-' }} / {{ redisPoolSizeValue ?? '-' }}
             <span v-if="redisConnIdleValue != null"> · {{ t('admin.ops.idle') }} {{ redisConnIdleValue }} </span>
           </div>
         </div>
