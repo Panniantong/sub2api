@@ -36,6 +36,7 @@ const (
 
 	codexQuotaOverdraftFallbackModel      = "gpt-5.5"
 	codexQuotaOverdraftCompatibilityModel = "gpt-5.4-mini"
+	openAICodexProbeVersion              = codexCLIVersion
 )
 
 // CodexQuotaOverdraftProbeState is persisted in accounts.extra so quota-cycle

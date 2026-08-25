@@ -2431,6 +2431,9 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerOnce(
 		GuardianParentAccountID: guardianParentAccountID,
 		StickyPreviousAccountID: stickyPreviousAccountID,
 		StickyWeighted:          stickyWeighted,
+		OpenAIOAuthFillFirst:    s.isOpenAIOAuthFillFirstEnabled() && platform == PlatformOpenAI,
+		PreserveStickyBinding:   preserveGuardianParentBinding,
+		RequirePrivacySet:       s.openAIGroupRequiresPrivacySet(ctx, groupID),
 		SubscriptionPriority:    subscriptionPriority,
 		PreserveStickyBinding:   preserveGuardianParentBinding,
 		RequirePrivacySet:       s.openAIGroupRequiresPrivacySet(ctx, groupID),
@@ -2503,7 +2506,7 @@ func (s *OpenAIGatewayService) ReportOpenAIAccountScheduleResult(account *Accoun
 	if success {
 		s.openaiOAuth429RetryStartedAt.Delete(accountID)
 		s.clearOpenAIAccountModelTransientState(accountID, normalizeOpenAIAccountModelTransientModel(model))
-		s.observeCodexQuotaOverdraftScheduleSuccess(accountID, model, requestCtx)
+		s.observeCodexQuotaOverdraftScheduleSuccess(accountID, model, nil)
 	}
 	scheduler := s.getOpenAIAccountScheduler(context.Background())
 	if scheduler == nil {
