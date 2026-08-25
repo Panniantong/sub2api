@@ -1068,17 +1068,7 @@ func (s *OpenAIGatewayService) updateCodexUsageSnapshot(ctx context.Context, acc
 	if len(updates) == 0 {
 		return
 	}
-	if !s.getCodexSnapshotThrottle().Allow(accountID, now) {
-		return
-	}
-
-	go func() {
-		updateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := s.accountRepo.UpdateExtra(updateCtx, accountID, updates); err == nil {
-			notifyOpenAIAutoReset(accountID)
-		}
-	}()
+	s.processCodexQuotaOverdraftUsageSnapshot(ctx, accountID, now, updates)
 }
 
 func (s *OpenAIGatewayService) UpdateCodexUsageSnapshotFromHeaders(ctx context.Context, accountID int64, headers http.Header) {

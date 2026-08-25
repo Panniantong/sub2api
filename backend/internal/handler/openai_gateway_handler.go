@@ -2150,7 +2150,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			return false
 		}
 		switchCount++
-		if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount, &oauth429FailoverState) {
+		if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount, &oauth429FailoverState, failoverErr) {
 			closeOpenAIWSFailoverExhausted(c, wsConn, failoverErr)
 			return false
 		}
