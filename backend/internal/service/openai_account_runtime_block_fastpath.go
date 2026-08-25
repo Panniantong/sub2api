@@ -95,6 +95,15 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 	if s == nil || account == nil {
 		return false
 	}
+	yield429Enabled := s.isOpenAIOAuthYield429Enabled()
+	ordinaryOpenAIOAuth429 := yield429Enabled && statusCode == http.StatusTooManyRequests && isOpenAIOAuthAccount(account) && !account.IsShadow()
+	oauth429Classification := openAIOAuth429Classification{}
+	if ordinaryOpenAIOAuth429 {
+		oauth429Classification = classifyOpenAIOAuth429(responseBody, time.Now())
+		// Count every ordinary OAuth 429, including ones consumed by a custom
+		// model rule below, so the existing storm guard sees the real pressure.
+		s.recordOpenAIOAuth429()
+	}
 	// Team 联动熔断必须先于 model-not-found 与账户级临时不可调度规则的早退。
 	if s.rateLimitService != nil {
 		s.rateLimitService.maybeHandleOpenAITeamLinkedError(stateCtx, account, statusCode, responseBody)

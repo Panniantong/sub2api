@@ -148,6 +148,7 @@ type AccountTestService struct {
 	settingService            *SettingService
 	tlsFPProfileService       *TLSFingerprintProfileService
 	pluginManager             *PluginManager
+	codexQuotaOverdraft       codexQuotaOverdraftAccountTestCoordinator
 	agentIdentityTaskMu       sync.Mutex
 	agentIdentityWS           agentIdentityWSConnectionInvalidator
 	openAIModelTransient      interface {
