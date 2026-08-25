@@ -58,6 +58,15 @@ func (s *OpenAIGatewayService) forwardAnthropicViaNativeAnthropicEndpoint(
 		body = rewritten
 	}
 
+	// 记录客户端请求的推理强度：优先 Claude 协议的 output_config.effort；
+	// 缺失且 thinking 已启用时，按国产 passback-required 模型兜底为 high
+	// （对齐 Anthropic 网关 gateway_handler 的记录语义，避免该路径长期落 NULL）。
+	reasoningEffort := ApplyThinkingEnabledFallback(
+		NormalizeClaudeOutputEffort(gjson.GetBytes(body, "output_config.effort").String()),
+		body,
+		billingModel,
+	)
+
 	// 与 Anthropic 平台 passthrough 相同的 pre-filter：剥离空文本块与上游
 	// 无法接受的 web-search 历史块（GLM/Kimi/DeepSeek 对 server_tool_use 400）。
 	body = StripEmptyTextBlocks(body)
@@ -87,7 +96,7 @@ func (s *OpenAIGatewayService) forwardAnthropicViaNativeAnthropicEndpoint(
 		return nil, err
 	}
 
-	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
 	if err != nil {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, true)
 	}
@@ -104,9 +113,9 @@ func (s *OpenAIGatewayService) forwardAnthropicViaNativeAnthropicEndpoint(
 	}
 
 	if clientStream {
-		return s.handleNativeAnthropicStreamingResponse(ctx, resp, c, account, originalModel, billingModel, upstreamModel, startTime)
+		return s.handleNativeAnthropicStreamingResponse(ctx, resp, c, account, originalModel, billingModel, upstreamModel, reasoningEffort, startTime)
 	}
-	return s.handleNativeAnthropicBufferedResponse(ctx, resp, c, account, originalModel, billingModel, upstreamModel, startTime)
+	return s.handleNativeAnthropicBufferedResponse(ctx, resp, c, account, originalModel, billingModel, upstreamModel, reasoningEffort, startTime)
 }
 
 // nativeAnthropicTargetURL 组装国产供应商原生 Anthropic messages 端点。
@@ -194,6 +203,7 @@ func (s *OpenAIGatewayService) handleNativeAnthropicBufferedResponse(
 	originalModel string,
 	billingModel string,
 	upstreamModel string,
+	reasoningEffort *string,
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
 	if s.rateLimitService != nil {
@@ -239,6 +249,7 @@ func (s *OpenAIGatewayService) handleNativeAnthropicBufferedResponse(
 		UpstreamModel:    upstreamModel,
 		UpstreamEndpoint: "/v1/messages",
 		Stream:           false,
+		ReasoningEffort:  reasoningEffort,
 		Duration:         time.Since(startTime),
 	}, nil
 }
@@ -254,6 +265,7 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 	originalModel string,
 	billingModel string,
 	upstreamModel string,
+	reasoningEffort *string,
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
 	observer := upstreamResponseModelObserverFromContext(c)
@@ -382,28 +394,28 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 					flusher.Flush()
 				}
 				if !sawTerminalEvent {
-					return s.nativeAnthropicStreamResult(c, resp, usage, firstTokenMs, clientDisconnected, originalModel, billingModel, upstreamModel, startTime),
+					return s.nativeAnthropicStreamResult(c, resp, usage, firstTokenMs, clientDisconnected, originalModel, billingModel, upstreamModel, reasoningEffort, startTime),
 						fmt.Errorf("stream usage incomplete: missing terminal event")
 				}
-				return s.nativeAnthropicStreamResult(c, resp, usage, firstTokenMs, clientDisconnected, originalModel, billingModel, upstreamModel, startTime), nil
+				return s.nativeAnthropicStreamResult(c, resp, usage, firstTokenMs, clientDisconnected, originalModel, billingModel, upstreamModel, reasoningEffort, startTime), nil
 			}
 			if ev.err != nil {
 				if sawTerminalEvent {
-					return s.nativeAnthropicStreamResult(c, resp, usage, firstTokenMs, clientDisconnected, originalModel, billingModel, upstreamModel, startTime), nil
+					return s.nativeAnthropicStreamResult(c, resp, usage, firstTokenMs, clientDisconnected, originalModel, billingModel, upstreamModel, reasoningEffort, startTime), nil
 				}
 				if clientDisconnected {
-					return s.nativeAnthropicStreamResult(c, resp, usage, firstTokenMs, clientDisconnected, originalModel, billingModel, upstreamModel, startTime),
+					return s.nativeAnthropicStreamResult(c, resp, usage, firstTokenMs, clientDisconnected, originalModel, billingModel, upstreamModel, reasoningEffort, startTime),
 						fmt.Errorf("stream usage incomplete after disconnect: %w", ev.err)
 				}
 				if errors.Is(ev.err, context.Canceled) || errors.Is(ev.err, context.DeadlineExceeded) {
-					return s.nativeAnthropicStreamResult(c, resp, usage, firstTokenMs, clientDisconnected, originalModel, billingModel, upstreamModel, startTime),
+					return s.nativeAnthropicStreamResult(c, resp, usage, firstTokenMs, clientDisconnected, originalModel, billingModel, upstreamModel, reasoningEffort, startTime),
 						fmt.Errorf("stream usage incomplete: %w", ev.err)
 				}
 				if errors.Is(ev.err, bufio.ErrTooLong) {
 					logger.LegacyPrintf("service.gateway", "[CN Anthropic 直通] SSE line too long: account=%d max_size=%d error=%v", account.ID, maxLineSize, ev.err)
-					return s.nativeAnthropicStreamResult(c, resp, usage, firstTokenMs, clientDisconnected, originalModel, billingModel, upstreamModel, startTime), ev.err
+					return s.nativeAnthropicStreamResult(c, resp, usage, firstTokenMs, clientDisconnected, originalModel, billingModel, upstreamModel, reasoningEffort, startTime), ev.err
 				}
-				return s.nativeAnthropicStreamResult(c, resp, usage, firstTokenMs, clientDisconnected, originalModel, billingModel, upstreamModel, startTime),
+				return s.nativeAnthropicStreamResult(c, resp, usage, firstTokenMs, clientDisconnected, originalModel, billingModel, upstreamModel, reasoningEffort, startTime),
 					fmt.Errorf("stream read error: %w", ev.err)
 			}
 
@@ -451,14 +463,14 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 				continue
 			}
 			if clientDisconnected {
-				return s.nativeAnthropicStreamResult(c, resp, usage, firstTokenMs, clientDisconnected, originalModel, billingModel, upstreamModel, startTime),
+				return s.nativeAnthropicStreamResult(c, resp, usage, firstTokenMs, clientDisconnected, originalModel, billingModel, upstreamModel, reasoningEffort, startTime),
 					fmt.Errorf("stream usage incomplete after timeout")
 			}
 			logger.LegacyPrintf("service.gateway", "[CN Anthropic 直通] Stream data interval timeout: account=%d model=%s interval=%s", account.ID, upstreamModel, streamInterval)
 			if s.rateLimitService != nil {
 				s.rateLimitService.HandleStreamTimeout(ctx, account, upstreamModel)
 			}
-			return s.nativeAnthropicStreamResult(c, resp, usage, firstTokenMs, clientDisconnected, originalModel, billingModel, upstreamModel, startTime),
+			return s.nativeAnthropicStreamResult(c, resp, usage, firstTokenMs, clientDisconnected, originalModel, billingModel, upstreamModel, reasoningEffort, startTime),
 				fmt.Errorf("stream data interval timeout")
 
 		case <-keepaliveCh:
@@ -496,6 +508,7 @@ func (s *OpenAIGatewayService) nativeAnthropicStreamResult(
 	originalModel string,
 	billingModel string,
 	upstreamModel string,
+	reasoningEffort *string,
 	startTime time.Time,
 ) *OpenAIForwardResult {
 	if usage == nil {
@@ -509,109 +522,23 @@ func (s *OpenAIGatewayService) nativeAnthropicStreamResult(
 		UpstreamModel:    upstreamModel,
 		UpstreamEndpoint: "/v1/messages",
 		Stream:           true,
+		ReasoningEffort:  reasoningEffort,
 		Duration:         time.Since(startTime),
 		FirstTokenMs:     firstTokenMs,
 		ClientDisconnect: clientDisconnect,
 	}
 }
 
-// forwardCountTokensViaNativeAnthropic 把 Anthropic count_tokens 请求透传到
-// 国产供应商原生 Anthropic 端点（{base}/v1/messages/count_tokens），
-// 仅做模型名映射，不做协议转换。
-func (s *OpenAIGatewayService) forwardCountTokensViaNativeAnthropic(
-	ctx context.Context,
-	c *gin.Context,
-	account *Account,
-	body []byte,
-	defaultMappedModel string,
-) error {
-	originalModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
-	if originalModel == "" {
-		writeAnthropicCountTokensError(c, http.StatusBadRequest, "invalid_request_error", "model is required")
-		return fmt.Errorf("count_tokens: missing model in request")
-	}
-	billingModel := resolveOpenAIForwardModel(account, originalModel, strings.TrimSpace(defaultMappedModel))
-	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
-	if upstreamModel != originalModel {
-		rewritten, err := sjson.SetBytes(body, "model", upstreamModel)
-		if err != nil {
-			return fmt.Errorf("count_tokens: rewrite model: %w", err)
-		}
-		body = rewritten
-	}
-
-	apiKey := strings.TrimSpace(account.GetOpenAIProtocolAPIKey())
-	if apiKey == "" {
-		writeAnthropicCountTokensError(c, http.StatusBadGateway, "upstream_error", "Account api_key is missing")
-		return fmt.Errorf("count_tokens: account %d missing api_key", account.ID)
-	}
-	targetURL, err := s.nativeAnthropicTargetURL(account)
-	if err != nil {
-		return fmt.Errorf("count_tokens: %w", err)
-	}
-	targetURL = strings.TrimSuffix(targetURL, "/v1/messages") + "/v1/messages/count_tokens"
-
-	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
-	if err != nil {
-		writeAnthropicCountTokensError(c, http.StatusInternalServerError, "api_error", "Failed to build request")
-		return fmt.Errorf("count_tokens: build request: %w", err)
-	}
-	reqHeader := upstreamReq.Header
-	reqHeader.Del("authorization")
-	reqHeader.Del("x-api-key")
-	setAnthropicAPIKeyAuthHeader(reqHeader, account, apiKey)
-	reqHeader.Set("content-type", "application/json")
-	reqHeader.Set("accept", "application/json")
-	account.ApplyHeaderOverrides(reqHeader)
-
-	proxyURL := ""
-	if account.Proxy != nil {
-		proxyURL = account.Proxy.URL()
-	}
-	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
-	if err != nil {
-		safeErr := sanitizeUpstreamErrorMessage(err.Error())
-		setOpsUpstreamError(c, 0, safeErr, "")
-		writeAnthropicCountTokensError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
-		return fmt.Errorf("count_tokens: upstream request failed: %s", safeErr)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	// count_tokens 响应体极小；与其他探测路径一致加 256KB 上限防异常上游放大内存。
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, cnQuotaMaxBodyBytes))
-	if err != nil {
-		writeAnthropicCountTokensError(c, http.StatusBadGateway, "upstream_error", "Failed to read response")
-		return fmt.Errorf("count_tokens: read response: %w", err)
-	}
-	if resp.StatusCode >= 400 {
-		if s.rateLimitService != nil {
-			s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
-		}
-		upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
-		setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, "")
-		writeAnthropicCountTokensError(c, resp.StatusCode, "upstream_error", "Upstream request failed")
-		return fmt.Errorf("count_tokens: upstream error: %d", resp.StatusCode)
-	}
-
-	inputTokens := gjson.GetBytes(respBody, "input_tokens")
-	if !inputTokens.Exists() {
-		writeAnthropicCountTokensError(c, http.StatusBadGateway, "upstream_error", "Upstream response missing input_tokens")
-		return fmt.Errorf("count_tokens: response missing input_tokens field")
-	}
-	c.JSON(http.StatusOK, gin.H{
-		"input_tokens": int(inputTokens.Int()),
-	})
-	return nil
-}
-
 // claudeUsageToOpenAIUsage 把 Anthropic 格式 usage 映射到 OpenAI 网关统一的
-// 用量结构（字段一一对应）。
+// 用量结构。Anthropic 的 input_tokens 不含缓存读写，而 OpenAI 网关内部
+// 约定 InputTokens 是包含缓存明细的总输入；这里必须先合并，RecordUsage
+// 才能准确拆回互斥的计费桶。
 func claudeUsageToOpenAIUsage(u *ClaudeUsage) OpenAIUsage {
 	if u == nil {
 		return OpenAIUsage{}
 	}
 	return OpenAIUsage{
-		InputTokens:              u.InputTokens,
+		InputTokens:              u.InputTokens + u.CacheCreationInputTokens + u.CacheReadInputTokens,
 		OutputTokens:             u.OutputTokens,
 		CacheCreationInputTokens: u.CacheCreationInputTokens,
 		CacheReadInputTokens:     u.CacheReadInputTokens,

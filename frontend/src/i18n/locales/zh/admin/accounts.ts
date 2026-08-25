@@ -321,6 +321,10 @@ export default {
         },
         apiProtocol: {
           title: 'API 协议',
+          adaptive: '自适应',
+          adaptiveDesc: '按入站协议优先使用供应商原生端点，仅在没有对应端点时转换。',
+          endpoints: '协议端点',
+          responsesFallbackDesc: '该供应商没有原生 Responses 端点，Responses 请求将转换为 Chat Completions。',
           chatCompletions: 'Chat Completions',
           chatCompletionsDesc: '标准 OpenAI 兼容端点，其他格式请求将被转换。',
           anthropic: 'Anthropic',
@@ -328,9 +332,12 @@ export default {
           responses: 'Responses',
           responsesDesc: '供应商原生 Responses 端点，适配 Codex。',
         },
+        balance: '余额 --',
         window5h: '5 小时窗口',
         windowWeekly: '每周窗口',
+        probe: '查询',
         probeTooltip: '请求供应商额度端点，查询 5 小时 / 每周滚动窗口用量',
+        balanceProbeTooltip: '请求供应商余额端点，查询账户余额',
         balanceLow: '余额不足',
         noBalanceEndpoint: '该平台暂无余额查询接口',
         resetSoon: '即将重置',
@@ -360,6 +367,7 @@ export default {
       status: {
         active: '正常',
         inactive: '停用',
+        expired: '已过期',
         error: '错误',
         cooldown: '冷却中',
         paused: '暂停',
@@ -479,6 +487,14 @@ export default {
         resetAccountRecoveryFailed: '窗口已重置，但账号状态恢复失败，请手动恢复账号状态。',
         resetAccountRefreshFailed: '窗口、账号状态和重置次数缓存已更新，但无法加载最新账号显示。',
         refreshCachePersistFailed: '已显示实时次数，但到期明细获取失败，仍保留原有缓存明细。',
+        autoStatus: {
+          checking: '检测中',
+          available: '卡可用',
+          resetting: '自动重置中',
+          success: '自动重置成功',
+          noCredit: '无卡',
+          failed: '自动重置失败'
+        },
         confirmTitle: '确认重置周限',
         confirmMessage: '将消耗 1 次重置次数立即恢复当前窗口，剩余 {count} 次。此操作不可撤销，确定继续吗？'
       },
@@ -543,12 +559,16 @@ export default {
         submit: '批量更新',
         updating: '更新中...',
         success: '成功更新 {count} 个账号',
+        successWithInherited: '成功更新 {count} 个账号；其中 {inherited} 个影子账号仍跟随母账号。',
         partialSuccess: '部分更新成功：成功 {success} 个，失败 {failed} 个',
+        partialSuccessWithInherited: '部分更新成功：成功 {success} 个，失败 {failed} 个；其中 {inherited} 个影子账号仍跟随母账号。',
         failed: '批量更新失败',
         noSelection: '请选择要编辑的账号',
         noFieldsSelected: '请至少选择一个要更新的字段',
         rateSyncWarning: '已开启上游倍率同步的账号不能批量手工修改倍率，请先在账号编辑页关闭同步。',
         rateSyncConflict: '无法修改账号倍率：{count} 个目标账号已开启上游倍率同步。',
+        longContextShadowHint: '长上下文计费归母账号所有。选中的影子账号仍跟随母账号，筛选全量目标时同样如此。',
+        longContextParentRequired: '选中的账号全部是影子账号，请选择母账号修改长上下文计费。',
         mixedPlatformWarning: '所选账号跨越多个平台（{platforms}）。显示的模型映射预设为合并结果——请确保映射对每个平台都适用。'
       },
       bulkDeleteTitle: '批量删除账号',
@@ -880,6 +900,14 @@ export default {
 	  autoPause5hDisabled: '禁用 5h 自动暂停',
 	  autoPause7dDisabled: '禁用 7d 自动暂停',
 	  autoPauseDisabledHint: '开启后该账号永不进入自动暂停（即使全局默认阈值已配置）。',
+	  autoResetCredit: {
+	    title: '自动使用重置卡',
+	    hint: '仅在实际用量达到阈值时使用最早到期的可用卡；默认关闭。无卡或失败时账号保持暂停。',
+	    threshold5h: '5h 自动用卡阈值(%)',
+	    threshold7d: '7d 自动用卡阈值(%)',
+	    thresholdHint: '两个窗口独立判断，任一达到自身阈值即触发。可填写 0.1–100，默认均为 100。',
+	    thresholdInvalid: '自动使用重置卡阈值必须在 0.1% 到 100% 之间。'
+	  },
       // Quota control (Anthropic OAuth/SetupToken only)
       quotaControl: {
         title: '配额控制',
