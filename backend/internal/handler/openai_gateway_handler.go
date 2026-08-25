@@ -206,6 +206,10 @@ func openAIResponsesRequiredCapability(imageIntent bool, platform string) servic
 	return service.OpenAIEndpointCapabilityChatCompletions
 }
 
+func shouldEnableCodexQuotaOverdraftForResponses(legacyCompact, nativeV2, imageIntent bool) bool {
+	return !legacyCompact && !nativeV2 && !imageIntent
+}
+
 // openAIResponsesRequiredCapabilityForRequest returns the endpoint capability
 // required by an image or Responses request. needsResponses includes both the
 // legacy /responses/compact endpoint and native remote compaction v2.

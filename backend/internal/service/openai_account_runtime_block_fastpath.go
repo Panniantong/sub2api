@@ -578,7 +578,17 @@ func (s *OpenAIGatewayService) recordOpenAIOAuth429() {
 	s.openaiOAuth429WindowCount.Add(1)
 }
 
-func (s *OpenAIGatewayService) ShouldStopOpenAIOAuth429Failover(account *Account, statusCode int, failedSwitches int, state *OpenAIOAuth429FailoverState) bool {
+func (s *OpenAIGatewayService) ShouldStopOpenAIOAuth429Failover(account *Account, statusCode int, failedSwitches int, state *OpenAIOAuth429FailoverState, failure ...*UpstreamFailoverError) bool {
+	if state != nil {
+		if state.planGatedFollowupsRemaining > 0 {
+			state.planGatedFollowupsRemaining--
+			return state.planGatedFollowupsRemaining == 0
+		}
+		if len(failure) > 0 && failure[0] != nil && isOpenAICodexPlanGatedModelError(failure[0].StatusCode, failure[0].ResponseBody) {
+			state.planGatedFollowupsRemaining = 2
+			return false
+		}
+	}
 	if failedSwitches < openAIOAuth429StormMaxAccountSwitches {
 		return false
 	}
