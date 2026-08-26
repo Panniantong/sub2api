@@ -334,6 +334,12 @@ func (s *OpenAIGatewayService) newOpenAIAccountFailoverError(
 	retryableOnSameAccount bool,
 ) *UpstreamFailoverError {
 	oauth429Retry := s.shouldRetryOpenAIOAuth429OnSameAccount(account, statusCode, shouldDisable)
+	if statusCode == http.StatusTooManyRequests && isOpenAIOAuthAccount(account) && !s.isOpenAIOAuth429SameAccountRetryEnabled() {
+		// 实例级关闭 OAuth 429 同账号重试（含 2 分钟窗口与计数重试）：
+		// 429 直接换号，账号由 markOpenAIOAuth429RateLimited 立即落冷却。
+		oauth429Retry = false
+		retryableOnSameAccount = false
+	}
 	failoverErr := newOpenAIUpstreamFailoverError(
 		statusCode,
 		responseHeaders,

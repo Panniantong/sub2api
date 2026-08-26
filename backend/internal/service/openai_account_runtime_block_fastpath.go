@@ -329,6 +329,9 @@ func (s *OpenAIGatewayService) openAIOAuth429RetryWindowActive(account *Account)
 	if s == nil || !isOpenAIOAuthAccount(account) || account.IsShadow() {
 		return false
 	}
+	if !s.isOpenAIOAuth429SameAccountRetryEnabled() {
+		return false
+	}
 	now := time.Now()
 	value, _ := s.openaiOAuth429RetryStartedAt.LoadOrStore(account.ID, now)
 	startedAt, ok := value.(time.Time)
@@ -341,6 +344,9 @@ func (s *OpenAIGatewayService) openAIOAuth429RetryWindowActive(account *Account)
 
 func (s *OpenAIGatewayService) openAIOAuth429RetryDeadline(account *Account) time.Time {
 	if s == nil || !isOpenAIOAuthAccount(account) || account.IsShadow() {
+		return time.Time{}
+	}
+	if !s.isOpenAIOAuth429SameAccountRetryEnabled() {
 		return time.Time{}
 	}
 	value, ok := s.openaiOAuth429RetryStartedAt.Load(account.ID)
@@ -374,6 +380,14 @@ func openAIOAuth429SameAccountRetryDelay(headers http.Header, deadline time.Time
 
 func (s *OpenAIGatewayService) isOpenAIOAuthYield429Enabled() bool {
 	return s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIScheduler.OAuthYield429Enabled
+}
+// isOpenAIOAuth429SameAccountRetryEnabled 判断实例是否允许 OAuth 429 同账号重试。
+// cfg 缺失时回退为开启，保持既有默认行为；显式配置 false 才关闭。
+func (s *OpenAIGatewayService) isOpenAIOAuth429SameAccountRetryEnabled() bool {
+	if s == nil || s.cfg == nil {
+		return true
+	}
+	return s.cfg.Gateway.OpenAIScheduler.OAuth429SameAccountRetryEnabled
 }
 
 func (s *OpenAIGatewayService) BlockAccountScheduling(account *Account, until time.Time, reason string) {
