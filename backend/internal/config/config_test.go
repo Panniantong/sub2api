@@ -96,6 +96,31 @@ func TestLoadOpenAIOAuthFillFirstConfig(t *testing.T) {
 	})
 }
 
+func TestLoadNativeProxyPoolConfig(t *testing.T) {
+	t.Run("disabled by default", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.False(t, cfg.Gateway.NativeProxyPool.Enabled)
+		require.Equal(t, "http", cfg.Gateway.NativeProxyPool.Protocol)
+		require.Equal(t, "172.18.0.1", cfg.Gateway.NativeProxyPool.Host)
+		require.Equal(t, 31289, cfg.Gateway.NativeProxyPool.Port)
+		require.Equal(t, "native", cfg.Gateway.NativeProxyPool.UsernamePrefix)
+	})
+
+	t.Run("enabled by instance environment", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+		t.Setenv("GATEWAY_NATIVE_PROXY_POOL_ENABLED", "true")
+		t.Setenv("GATEWAY_NATIVE_PROXY_POOL_HOST", "172.21.0.1")
+		t.Setenv("GATEWAY_NATIVE_PROXY_POOL_PORT", "31300")
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.True(t, cfg.Gateway.NativeProxyPool.Enabled)
+		require.Equal(t, "172.21.0.1", cfg.Gateway.NativeProxyPool.Host)
+		require.Equal(t, 31300, cfg.Gateway.NativeProxyPool.Port)
+	})
+}
+
 func TestLoadOpenAIOAuthYield429Config(t *testing.T) {
 	t.Run("disabled by default", func(t *testing.T) {
 		resetViperWithJWTSecret(t)

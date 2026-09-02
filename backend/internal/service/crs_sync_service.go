@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -26,6 +27,7 @@ type CRSSyncService struct {
 	openaiOAuthService *OpenAIOAuthService
 	geminiOAuthService *GeminiOAuthService
 	cfg                *config.Config
+	nativeProxyPoolMu  sync.Mutex
 }
 
 func NewCRSSyncService(
@@ -266,6 +268,27 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		return nil, err
 	}
 
+	nativeProxyPoolEnabled := input.SyncProxies && s.cfg.Gateway.NativeProxyPool.Enabled
+	if nativeProxyPoolEnabled {
+		if s.proxyRepo == nil {
+			return nil, errors.New("native IPv6 proxy pool requires proxy repository")
+		}
+		s.nativeProxyPoolMu.Lock()
+		defer s.nativeProxyPoolMu.Unlock()
+	}
+
+	var nativeProxyAllocator *nativeProxyPoolAllocator
+	if nativeProxyPoolEnabled {
+		countedProxies, loadErr := s.proxyRepo.ListActiveWithAccountCount(ctx)
+		if loadErr != nil {
+			return nil, fmt.Errorf("load native IPv6 proxy pool: %w", loadErr)
+		}
+		nativeProxyAllocator, err = newNativeProxyPoolAllocator(countedProxies, s.cfg.Gateway.NativeProxyPool)
+		if err != nil {
+			return nil, fmt.Errorf("configure native IPv6 proxy pool: %w", err)
+		}
+	}
+
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	result := &SyncFromCRSResult{
@@ -375,6 +398,14 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 				item.Action = "skipped"
 				item.Error = "not selected"
 				result.Skipped++
+				result.Items = append(result.Items, item)
+				continue
+			}
+			proxyID, err = proxyForCRSCreate(existing, proxyID, nativeProxyAllocator)
+			if err != nil {
+				item.Action = "failed"
+				item.Error = "native proxy pool allocation failed: " + err.Error()
+				result.Failed++
 				result.Items = append(result.Items, item)
 				continue
 			}
@@ -511,6 +542,14 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 				item.Action = "skipped"
 				item.Error = "not selected"
 				result.Skipped++
+				result.Items = append(result.Items, item)
+				continue
+			}
+			proxyID, err = proxyForCRSCreate(existing, proxyID, nativeProxyAllocator)
+			if err != nil {
+				item.Action = "failed"
+				item.Error = "native proxy pool allocation failed: " + err.Error()
+				result.Failed++
 				result.Items = append(result.Items, item)
 				continue
 			}
@@ -669,6 +708,14 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 				result.Items = append(result.Items, item)
 				continue
 			}
+			proxyID, err = proxyForCRSCreate(existing, proxyID, nativeProxyAllocator)
+			if err != nil {
+				item.Action = "failed"
+				item.Error = "native proxy pool allocation failed: " + err.Error()
+				result.Failed++
+				result.Items = append(result.Items, item)
+				continue
+			}
 			account := &Account{
 				Name:        defaultName(src.Name, src.ID),
 				Platform:    PlatformOpenAI,
@@ -820,6 +867,14 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 				result.Items = append(result.Items, item)
 				continue
 			}
+			proxyID, err = proxyForCRSCreate(existing, proxyID, nativeProxyAllocator)
+			if err != nil {
+				item.Action = "failed"
+				item.Error = "native proxy pool allocation failed: " + err.Error()
+				result.Failed++
+				result.Items = append(result.Items, item)
+				continue
+			}
 			account := &Account{
 				Name:        defaultName(src.Name, src.ID),
 				Platform:    PlatformOpenAI,
@@ -950,6 +1005,14 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 				result.Items = append(result.Items, item)
 				continue
 			}
+			proxyID, err = proxyForCRSCreate(existing, proxyID, nativeProxyAllocator)
+			if err != nil {
+				item.Action = "failed"
+				item.Error = "native proxy pool allocation failed: " + err.Error()
+				result.Failed++
+				result.Items = append(result.Items, item)
+				continue
+			}
 			account := &Account{
 				Name:        defaultName(src.Name, src.ID),
 				Platform:    PlatformGemini,
@@ -1077,6 +1140,14 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 				item.Action = "skipped"
 				item.Error = "not selected"
 				result.Skipped++
+				result.Items = append(result.Items, item)
+				continue
+			}
+			proxyID, err = proxyForCRSCreate(existing, proxyID, nativeProxyAllocator)
+			if err != nil {
+				item.Action = "failed"
+				item.Error = "native proxy pool allocation failed: " + err.Error()
+				result.Failed++
 				result.Items = append(result.Items, item)
 				continue
 			}

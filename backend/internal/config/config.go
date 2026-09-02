@@ -944,6 +944,16 @@ const (
 	ImageConcurrencyOverflowModeWait   = "wait"
 )
 
+// GatewayNativeProxyPoolConfig controls optional per-account allocation from a
+// pre-created native IPv6 proxy pool during CRS account sync.
+type GatewayNativeProxyPoolConfig struct {
+	Enabled        bool   `mapstructure:"enabled"`
+	Protocol       string `mapstructure:"protocol"`
+	Host           string `mapstructure:"host"`
+	Port           int    `mapstructure:"port"`
+	UsernamePrefix string `mapstructure:"username_prefix"`
+}
+
 // GatewayConfig API网关相关配置
 type GatewayConfig struct {
 	// 等待上游响应头的超时时间（秒），0表示无超时
@@ -1102,6 +1112,8 @@ type GatewayConfig struct {
 	// CNProviders: 国产 OpenAI 兼容供应商（kimi/zhipu/deepseek）的余额检测配置。
 	// 仅作用于 payg（按量付费）账号：周期探测余额，低于阈值则临时停调。
 	CNProviders GatewayCNProvidersConfig `mapstructure:"cn_providers"`
+	// NativeProxyPool: optional per-account allocation from a pre-created native IPv6 proxy pool.
+	NativeProxyPool GatewayNativeProxyPoolConfig `mapstructure:"native_proxy_pool"`
 }
 
 // GatewayGrokConfig holds Grok-specific gateway scheduling knobs.
@@ -2369,6 +2381,11 @@ func setDefaults() {
 	viper.SetDefault("gateway.grok_response_header_timeout", 120)
 	viper.SetDefault("gateway.openai_first_output_timeout_seconds", 0)
 	viper.SetDefault("gateway.openai_high_effort_first_output_timeout_seconds", 0)
+	viper.SetDefault("gateway.native_proxy_pool.enabled", false)
+	viper.SetDefault("gateway.native_proxy_pool.protocol", "http")
+	viper.SetDefault("gateway.native_proxy_pool.host", "172.18.0.1")
+	viper.SetDefault("gateway.native_proxy_pool.port", 31289)
+	viper.SetDefault("gateway.native_proxy_pool.username_prefix", "native")
 	viper.SetDefault("gateway.log_upstream_error_body", true)
 	viper.SetDefault("gateway.log_upstream_error_body_max_bytes", 2048)
 	viper.SetDefault("gateway.inject_beta_for_apikey", false)
