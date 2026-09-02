@@ -1282,6 +1282,11 @@ func (s *CRSSyncService) mapOrCreateProxy(ctx context.Context, enabled bool, cac
 	if !enabled || src == nil {
 		return nil, nil
 	}
+	if s.cfg != nil && s.cfg.Gateway.NativeProxyPool.Enabled {
+		// Native pool mode assigns only new accounts after CRS identity lookup.
+		// Existing accounts retain their current proxy instead of being rotated.
+		return nil, nil
+	}
 	protocol := strings.ToLower(strings.TrimSpace(src.Protocol))
 	switch protocol {
 	case "socks":
