@@ -34,10 +34,8 @@
 
     <!-- Progress bar row -->
     <div class="flex items-center gap-1">
-      <!-- Label badge (fixed width for alignment) -->
-      <span
-        :class="['w-[32px] shrink-0 rounded px-1 text-center text-[10px] font-medium', labelClass]"
-      >
+      <!-- Label badge (label-width: fixed = 定宽居中, auto = 限宽截断左对齐) -->
+      <span :class="[labelSizeClass, labelClass]">
         {{ label }}
       </span>
 
@@ -70,19 +68,24 @@ import type { WindowStats } from '@/types'
 import { formatCompactNumber } from '@/utils/format'
 import CodexOverdraftStats from './CodexOverdraftStats.vue'
 
-const props = defineProps<{
-  label: string
-  utilization: number // Percentage (0-100+)
-  resetsAt?: string | null
-  color: 'indigo' | 'emerald' | 'purple' | 'amber'
-  windowStats?: WindowStats | null
-  showNowWhenIdle?: boolean
-  remainingCapacity?: boolean
-  overdraftActive?: boolean
-  overdraftStats?: WindowStats | null
-  overdraftStartedAt?: string | null
-  overdraftRecoverAt?: string | null
-}>()
+const props = withDefaults(
+  defineProps<{
+    label: string
+    utilization: number // Percentage (0-100+)
+    resetsAt?: string | null
+    color: 'indigo' | 'emerald' | 'purple' | 'amber'
+    windowStats?: WindowStats | null
+    showNowWhenIdle?: boolean
+    remainingCapacity?: boolean
+    overdraftActive?: boolean
+    overdraftStats?: WindowStats | null
+    overdraftStartedAt?: string | null
+    overdraftRecoverAt?: string | null
+    /** fixed: 定宽居中徽章（账号页纵向对齐）；auto: 限宽截断左对齐（监控页组合标签） */
+    labelWidth?: 'fixed' | 'auto'
+  }>(),
+  { labelWidth: 'fixed' }
+)
 
 const { t } = useI18n()
 
@@ -120,6 +123,14 @@ const labelClass = computed(() => {
   return colors[props.color]
 })
 
+// Label badge width mode: fixed 定宽保证账号页纵向对齐；auto 限宽截断适配
+// 监控页「Pro/7 天」类组合标签。百分比列在两种模式下保持不变。
+const labelSizeClass = computed(() =>
+  props.labelWidth === 'auto'
+    ? 'max-w-[72px] shrink-0 truncate rounded px-1 text-left text-[10px] font-medium'
+    : 'w-[32px] shrink-0 rounded px-1 text-center text-[10px] font-medium'
+)
+
 // Progress bar color based on utilization
 const barClass = computed(() => {
   if (props.remainingCapacity) {
@@ -130,9 +141,9 @@ const barClass = computed(() => {
     }
     return 'bg-green-500'
   }
-  if (props.utilization >= 100) {
+  if (props.utilization >= 90) {
     return 'bg-red-500'
-  } else if (props.utilization >= 80) {
+  } else if (props.utilization >= 75) {
     return 'bg-amber-500'
   } else {
     return 'bg-green-500'
@@ -149,9 +160,9 @@ const textClass = computed(() => {
     }
     return 'text-gray-600 dark:text-gray-400'
   }
-  if (props.utilization >= 100) {
+  if (props.utilization >= 90) {
     return 'text-red-600 dark:text-red-400'
-  } else if (props.utilization >= 80) {
+  } else if (props.utilization >= 75) {
     return 'text-amber-600 dark:text-amber-400'
   } else {
     return 'text-gray-600 dark:text-gray-400'
