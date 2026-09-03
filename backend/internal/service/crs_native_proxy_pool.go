@@ -6,11 +6,13 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 )
 
 var errNativeProxyPoolExhausted = errors.New("native IPv6 proxy pool exhausted")
+var nativeProxyPoolProcessMu sync.Mutex
 
 type nativeProxyPoolCandidate struct {
 	proxy Proxy

@@ -388,6 +388,13 @@ func ProvideUsageCleanupService(repo UsageCleanupRepository, timingWheel *Timing
 	return svc
 }
 
+// ProvideNativeProxyPoolService creates and starts the native IPv6 proxy pool reconciler.
+func ProvideNativeProxyPoolService(accountRepo AccountRepository, proxyRepo ProxyRepository, cfg *config.Config) *NativeProxyPoolService {
+	svc := NewNativeProxyPoolService(accountRepo, proxyRepo, cfg)
+	svc.Start()
+	return svc
+}
+
 // ProvideAccountExpiryService creates and starts AccountExpiryService.
 func ProvideAccountExpiryService(accountRepo AccountRepository) *AccountExpiryService {
 	svc := NewAccountExpiryService(accountRepo, time.Minute)
@@ -841,6 +848,7 @@ var ProviderSet = wire.NewSet(
 	ProvideBillingCacheService,
 	NewAnnouncementService,
 	NewAdminService,
+	ProvideNativeProxyPoolService,
 	NewGatewayService,
 	NewOpenAIGatewayService,
 	ProvideImageStorageSettingService,

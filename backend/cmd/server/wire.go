@@ -100,6 +100,7 @@ func provideCleanup(
 	cnProviderBalanceCheck *service.CNProviderBalanceCheckService,
 	codexVersionSync *service.OpenAICodexVersionSyncService,
 	proxyExpiry *service.ProxyExpiryService,
+	nativeProxyPool *service.NativeProxyPoolService,
 	subscriptionExpiry *service.SubscriptionExpiryService,
 	usageCleanup *service.UsageCleanupService,
 	idempotencyCleanup *service.IdempotencyCleanupService,
@@ -274,6 +275,12 @@ func provideCleanup(
 			}},
 			{"ProxyExpiryService", func() error {
 				proxyExpiry.Stop()
+				return nil
+			}},
+			{"NativeProxyPoolService", func() error {
+				if nativeProxyPool != nil {
+					nativeProxyPool.Stop()
+				}
 				return nil
 			}},
 			{"SubscriptionExpiryService", func() error {
