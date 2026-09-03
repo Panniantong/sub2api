@@ -80,6 +80,7 @@ func (s *NativeProxyPoolService) Reconcile(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("list schedulable OpenAI accounts: %w", err)
 	}
+	slog.Info("native_proxy_pool_reconcile_scan", "schedulable_accounts", len(accounts))
 	allocator, err := s.newAllocator(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("load native IPv6 proxy pool: %w", err)
@@ -121,15 +122,6 @@ func (s *NativeProxyPoolService) newAllocator(ctx context.Context) (*nativeProxy
 func (s *NativeProxyPoolService) enabled() bool {
 	return s != nil && s.cfg != nil && s.cfg.Gateway.NativeProxyPool.Enabled
 }
-
-func (s *NativeProxyPoolService) shouldAssign(account *Account) bool {
-	return s.enabled() && account != nil && account.ProxyID == nil &&
-		account.Platform == PlatformOpenAI && account.Type == AccountTypeOAuth &&
-		account.Status == StatusActive && account.Schedulable
-}
-
-// Start begins the bounded reconciliation loop. Disabled instances do not
-// start a goroutine.
 func (s *NativeProxyPoolService) Start() {
 	if !s.enabled() || s.accountRepo == nil || s.proxyRepo == nil {
 		return
@@ -137,6 +129,7 @@ func (s *NativeProxyPoolService) Start() {
 	s.startOnce.Do(func() {
 		s.stopCh = make(chan struct{})
 		s.doneCh = make(chan struct{})
+		slog.Info("native_proxy_pool_service_started")
 		go s.run()
 	})
 }
