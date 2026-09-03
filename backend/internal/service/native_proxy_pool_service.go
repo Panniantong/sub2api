@@ -122,6 +122,12 @@ func (s *NativeProxyPoolService) newAllocator(ctx context.Context) (*nativeProxy
 func (s *NativeProxyPoolService) enabled() bool {
 	return s != nil && s.cfg != nil && s.cfg.Gateway.NativeProxyPool.Enabled
 }
+func (s *NativeProxyPoolService) shouldAssign(account *Account) bool {
+	return s.enabled() && account != nil && account.ProxyID == nil &&
+		account.Platform == PlatformOpenAI && account.Type == AccountTypeOAuth &&
+		account.Status == StatusActive && account.Schedulable
+}
+
 func (s *NativeProxyPoolService) Start() {
 	if !s.enabled() || s.accountRepo == nil || s.proxyRepo == nil {
 		return
