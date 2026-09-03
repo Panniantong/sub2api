@@ -58,11 +58,13 @@ const (
 )
 
 // probeURLs 按优先级排列的内置探测 URL 列表。
-// 某些 AI API 专用代理只允许访问特定域名，因此需要多个备选。
+// HTTPS 目标会走 HTTP 代理的 CONNECT，兼容只实现 CONNECT 的 AI 专用代理；
+// HTTP 目标保留为普通正向代理的回退路径。
 var probeURLs = []struct {
 	url    string
 	parser string
 }{
+	{"https://api64.ipify.org?format=json", "ipify"},
 	{"http://ip-api.com/json/?lang=zh-CN", "ip-api"},
 	{"http://api64.ipify.org?format=json", "ipify"},
 }

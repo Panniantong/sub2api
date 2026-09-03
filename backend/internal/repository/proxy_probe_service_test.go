@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -35,6 +36,16 @@ func (s *ProxyProbeServiceSuite) TearDownTest() {
 
 func (s *ProxyProbeServiceSuite) setupProxyServer(handler http.HandlerFunc) {
 	s.proxySrv = newLocalTestServer(s.T(), handler)
+}
+
+func TestProxyProbeDefaultsToHTTPSForConnectOnlyProxies(t *testing.T) {
+	t.Parallel()
+
+	target, err := url.Parse(probeURLs[0].url)
+	require.NoError(t, err)
+	require.Equal(t, "https", target.Scheme)
+	require.Equal(t, "api64.ipify.org", target.Hostname())
+	require.Equal(t, "ipify", probeURLs[0].parser)
 }
 
 func (s *ProxyProbeServiceSuite) TestProbeProxy_InvalidProxyURL() {
