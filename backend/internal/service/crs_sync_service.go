@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -26,6 +27,7 @@ type CRSSyncService struct {
 	openaiOAuthService *OpenAIOAuthService
 	geminiOAuthService *GeminiOAuthService
 	cfg                *config.Config
+	nativeProxyPoolMu  sync.Mutex
 }
 
 func NewCRSSyncService(
@@ -271,8 +273,8 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		if s.proxyRepo == nil {
 			return nil, errors.New("native IPv6 proxy pool requires proxy repository")
 		}
-		nativeProxyPoolProcessMu.Lock()
-		defer nativeProxyPoolProcessMu.Unlock()
+		s.nativeProxyPoolMu.Lock()
+		defer s.nativeProxyPoolMu.Unlock()
 	}
 
 	var nativeProxyAllocator *nativeProxyPoolAllocator

@@ -512,12 +512,7 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err != nil {
 		return nil, err
 	}
-	createAccount := func() error { return s.accountRepo.Create(ctx, account) }
-	if s.nativeProxyPool != nil {
-		if err := s.nativeProxyPool.CreateAccount(ctx, account, createAccount); err != nil {
-			return nil, err
-		}
-	} else if err := createAccount(); err != nil {
+	if err := s.accountRepo.Create(ctx, account); err != nil {
 		return nil, err
 	}
 
