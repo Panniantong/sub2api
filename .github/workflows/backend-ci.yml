@@ -41,6 +41,35 @@ jobs:
         working-directory: backend
         run: make test-integration
 
+  protection-database:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: protection_review
+          POSTGRES_PASSWORD: local-ci-only
+          POSTGRES_DB: relay_protection_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd 'pg_isready -U protection_review -d relay_protection_test'
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      REQUIRE_DATABASE_TESTS: '1'
+      PROTECTION_TEST_DSN: postgres://protection_review:local-ci-only@127.0.0.1:5432/relay_protection_test?sslmode=disable
+      USER_CLEANUP_TEST_DSN: postgres://protection_review:local-ci-only@127.0.0.1:5432/relay_protection_test?sslmode=disable
+      INTELLIGENT_TESTS_TEST_DSN: postgres://protection_review:local-ci-only@127.0.0.1:5432/relay_protection_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Run protection, hierarchy, cleanup and queue database tests
+        working-directory: backend
+        run: go test -tags=protectionintegration ./internal/repository ./internal/service -run 'Test(AccountProtection|AccountTraffic|GroupDetailStats|ProtectionTransitionDatabase|ProtectedProxy|RateLimitObservation|UserHierarchy|UserResource|UserCleanup|Intelligent)' -count=1 -timeout=10m
+
   frontend:
     runs-on: ubuntu-latest
     steps:

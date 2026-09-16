@@ -1,5 +1,8 @@
 export default {
     accounts: {
+      antiDegradeAccountNotFound: "Account not found",
+      antiDegradeAlreadyEnabled: "Protection is enabled; previous settings can be restored",
+      antiDegradeGenericOnly: "This platform only supports generic concurrency protection",
       title: 'Account Management',
       description: 'Manage AI platform accounts and credentials',
       createAccount: 'Create Account',
@@ -77,6 +80,8 @@ export default {
         'Existing accounts only sync fields returned by CRS; missing fields keep their current values. Credentials are merged by key — keys not returned by CRS are preserved. Proxies are kept when "Sync proxies" is unchecked.',
       crsBack: 'Back',
       editAccount: 'Edit Account',
+      accountInfo: 'Account information',
+      protectionStrategy: 'Anti-degradation strategy',
       deleteAccount: 'Delete Account',
       searchAccounts: 'Search accounts...',
       notes: 'Notes',
@@ -1615,7 +1620,62 @@ export default {
       needsReauth: 'Re-auth Required',
       rateLimited: 'Rate Limited',
       usageError: 'Fetch Error'
-    },
+    ,
+    randomProxy: 'Choose a random proxy',
+  
+    randomProxyHint: 'Choose a random active proxy from the current pool for each request.',
+  
+    accountPool: 'Account pool',
+  
+    accountPoolHint: 'Premium-tier users prefer premium-pool accounts; others use all accounts.',
+  
+    poolStandard: 'Standard',
+  
+    poolPremium: 'Premium',
+  
+    antiDegrade: 'Account protection configuration',
+  
+    antiDegradeDesc: 'Compatibility protection v3 uses the original standard transport, a stable device identity, separate conversations and a concurrency cap. Known protocol conversions are allowed while lost input, tools and reasoning are blocked. Preview and revert are available.',
+  
+    antiDegradeEnabled: 'Configuration enabled',
+    antiDegradeConfiguration: 'Configuration status',
+    antiDegradeConfigurationIssue: 'Configuration issue',
+    antiDegradeUnverified: 'Configuration not checked',
+    antiDegradeNotConfigured: 'Not configured',
+    antiDegradeActiveMode: 'Active mode',
+    antiDegradePolicyVersion: 'Policy version',
+    antiDegradeIdentity: 'Account identity',
+    antiDegradeIdentityReady: 'Ready (seed hidden)',
+    antiDegradeIdentityMissing: 'Not ready',
+    antiDegradeTLSProfile: 'Transport policy',
+    antiDegradeMode1Desc: 'For OpenAI OAuth / setup-token accounts. v3 uses the original standard transport without forcing a TLS template, and retains stable account identities, separate conversations and concurrency limits. Upgrade v2 explicitly after preview; revert restores the original settings. OAuth does not support max_output_tokens, so that field is removed for compatibility. Protection does not guarantee upstream model quality.',
+    antiDegradeMode2Desc: 'Mode 2 retains the legacy policy and has not been upgraded in this release. Preview or revert its existing configuration; the new Mode 1 behavior does not apply.',
+  
+    antiDegradeApply: 'Preview protection configuration',
+    antiDegradeMode1: 'Mode 1: Compatibility protection v3',
+    antiDegradeMode2: 'Mode 2: Legacy policy',
+    antiDegradeModeLegacy: 'Original strategy (sub2 legacy)',
+    antiDegradeModeLegacyDesc: 'Use the original sub2 session identity and Node.js 24 transport. Concurrency is independently editable and preserved when switching or reverting strategies. Request integrity can be disabled, observed, or enforced separately.',
+    antiDegradeLegacyVersion: 'Original (no version)',
+  
+    antiDegradeRevert: 'Revert',
+  
+    antiDegradeNoChange: 'Nothing to change.',
+  
+    antiDegradeApplied: 'Protection configuration applied',
+  
+    antiDegradeReverted: 'Protection configuration reverted',
+  
+    antiDegradeFailed: 'Operation failed',
+  
+    antiDegradeRevertHint: 'Reverting restores the snapshot, overwriting manual changes made after applying.',
+  
+    antiDegradeChangeFingerprint: 'Account identity policy',
+  
+    antiDegradeChangeTLS: 'Pin TLS handshake profile',
+  
+    antiDegradeChangeConcurrency: 'Initial concurrency (independently editable)',
+  },
 
     // Scheduled Tests
 }

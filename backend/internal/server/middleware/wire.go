@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/google/wire"
 )
@@ -22,7 +24,12 @@ var ProviderSet = wire.NewSet(
 	NewJWTAuthMiddleware,
 	NewOptionalJWTAuthMiddleware,
 	NewAdminAuthMiddleware,
-	NewAPIKeyAuthMiddleware,
+	ProvideAPIKeyAuthMiddleware,
 	NewAuditLogMiddleware,
 	NewStepUpAuthMiddleware,
 )
+
+// Wire uses an explicit dependency while direct callers may omit tiered routing.
+func ProvideAPIKeyAuthMiddleware(apiKeys *service.APIKeyService, subscriptions *service.SubscriptionService, cfg *config.Config, tier *service.TieredRoutingService) APIKeyAuthMiddleware {
+	return NewAPIKeyAuthMiddleware(apiKeys, subscriptions, cfg, tier)
+}

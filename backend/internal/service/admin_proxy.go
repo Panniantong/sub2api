@@ -166,6 +166,7 @@ func (s *adminServiceImpl) DeleteProxy(ctx context.Context, id int64) error {
 	if count > 0 {
 		return ErrProxyInUse
 	}
+	// 分组专属代理功能已下线：分组绑定不再阻止代理删除。
 	return s.proxyRepo.Delete(ctx, id)
 }
 
@@ -191,6 +192,7 @@ func (s *adminServiceImpl) BatchDeleteProxies(ctx context.Context, ids []int64) 
 			})
 			continue
 		}
+		// 分组专属代理功能已下线：分组绑定不再阻止代理删除。
 		if err := s.proxyRepo.Delete(ctx, id); err != nil {
 			result.Skipped = append(result.Skipped, ProxyBatchDeleteSkipped{
 				ID:     id,
@@ -209,6 +211,17 @@ func (s *adminServiceImpl) GetProxyAccounts(ctx context.Context, proxyID int64) 
 }
 
 func (s *adminServiceImpl) CheckProxyExists(ctx context.Context, host string, port int, username, password string) (bool, error) {
+	return s.proxyRepo.ExistsByHostPortAuth(ctx, host, port, username, password)
+}
+
+// CheckProxyExistsWithProtocol is an optional protocol-aware variant used by
+// batch import. Keep CheckProxyExists unchanged for older service consumers.
+func (s *adminServiceImpl) CheckProxyExistsWithProtocol(ctx context.Context, protocol, host string, port int, username, password string) (bool, error) {
+	if checker, ok := s.proxyRepo.(interface {
+		ExistsByProtocolHostPortAuth(context.Context, string, string, int, string, string) (bool, error)
+	}); ok {
+		return checker.ExistsByProtocolHostPortAuth(ctx, protocol, host, port, username, password)
+	}
 	return s.proxyRepo.ExistsByHostPortAuth(ctx, host, port, username, password)
 }
 

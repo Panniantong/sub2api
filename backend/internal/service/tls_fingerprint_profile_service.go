@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/model"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
@@ -33,6 +34,7 @@ type TLSFingerprintProfileCache interface {
 type TLSFingerprintProfileService struct {
 	repo  TLSFingerprintProfileRepository
 	cache TLSFingerprintProfileCache
+	cfg   *config.Config
 
 	// 本地 ID→Profile 映射缓存，用于 DoWithTLS 热路径快速查找
 	localCache map[int64]*model.TLSFingerprintProfile
@@ -43,10 +45,16 @@ type TLSFingerprintProfileService struct {
 func NewTLSFingerprintProfileService(
 	repo TLSFingerprintProfileRepository,
 	cache TLSFingerprintProfileCache,
+	cfgs ...*config.Config,
 ) *TLSFingerprintProfileService {
+	var cfg *config.Config
+	if len(cfgs) > 0 {
+		cfg = cfgs[0]
+	}
 	svc := &TLSFingerprintProfileService{
 		repo:       repo,
 		cache:      cache,
+		cfg:        cfg,
 		localCache: make(map[int64]*model.TLSFingerprintProfile),
 	}
 
@@ -177,6 +185,19 @@ func (s *TLSFingerprintProfileService) getRandomProfile() *tlsfingerprint.Profil
 func (s *TLSFingerprintProfileService) ResolveTLSProfile(account *Account) *tlsfingerprint.Profile {
 	if account == nil || !account.IsTLSFingerprintEnabled() {
 		return nil
+	}
+	// The account flag is an explicit opt-in, while the global config is the
+	// deployment-level kill switch. Keep the nil-config behavior for isolated
+	// tests and non-server callers that do not load application config.
+	if s != nil && s.cfg != nil && !s.cfg.Gateway.TLSFingerprint.Enabled {
+		return nil
+	}
+	if account.Extra != nil {
+		if name, ok := account.Extra["tls_fingerprint_builtin"].(string); ok {
+			if p := tlsfingerprint.BuiltinProfile(name); p != nil {
+				return p
+			}
+		}
 	}
 	id := account.GetTLSFingerprintProfileID()
 	if id > 0 {

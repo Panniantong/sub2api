@@ -33,10 +33,15 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	attempt int,
 	lastFailureReason string,
 	agentTaskRecoveryTried *bool,
-) (*OpenAIForwardResult, error) {
+) (trafficResult *OpenAIForwardResult, trafficErr error) {
 	if s == nil || account == nil {
 		return nil, wrapOpenAIWSFallback("invalid_state", errors.New("service or account is nil"))
 	}
+	ctx, permit, admissionErr := beginAccountTrafficTurn(ctx, s.httpUpstream, account)
+	if admissionErr != nil {
+		return nil, admissionErr
+	}
+	defer func() { finishAccountTrafficTurn(permit, trafficErr) }()
 	responseModelObserver := &upstreamResponseModelObserver{}
 
 	wsURL, err := s.buildOpenAIResponsesWSURL(account)
@@ -62,7 +67,11 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	)
 
 	payload := s.buildOpenAIWSCreatePayload(reqBody, account)
-	payloadStrategy, removedKeys := applyOpenAIWSRetryPayloadStrategy(payload, attempt)
+	payloadStrategy := "mode1_preserve"
+	var removedKeys []string
+	if !isMode1ProtectionEnabled(account) {
+		payloadStrategy, removedKeys = applyOpenAIWSRetryPayloadStrategy(payload, attempt)
+	}
 	turnState := ""
 	turnMetadata := ""
 	if c != nil && c.Request != nil {
@@ -71,6 +80,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	}
 	setOpenAIWSTurnMetadata(payload, turnMetadata)
 	applyStagedCodexFingerprintClientMetadata(c, account, payload)
+	if err := validateMode1StagedRequest(c, account, payloadAsJSONBytes(payload)); err != nil {
+		return nil, err
+	}
 	previousResponseID := openAIWSPayloadString(payload, "previous_response_id")
 	previousResponseIDKind := ClassifyOpenAIPreviousResponseIDKind(previousResponseID)
 	promptCacheKey := strings.TrimSpace(clientPromptCacheKey)

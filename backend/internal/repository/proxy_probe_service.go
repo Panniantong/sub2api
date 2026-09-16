@@ -7,11 +7,13 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/httpclient"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
@@ -53,7 +55,7 @@ func NewProxyExitInfoProber(cfg *config.Config) service.ProxyExitInfoProber {
 }
 
 const (
-	defaultProxyProbeTimeout          = 10 * time.Second
+	defaultProxyProbeTimeout          = 15 * time.Second // 放宽至15s以兼容慢速代理（如geo.miyaip 8s延迟）
 	defaultProxyProbeResponseMaxBytes = int64(1024 * 1024)
 )
 
@@ -81,38 +83,146 @@ type proxyProbeService struct {
 }
 
 func (s *proxyProbeService) ProbeProxy(ctx context.Context, proxyURL string) (*service.ProxyExitInfo, int64, error) {
-	client, err := httpclient.GetClient(httpclient.Options{
-		ProxyURL:           proxyURL,
-		Timeout:            defaultProxyProbeTimeout,
-		InsecureSkipVerify: s.insecureSkipVerify,
-		ValidateResolvedIP: s.validateResolvedIP,
-		AllowPrivateHosts:  s.allowPrivateHosts,
-	})
-	if err != nil {
-		return nil, 0, fmt.Errorf("failed to create proxy client: %w", err)
+	// 兼容多格式输入，规范化后再探测
+	normalized := strings.TrimSpace(proxyURL)
+	if _, _, err := proxyurl.Parse(normalized); err != nil {
+		if t, p, ferr := proxyurl.ParseFlexible(normalized, "http"); ferr == nil && p != nil {
+			normalized = t
+		}
 	}
-
+	candidates := buildProxyCandidates(normalized)
 	var lastErr error
-	if len(s.configuredProbeURLs) > 0 {
-		for _, probe := range s.configuredProbeURLs {
-			exitInfo, latencyMs, err := s.probeWithURL(ctx, client, probe.url, probe.parser)
-			if err == nil {
-				return exitInfo, latencyMs, nil
+	for idx, cand := range candidates {
+		client, err := httpclient.GetClient(httpclient.Options{
+			ProxyURL:           cand,
+			Timeout:            defaultProxyProbeTimeout,
+			InsecureSkipVerify: s.insecureSkipVerify,
+			ValidateResolvedIP: s.validateResolvedIP,
+			AllowPrivateHosts:  s.allowPrivateHosts,
+		})
+		if err != nil {
+			// 客户端构造失败只与配置有关（不支持的协议/非法参数），与候选
+			// 协议无关，重试其他候选无意义，直接失败。
+			lastErr = fmt.Errorf("failed to create proxy client for %s: %w", urlRedacted(cand), err)
+			break
+		}
+		var probeErr error
+		if len(s.configuredProbeURLs) > 0 {
+			for _, probe := range s.configuredProbeURLs {
+				exitInfo, latencyMs, err := s.probeWithURL(ctx, client, probe.url, probe.parser)
+				if err == nil {
+					return exitInfo, latencyMs, nil
+				}
+				probeErr = err
 			}
-			lastErr = err
+		} else {
+			for _, probe := range probeURLs {
+				exitInfo, latencyMs, err := s.probeWithURL(ctx, client, probe.url, probe.parser)
+				if err == nil {
+					return exitInfo, latencyMs, nil
+				}
+				probeErr = err
+			}
 		}
-		return nil, 0, fmt.Errorf("all probe URLs failed, last error: %w", lastErr)
-	}
-
-	for _, probe := range probeURLs {
-		exitInfo, latencyMs, err := s.probeWithURL(ctx, client, probe.url, probe.parser)
-		if err == nil {
-			return exitInfo, latencyMs, nil
+		lastErr = probeErr
+		// 仅当原始协议为连接层失败时才尝试回退协议；业务层失败（503、JSON）说明代理已连通，无需换协议
+		if idx == 0 {
+			if !isProxyConnectError(lastErr) {
+				break
+			}
 		}
-		lastErr = err
 	}
-
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no proxy candidates")
+	}
 	return nil, 0, fmt.Errorf("all probe URLs failed, last error: %w", lastErr)
+}
+
+// buildProxyCandidates 基于原始代理URL生成多协议候选，顺序：原始优先，然后 http/socks5h/https 互备
+func buildProxyCandidates(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return []string{""}
+	}
+	_, parsed, err := proxyurl.Parse(raw)
+	if err != nil {
+		// 若严格解析失败，尝试柔性解析后重建
+		if t, p, ferr := proxyurl.ParseFlexible(raw, "http"); ferr == nil && p != nil {
+			parsed = p
+			raw = t
+		} else {
+			return []string{raw}
+		}
+	}
+	origScheme := strings.ToLower(parsed.Scheme)
+	// 首候选使用归一化形式（Parse 已将 socks5 升级为 socks5h，确保远端 DNS 解析）。
+	// 直接用 raw 会导致 socks5:// 输入首试弱语义（客户端本地解析 DNS）。
+	raw = parsed.String()
+	// 已去重
+	seen := map[string]bool{raw: true}
+	cands := []string{raw}
+	// 定义回退顺序：http<->socks5h, https<->socks5h, socks5h->http
+	var alts []string
+	switch origScheme {
+	case "http":
+		alts = []string{"socks5h", "https"}
+	case "https":
+		alts = []string{"http", "socks5h"}
+	case "socks5", "socks5h":
+		alts = []string{"http", "https"}
+	default:
+		alts = []string{"http", "socks5h"}
+	}
+	for _, alt := range alts {
+		dup := *parsed
+		dup.Scheme = alt
+		s := dup.String()
+		if !seen[s] {
+			seen[s] = true
+			cands = append(cands, s)
+		}
+	}
+	return cands
+}
+
+func urlRedacted(raw string) string {
+	if u, err := url.Parse(raw); err == nil && u != nil {
+		return u.Redacted()
+	}
+	if len(raw) > 12 {
+		return raw[:3] + "***" + raw[len(raw)-3:]
+	}
+	return "***"
+}
+
+func isProxyConnectError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	// 传输层统一包装为 "proxy connection failed: ..."（probeWithURL），直接判定。
+	if strings.HasPrefix(msg, "proxy connection failed") {
+		return true
+	}
+	// 业务层失败（状态码/解析）即使正文恰好含有连接关键字也不换协议。
+	if strings.HasPrefix(msg, "request failed with status") ||
+		strings.HasPrefix(msg, "failed to parse") ||
+		strings.HasPrefix(msg, "failed to read response") ||
+		strings.Contains(msg, "ip-api request failed") ||
+		strings.Contains(msg, "ipify") ||
+		strings.Contains(msg, "chatgpt-trace") {
+		return false
+	}
+	lower := strings.ToLower(msg)
+	return strings.Contains(lower, "proxyconnect") ||
+		strings.Contains(lower, "connection refused") ||
+		strings.Contains(lower, "connection reset") ||
+		strings.Contains(lower, "timeout") ||
+		strings.Contains(lower, "deadline exceeded") ||
+		strings.Contains(lower, "no such host") ||
+		strings.Contains(lower, "tls:") ||
+		strings.Contains(lower, "certificate") ||
+		strings.Contains(lower, "eof")
 }
 
 func (s *proxyProbeService) probeWithURL(ctx context.Context, client *http.Client, url string, parser string) (*service.ProxyExitInfo, int64, error) {

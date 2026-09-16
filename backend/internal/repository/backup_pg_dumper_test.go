@@ -3,7 +3,9 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"regexp"
 	"testing"
@@ -52,7 +54,7 @@ func TestPgDumperHoldsMigrationLockThroughReaderClose(t *testing.T) {
 		require.Equal(t, "pg_dump", name)
 		require.Contains(t, args, "--clean")
 		require.NoError(t, mock.ExpectationsWereMet(), "migration lock must be acquired before pg_dump is created")
-		return exec.CommandContext(ctx, "sh", "-c", "printf backup-data")
+		return backupTestCommand(ctx, "success")
 	})
 	mock = createdMock
 	expectBackupMigrationLock(mock)
@@ -101,7 +103,7 @@ func TestPgDumperReleasesMigrationLockWhenProcessStartFails(t *testing.T) {
 
 func TestPgDumperReleasesMigrationLockWhenProcessFails(t *testing.T) {
 	dumper, mock := newTestPgDumper(t, func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
-		return exec.CommandContext(ctx, "sh", "-c", "printf partial-backup; exit 7")
+		return backupTestCommand(ctx, "failure")
 	})
 	expectBackupMigrationLock(mock)
 
@@ -117,7 +119,7 @@ func TestPgDumperReleasesMigrationLockWhenProcessFails(t *testing.T) {
 
 func TestPgDumperReportsUnlockFailureAndDiscardsConnection(t *testing.T) {
 	dumper, mock := newTestPgDumper(t, func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
-		return exec.CommandContext(ctx, "sh", "-c", "printf backup-data")
+		return backupTestCommand(ctx, "success")
 	})
 	expectBackupMigrationLock(mock)
 
@@ -130,6 +132,23 @@ func TestPgDumperReportsUnlockFailureAndDiscardsConnection(t *testing.T) {
 		WillReturnError(errors.New("unlock unavailable"))
 	require.ErrorContains(t, reader.Close(), "release backup migration lock")
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func backupTestCommand(ctx context.Context, mode string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestBackupHelperProcess$")
+	cmd.Env = append(os.Environ(), "SUB2_BACKUP_TEST_PROCESS="+mode)
+	return cmd
+}
+
+func TestBackupHelperProcess(t *testing.T) {
+	switch os.Getenv("SUB2_BACKUP_TEST_PROCESS") {
+	case "success":
+		fmt.Print("backup-data")
+		os.Exit(0)
+	case "failure":
+		fmt.Print("partial-backup")
+		os.Exit(7)
+	}
 }
 
 func TestPgDumperDoesNotStartProcessWhenMigrationLockFails(t *testing.T) {

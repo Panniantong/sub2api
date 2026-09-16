@@ -553,7 +553,7 @@ func TestOpenAIWSErrorHTTPStatusFromRaw_UsageLimitReachedIs429(t *testing.T) {
 	require.Equal(t, http.StatusTooManyRequests, openAIWSErrorHTTPStatusFromRaw("rate_limit_exceeded", ""))
 }
 
-func TestOpenAIWSRateLimitFailoverError_OAuthKeepsSameAccountDeadline(t *testing.T) {
+func TestOpenAIWSRateLimitFailoverError_OAuthHonorsRetryAfterCooldown(t *testing.T) {
 	svc := &OpenAIGatewayService{}
 	headers := http.Header{"Retry-After": []string{"30"}}
 	body := []byte(`{"error":{"type":"rate_limit_error","message":"limited"}}`)
@@ -563,10 +563,9 @@ func TestOpenAIWSRateLimitFailoverError_OAuthKeepsSameAccountDeadline(t *testing
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
 	}, headers, body, "limited")
-	require.True(t, oauthErr.RetryableOnSameAccount)
-	require.False(t, oauthErr.SameAccountRetryDeadline.IsZero())
-	require.Positive(t, oauthErr.SameAccountRetryDelay)
-	require.LessOrEqual(t, oauthErr.SameAccountRetryDelay, openAIOAuth429MaxRetryDelay)
+	require.False(t, oauthErr.RetryableOnSameAccount)
+	require.True(t, oauthErr.SameAccountRetryDeadline.IsZero())
+	require.Zero(t, oauthErr.SameAccountRetryDelay)
 	require.Equal(t, body, oauthErr.ResponseBody)
 	require.Equal(t, "30", oauthErr.ResponseHeaders.Get("Retry-After"))
 

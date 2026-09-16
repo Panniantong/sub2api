@@ -57,6 +57,9 @@ type APIKeyAuthUserSnapshot struct {
 
 // APIKeyAuthGroupSnapshot 分组快照
 type APIKeyAuthGroupSnapshot struct {
+	SecurityPolicyEnabled           bool                          `json:"security_policy_enabled"`
+	SecurityPolicyMode              string                        `json:"security_policy_mode"`
+	SecurityPolicyEmailEnabled      bool                          `json:"security_policy_email_enabled"`
 	ID                              int64                         `json:"id"`
 	Name                            string                        `json:"name"`
 	Platform                        string                        `json:"platform"`

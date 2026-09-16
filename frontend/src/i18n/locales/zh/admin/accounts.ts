@@ -1,5 +1,8 @@
 export default {
     accounts: {
+      antiDegradeAccountNotFound: "账号不存在",
+      antiDegradeAlreadyEnabled: "已启用防护，可还原原设置",
+      antiDegradeGenericOnly: "此平台不支持指纹收敛，仅适用通用并发保护",
       title: '账号管理',
       description: '管理 AI 平台账号和 Cookie',
       createAccount: '添加账号',
@@ -76,6 +79,8 @@ export default {
         '已有账号仅同步 CRS 返回的字段，缺失字段保持原值；凭据按键合并，不会清空未下发的键；未勾选"同步代理"时保留原有代理。',
       crsBack: '返回',
       editAccount: '编辑账号',
+      accountInfo: '账号信息',
+      protectionStrategy: '防降智策略',
       deleteAccount: '删除账号',
       searchAccounts: '搜索账号...',
       notes: '备注',
@@ -1587,7 +1592,62 @@ export default {
         usageTrend: '30天费用与请求趋势',
         noData: '该账号暂无使用数据'
       }
-    },
+    ,
+    randomProxy: '随机选择代理',
+  
+    randomProxyHint: '每次请求从当前可用的代理池中随机选择一个代理。',
+  
+    accountPool: '账号池',
+  
+    accountPoolHint: '高级用户优先使用优选池账号，其他用户使用全部账号。',
+  
+    poolStandard: '普通池',
+  
+    poolPremium: '优选池',
+  
+    antiDegrade: '账号保护配置',
+  
+    antiDegradeDesc: '兼容保护 v3 沿用初代标准传输，稳定账号设备身份、隔离不同会话并限制突发并发。允许已知协议转换，阻止意外丢失输入、工具或推理内容。应用前可预览，应用后可还原。',
+  
+    antiDegradeEnabled: '配置已启用',
+    antiDegradeConfiguration: '配置状态',
+    antiDegradeConfigurationIssue: '配置异常',
+    antiDegradeUnverified: '配置尚未核对',
+    antiDegradeNotConfigured: '未配置',
+    antiDegradeActiveMode: '当前模式',
+    antiDegradePolicyVersion: '策略版本',
+    antiDegradeIdentity: '账号身份',
+    antiDegradeIdentityReady: '已就绪（种子不展示）',
+    antiDegradeIdentityMissing: '未就绪',
+    antiDegradeTLSProfile: '传输策略',
+    antiDegradeMode1Desc: '适用于 OpenAI OAuth / setup-token。v3 使用初代标准传输，不强制 TLS 模板；保留账号身份种子、独立会话和并发上限。v2 可在预览后显式升级，还原仍恢复首次启用前的配置。OAuth 不支持 max_output_tokens，该字段会按接口能力移除；保护配置不保证上游模型质量。',
+    antiDegradeMode2Desc: '模式二保留旧方案，本轮未升级。可预览原有配置或还原，不包含模式一新版的保证。',
+  
+    antiDegradeApply: '预览保护配置',
+    antiDegradeMode1: '模式一：兼容保护 v3',
+    antiDegradeMode2: '模式二：旧方案',
+    antiDegradeModeLegacy: '初代策略（sub2初代）',
+    antiDegradeModeLegacyDesc: '沿用 sub2 初代的 session 身份与 Node.js 24 传输。并发可独立修改，切换或还原策略保留当前并发。请求完整性检查可单独选择关闭、观察或拦截。',
+    antiDegradeLegacyVersion: '初代（无版本号）',
+  
+    antiDegradeRevert: '还原',
+  
+    antiDegradeNoChange: '无需改动。',
+  
+    antiDegradeApplied: '保护配置已应用',
+  
+    antiDegradeReverted: '保护配置已还原',
+  
+    antiDegradeFailed: '操作失败',
+  
+    antiDegradeRevertHint: '还原将恢复快照，会覆盖应用后手工改动的值。',
+  
+    antiDegradeChangeFingerprint: '账号身份策略',
+  
+    antiDegradeChangeTLS: '固定 TLS 握手特征',
+  
+    antiDegradeChangeConcurrency: '设置初始并发（可独立修改）',
+  },
 
     // Scheduled Tests
 }

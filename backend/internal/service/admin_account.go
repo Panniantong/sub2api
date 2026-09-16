@@ -320,6 +320,10 @@ func (s *adminServiceImpl) DuplicateAccount(ctx context.Context, id int64, actor
 	if err != nil {
 		return nil, fmt.Errorf("normalize duplicate account extra: %w", err)
 	}
+	accountExtra = NormalizeProxyModeExtra(accountExtra)
+	if err := ValidateUpstreamRequestIDHeaderExtra(accountExtra); err != nil {
+		return nil, fmt.Errorf("validate duplicate account extra: %w", err)
+	}
 	if err := NormalizeHeaderOverrideCredentials(input.Credentials); err != nil {
 		return nil, err
 	}
@@ -483,6 +487,7 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err != nil {
 		return nil, err
 	}
+	accountExtra = NormalizeProxyModeExtra(accountExtra)
 	if err := ValidateUpstreamRequestIDHeaderExtra(accountExtra); err != nil {
 		return nil, err
 	}
@@ -520,6 +525,11 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	account, err := buildAccountForCreate(input, accountExtra)
 	if err != nil {
 		return nil, err
+	}
+	// Random proxy mode owns proxy selection at request time; never persist a
+	// simultaneously supplied fixed proxy association.
+	if account.IsRandomProxy() {
+		account.ProxyID = nil
 	}
 	if err := s.ValidateAccountGroupBindings(ctx, groupIDs); err != nil {
 		return nil, err
@@ -566,6 +576,15 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *UpdateAccountInput) (*Account, error) {
 	account, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {
+		return nil, err
+	}
+	if !ProtectionManagedWrite(ctx) && ProtectedProxyModeConflict(account, input.Extra) {
+		return nil, ErrProtectedProxyModeChange
+	}
+	if err := validateRequestIntegrityExtra(input.Extra); err != nil {
+		return nil, err
+	}
+	if _, err := ParseAccountTrafficPolicy(input.Extra); err != nil {
 		return nil, err
 	}
 	var normalizedExtra map[string]any
@@ -685,7 +704,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 				normalizedExtra[key] = v
 			}
 		}
+		normalizedExtra = preserveMode1ManagedExtra(ctx, account, normalizedExtra)
 		normalizedExtra = prepareCodexFingerprintExtraForUpdate(account, normalizedExtra)
+		normalizedExtra = NormalizeProxyModeExtra(normalizedExtra)
 		account.Extra = normalizedExtra
 		if account.Platform == PlatformAntigravity && wasOveragesEnabled && !account.IsOveragesEnabled() {
 			delete(account.Extra, "antigravity_credits_overages") // 清理旧版 overages 运行态
@@ -740,11 +761,18 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	// 影子代理恒继承母账号(由 propagateProxyToShadows 同步),不接受独立编辑——外审 B/P1;
 	// 否则要等母账号下次改 proxy 才被覆盖,期间影子会出现"有时继承、有时独立"的漂移。
 	if input.ProxyID != nil && !account.IsCredentialShadow() {
+		randomProxyRequested := input.Extra != nil && account.IsRandomProxy()
 		// 0 表示清除代理（前端发送 0 而不是 null 来表达清除意图）
 		if *input.ProxyID == 0 {
 			account.ProxyID = nil
+			if !randomProxyRequested && account.Extra != nil {
+				delete(account.Extra, ProxyModeExtraKey)
+			}
 		} else {
 			account.ProxyID = input.ProxyID
+			if account.Extra != nil {
+				delete(account.Extra, ProxyModeExtraKey)
+			}
 		}
 		account.Proxy = nil // 清除关联对象，防止 GORM Save 时根据 Proxy.ID 覆盖 ProxyID
 	}
@@ -828,6 +856,10 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		}
 	}
 
+	BoundAccountProtectionConcurrency(account)
+	if err := ValidateAccountProtectionConfiguration(account); err != nil {
+		return nil, err
+	}
 	billingSettingsAppliedAtomically := false
 	updater := s.accountBillingRepo
 	if updater == nil {
@@ -893,6 +925,21 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 // UpdateAccountExtra 仅对 Extra JSONB 做 key 级合并，避免覆盖其它运行态键
 // （如 model_rate_limits / passive_usage_* 等）。
 func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, updates map[string]any) error {
+	if _, err := ParseAccountTrafficPolicy(updates); err != nil {
+		return err
+	}
+	if err := validateRequestIntegrityExtra(updates); err != nil {
+		return err
+	}
+	if hasMode1ManagedUpdates(updates) {
+		account, err := s.accountRepo.GetByID(ctx, id)
+		if err != nil {
+			return err
+		}
+		if isMode1ProtectionRequested(account) {
+			return infraerrors.BadRequest("MODE1_MANAGED_FIELDS", "模式一策略字段请通过专用应用/还原接口修改")
+		}
+	}
 	updates = sanitizedCodexFingerprintExtraUpdates(updates)
 	updates = stripOpenAIAutoResetCreditManagedExtra(updates, true)
 	delete(updates, UpstreamBillingProbeEnabledExtraKey)
@@ -901,6 +948,10 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 	delete(updates, OllamaCloudUsageSessionExtraKey)
 	delete(updates, OllamaCloudUsageAutoRefreshExtraKey)
 	delete(updates, OllamaCloudUsageSnapshotExtraKey)
+	updates = NormalizeProxyModeExtra(updates)
+	if err := ValidateUpstreamRequestIDHeaderExtra(updates); err != nil {
+		return err
+	}
 	if _, exists := updates[openAILongContextBillingEnabledKey]; exists {
 		account, err := s.accountRepo.GetByID(ctx, id)
 		if err != nil {
@@ -928,6 +979,16 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	delete(input.Extra, OllamaCloudUsageSessionExtraKey)
 	delete(input.Extra, OllamaCloudUsageAutoRefreshExtraKey)
 	delete(input.Extra, OllamaCloudUsageSnapshotExtraKey)
+	input.Extra = NormalizeProxyModeExtra(input.Extra)
+	if err := ValidateUpstreamRequestIDHeaderExtra(input.Extra); err != nil {
+		return nil, err
+	}
+	// Random mode and a fixed proxy are mutually exclusive. Normalize the bulk
+	// request early so repository writes and shadow propagation clear proxy_id.
+	if mode, ok := input.Extra[ProxyModeExtraKey].(string); ok && strings.EqualFold(strings.TrimSpace(mode), ProxyModeRandom) {
+		proxyID := int64(0)
+		input.ProxyID = &proxyID
+	}
 
 	if len(input.AccountIDs) == 0 && input.Filters != nil {
 		accountIDs, err := s.resolveBulkUpdateTargetIDs(ctx, input.Filters)
@@ -960,15 +1021,31 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	}
 
 	needMixedChannelCheck := input.GroupIDs != nil && !input.SkipMixedChannelCheck
+	if _, err := ParseAccountTrafficPolicy(input.Extra); err != nil {
+		return nil, err
+	}
+	if err := validateRequestIntegrityExtra(input.Extra); err != nil {
+		return nil, err
+	}
 
 	// 预取所有目标账号，供凭据守卫/代理守卫/混合渠道检查共用，避免多次 DB 查询。
 	var cachedTargets []*Account
-	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || openAISettings.any() || input.ProbeEnabled != nil || input.RateMultiplier != nil {
+	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || openAISettings.any() || input.ProbeEnabled != nil || input.RateMultiplier != nil || hasMode1ManagedUpdates(input.Extra) {
 		loaded, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
 		if err != nil {
 			return nil, err
 		}
 		cachedTargets = loaded
+	}
+	if hasMode1ManagedUpdates(input.Extra) {
+		for _, a := range cachedTargets {
+			if ProtectedProxyModeConflict(a, input.Extra) {
+				return nil, ErrProtectedProxyModeChange
+			}
+			if isMode1ProtectionRequested(a) {
+				return nil, infraerrors.BadRequest("MODE1_MANAGED_FIELDS", "请先还原模式一，再批量修改其策略字段")
+			}
+		}
 	}
 	targetsByID := make(map[int64]*Account, len(cachedTargets))
 	for _, account := range cachedTargets {
@@ -1292,6 +1369,18 @@ func (s *adminServiceImpl) ClearAccountError(ctx context.Context, id int64) (*Ac
 
 func (s *adminServiceImpl) SetAccountError(ctx context.Context, id int64, errorMsg string) error {
 	return s.accountRepo.SetError(ctx, id, errorMsg)
+}
+
+// BackfillAccountCredentialsEncryption 加密一批历史明文账号凭据（幂等）。
+// 仓储层无该能力（如测试替身）时返回 0，不报错。
+func (s *adminServiceImpl) BackfillAccountCredentialsEncryption(ctx context.Context, limit int) (int64, error) {
+	repo, ok := s.accountRepo.(interface {
+		BackfillCredentialsEncryption(context.Context, int) (int64, error)
+	})
+	if !ok || repo == nil {
+		return 0, nil
+	}
+	return repo.BackfillCredentialsEncryption(ctx, limit)
 }
 
 func (s *adminServiceImpl) SetAccountSchedulable(ctx context.Context, id int64, schedulable bool) (*Account, error) {

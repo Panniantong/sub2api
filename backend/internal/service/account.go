@@ -2,6 +2,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"hash/fnv"
@@ -82,6 +83,53 @@ type Account struct {
 	headerOverrideCacheRawPtr         uintptr
 	headerOverrideCacheRawLen         int
 	headerOverrideCacheRawSig         uint64
+}
+
+// ProxyModeExtraKey stores the account proxy selection mode in the existing
+// JSONB extra column. Keeping this in extra preserves compatibility with
+// existing installations without requiring an account table migration.
+const ProxyModeExtraKey = "proxy_mode"
+
+const ProxyModeRandom = "random"
+
+// NormalizeProxyModeExtra enforces the proxy_mode whitelist on an account
+// extra map: "random" (case/whitespace-insensitive) is canonicalized to
+// ProxyModeRandom, any other value is dropped so it can never persist.
+// A nil map is returned as-is. The same whitelist is enforced at the DB
+// layer by chk_accounts_extra_proxy_mode; this keeps the write path and the
+// constraint from drifting apart.
+func NormalizeProxyModeExtra(extra map[string]any) map[string]any {
+	if extra == nil {
+		return nil
+	}
+	raw, ok := extra[ProxyModeExtraKey]
+	if !ok {
+		return extra
+	}
+	if mode, ok := raw.(string); ok && strings.EqualFold(strings.TrimSpace(mode), ProxyModeRandom) {
+		extra[ProxyModeExtraKey] = ProxyModeRandom
+		return extra
+	}
+	delete(extra, ProxyModeExtraKey)
+	return extra
+}
+
+// IsRandomProxy reports whether the account should use a randomly selected
+// active proxy for each newly selected request. The value is deliberately
+// strict: malformed user data never enables an unexpected mode.
+func (a *Account) IsRandomProxy() bool {
+	if a == nil || a.Extra == nil {
+		return false
+	}
+	mode, ok := a.Extra[ProxyModeExtraKey].(string)
+	return ok && strings.EqualFold(strings.TrimSpace(mode), ProxyModeRandom)
+}
+
+// RandomProxySelector is implemented by repositories that can choose one
+// currently active, non-expired proxy. It is optional so narrow unit-test
+// repositories remain source-compatible.
+type RandomProxySelector interface {
+	SelectRandomActiveProxy(ctx context.Context) (*Proxy, error)
 }
 
 type OpenAIEndpointCapability string
@@ -285,17 +333,13 @@ func (a *Account) IsDeepseek() bool {
 	return a.Platform == PlatformDeepseek
 }
 
-func (a *Account) IsMiniMax() bool {
-	return a.Platform == PlatformMiniMax
-}
-
-// IsCNProvider 报告是否为国产 OpenAI 兼容供应商（kimi/zhipu/deepseek/minimax）。
+// IsCNProvider 报告是否为国产 OpenAI 兼容供应商（kimi/zhipu/deepseek）。
 func (a *Account) IsCNProvider() bool {
 	return a != nil && IsCNProvider(a.Platform)
 }
 
 // IsOpenAICompatible 报告账号是否走 OpenAI 网关（OpenAI 协议族）。
-// openai/grok 原生走 OpenAI 网关；国产供应商同为 OpenAI Chat Completions
+// openai/grok 原生走 OpenAI 网关；kimi/zhipu/deepseek 同为 OpenAI Chat Completions
 // 兼容上游，也经 OpenAI 网关转发。
 func (a *Account) IsOpenAICompatible() bool {
 	return a != nil && (a.Platform == PlatformOpenAI || a.Platform == PlatformGrok || a.IsCNProvider())
@@ -1392,7 +1436,7 @@ func (a *Account) IsCodingPlan() bool {
 
 // GetAPIProtocol 返回国产供应商账号的上游 API 协议。存储于
 // credentials["api_protocol"]；缺失或与平台不匹配时回退 chat_completions
-// （与既有行为完全一致）。responses 协议仅 deepseek / kimi / minimax 支持（官方原生
+// （与既有行为完全一致）。responses 协议仅 deepseek / kimi 支持（官方原生
 // Responses 端点，适配 Codex）；zhipu 无此端点。
 func (a *Account) GetAPIProtocol() string {
 	if a == nil || !a.IsCNProvider() {
@@ -1415,7 +1459,7 @@ func (a *Account) GetAPIProtocol() string {
 
 // SupportsNativeCNResponses 报告该国产供应商是否提供原生 Responses 端点。
 // DeepSeek 官方为 /responses（无 /v1）；Kimi 按量付费与 Coding Plan 均为
-// /v1/responses（moonshot.cn / kimi.com/coding）；MiniMax 为 /v1/responses。
+// /v1/responses（moonshot.cn / kimi.com/coding）。
 func (a *Account) SupportsNativeCNResponses() bool {
 	if a == nil {
 		return false
@@ -1566,8 +1610,6 @@ func (a *Account) GetOpenAIFormatBaseURL() string {
 		return DefaultZhipuPayGBaseURL
 	case PlatformDeepseek:
 		return DefaultDeepseekBaseURL
-	case PlatformMiniMax:
-		return DefaultMiniMaxBaseURL
 	default:
 		return a.GetOpenAIBaseURL()
 	}
@@ -1582,23 +1624,22 @@ func (a *Account) GetCNAPIKey() string {
 	return a.GetCredential("api_key")
 }
 
-// GetCodingPlanProvider 根据 base_url 识别 Coding Plan 供应商（kimi / zhipu / minimax），
+// GetCodingPlanProvider 根据 base_url 识别 Coding Plan 供应商（kimi / zhipu），
 // 用于路由到对应的额度查询端点。非 coding 模式或无法识别时返回空串。
-// 只认官方域名：自定义中转不得把第三方 Key 发往厂商官方额度端点。
+// 判定规则与 cc-switch coding_plan.rs::detect_provider 保持一致。
 func (a *Account) GetCodingPlanProvider() string {
 	if a == nil || a.GetAccountMode() != AccountModeCoding {
 		return ""
 	}
 	baseURL := strings.ToLower(a.GetOpenAIBaseURL())
+	if parsed, err := url.Parse(baseURL); a.Platform == PlatformMiniMax && err == nil && (parsed.Hostname() == "api.minimaxi.com" || parsed.Hostname() == "api.minimax.io") {
+		return PlatformMiniMax
+	}
 	switch {
 	case strings.Contains(baseURL, "api.kimi.com/coding"):
 		return PlatformKimi
 	case strings.Contains(baseURL, "bigmodel.cn"), strings.Contains(baseURL, "api.z.ai"):
 		return PlatformZhipu
-	case strings.Contains(baseURL, "minimax.io"),
-		strings.Contains(baseURL, "minimaxi.com"),
-		strings.Contains(baseURL, "minimax.com"):
-		return PlatformMiniMax
 	default:
 		return ""
 	}
@@ -1857,10 +1898,9 @@ func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapa
 }
 
 // GrokMediaGenerationEligibility reports whether a Grok account may receive
-// new image/video generation requests. Explicit evidence of a forbidden or
-// free account blocks media, while an incomplete successful billing response
-// remains eligible for backwards compatibility. An explicit operator
-// override takes precedence over probe data.
+// new image/video generation requests. OAuth media fails closed unless billing
+// observations provide positive paid-entitlement evidence. An explicit
+// operator override takes precedence over probe data.
 func (a *Account) GrokMediaGenerationEligibility() (bool, string) {
 	if a == nil || !a.IsGrok() {
 		return false, "not_grok"
@@ -1886,12 +1926,7 @@ func (a *Account) GrokMediaGenerationEligibility() (bool, string) {
 		return false, "billing_free_tier"
 	}
 	if !grokBillingHasAuthoritativeQuota(billing) {
-		// Billing endpoints can return 200 with an account-specific schema that
-		// omits plan/quota fields (for example, some SuperGrok accounts). An
-		// incomplete observation is not proof of ineligibility; keep the account
-		// routable and expose the reason for diagnostics. Operators can still
-		// quarantine a known-bad account with grok_media_eligible=false.
-		return true, "billing_inconclusive"
+		return false, "billing_inconclusive"
 	}
 	return true, "eligible"
 }
@@ -2342,11 +2377,11 @@ func (a *Account) IsAnthropicOAuthOrSetupToken() bool {
 }
 
 // IsTLSFingerprintEnabled 检查是否启用 TLS 指纹伪装
-// 仅适用于 Anthropic OAuth/SetupToken 类型账号
-// 启用后将模拟 Claude Code (Node.js) 客户端的 TLS 握手特征
+// 适用于 Anthropic 与 OpenAI OAuth/SetupToken 类型账号。
+// 启用后使用账号绑定的完整 TLS ClientHello 模板。
 func (a *Account) IsTLSFingerprintEnabled() bool {
-	// 仅支持 Anthropic OAuth/SetupToken 账号
-	if !a.IsAnthropicOAuthOrSetupToken() {
+	if a == nil || (a.Platform != PlatformAnthropic && a.Platform != PlatformOpenAI) ||
+		(a.Type != AccountTypeOAuth && a.Type != AccountTypeSetupToken) {
 		return false
 	}
 	if a.Extra == nil {

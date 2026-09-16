@@ -673,6 +673,7 @@ export default {
       createdAt: 'Created',
       totalRecharged: 'Total Recharged',
       roles: {
+        super_admin: 'Super administrator',
         admin: 'Admin',
         user: 'User'
       },
@@ -1254,7 +1255,16 @@ export default {
         geminiImage: 'Gemini Image',
         hint: 'Select at least one model family'
       }
-    },
+    ,
+    securityPolicy: {
+        title: 'Security Policy',
+        hint: 'When enabled, requests hitting sensitive topics (cracking, reversing, pentesting, etc.) are blocked. Off by default.',
+        mode: 'On-hit action',
+        modeSession: 'Terminate session (new session required)',
+        modeRequest: 'Block this request only',
+        email: 'Email the user on violation'
+      },
+  },
 
     // Available Channels (aggregated read-only view)
 }

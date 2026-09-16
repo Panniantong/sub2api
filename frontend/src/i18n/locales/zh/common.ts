@@ -114,6 +114,8 @@ export default {
         withSuffix: '{time} 后解除'
       }
     }
+  ,
+    loadMore: '加载更多',
   },
 
   adminCompliance: {
@@ -212,6 +214,15 @@ export default {
     contentModeration: '内容审核',
     promptAudit: '提示词审计',
     auditLogs: '操作日志',
+    billing: '账单',
+    tickets: '工单',
+    securityPolicy: '安全策略',
+    globalPricing: '全站定价',
+    accountHealth: '账号健康',
+    margins: '毛利中心',
+    tieredRouting: '分级路由',
+    spendGuard: '烧钱防护',
+    ticketsAdmin: '工单管理',
   },
 
   // Auth

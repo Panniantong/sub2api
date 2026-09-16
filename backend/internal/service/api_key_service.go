@@ -556,7 +556,7 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 		return nil, fmt.Errorf("create api key: %w", err)
 	}
 
-	s.InvalidateAuthCacheByKey(ctx, apiKey.Key)
+	s.InvalidateAuthCacheByKey(ctx, apiKey.AuthCacheInvalidationKey())
 	s.compileAPIKeyIPRules(apiKey)
 
 	return apiKey, nil
@@ -902,7 +902,7 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 		return nil, fmt.Errorf("update api key: %w", err)
 	}
 
-	s.InvalidateAuthCacheByKey(ctx, apiKey.Key)
+	s.InvalidateAuthCacheByKey(ctx, apiKey.AuthCacheInvalidationKey())
 	s.compileAPIKeyIPRules(apiKey)
 
 	// Invalidate Redis rate limit cache so reset takes effect immediately
@@ -1167,7 +1167,7 @@ func (s *APIKeyService) UpdateQuotaUsed(ctx context.Context, apiKeyID int64, cos
 			return nil // Don't fail the request
 		}
 		// Invalidate cache so next request sees the new status
-		s.InvalidateAuthCacheByKey(ctx, apiKey.Key)
+		s.InvalidateAuthCacheByKey(ctx, apiKey.AuthCacheInvalidationKey())
 	}
 
 	return nil

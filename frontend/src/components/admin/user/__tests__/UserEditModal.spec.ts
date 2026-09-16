@@ -17,6 +17,8 @@ vi.mock('@/api/admin', () => ({
   }
 }))
 
+vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ isSuperAdmin: true, user: { id: 1 } }) }))
+
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({ showSuccess, showError })
 }))
@@ -48,6 +50,7 @@ const mountModal = (concurrency: number) => mount(UserEditModal, {
       Select: true,
       Icon: true,
       UserAttributeForm: true,
+      UserCleanupGuard: true,
       TotpStepUpDialog: true
     }
   }

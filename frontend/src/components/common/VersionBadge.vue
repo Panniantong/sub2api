@@ -664,7 +664,7 @@ const props = defineProps<{
 const authStore = useAuthStore()
 const appStore = useAppStore()
 
-const isAdmin = computed(() => authStore.isAdmin)
+const isAdmin = computed(() => authStore.isSuperAdmin)
 
 const dropdownOpen = ref(false)
 const dropdownRef = ref<HTMLElement | null>(null)

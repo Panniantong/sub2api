@@ -438,3 +438,23 @@ func TestOpsWebSocketCredentialFailoverExhaustedIsRecorded(t *testing.T) {
 	require.Equal(t, http.StatusServiceUnavailable, job.entry.StatusCode)
 	require.Equal(t, service.GrokCredentialUnavailableClientMessage, job.entry.ErrorMessage)
 }
+
+func TestAccountTrafficWebSocketDenialRecordsLocalReason(t *testing.T) {
+	setupOpsErrorLogTestQueue(t, 2)
+	gin.SetMode(gin.TestMode)
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	router := gin.New()
+	router.Use(OpsErrorLoggerMiddleware(ops))
+	router.GET("/openai/v1/responses", func(c *gin.Context) {
+		closeOpenAIWSFailoverExhausted(c, nil, (&service.AccountTrafficLimitError{Reason: "当前账号达到本地 RPM 上限"}).FailoverError())
+	})
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/openai/v1/responses", nil)
+	request.Header.Set("Connection", "Upgrade")
+	request.Header.Set("Upgrade", "websocket")
+	router.ServeHTTP(recorder, request)
+	require.Equal(t, int64(1), OpsErrorLogQueueLength())
+	job := <-opsErrorLogQueue
+	require.Equal(t, http.StatusTooManyRequests, job.entry.StatusCode)
+	require.Equal(t, "当前账号达到本地 RPM 上限", job.entry.ErrorMessage)
+}

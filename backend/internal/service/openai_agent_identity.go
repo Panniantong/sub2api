@@ -254,6 +254,9 @@ func ensureAgentIdentityTaskForAccount(ctx context.Context, repo AccountReposito
 	if currentTaskID != "" && (expectedTaskID == "" || currentTaskID != expectedTaskID) {
 		return nil
 	}
+	if intelligentContext(ctx) != nil {
+		return errIntelligentCredentialRefreshRequired
+	}
 	if taskMu == nil {
 		return errors.New("agent identity task lock is unavailable")
 	}

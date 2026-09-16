@@ -81,4 +81,8 @@ const (
 
 	// ClaudeCodeVersion stores the extracted Claude Code version from User-Agent (e.g. "2.1.22")
 	ClaudeCodeVersion Key = "ctx_claude_code_version"
+
+	// TierPool 认证用户命中的目标账号池（standard/premium），由 API Key 认证
+	// 中间件按分级路由规则写入，调度器据此优先选择同池账号。
+	TierPool Key = "ctx_tier_pool"
 )

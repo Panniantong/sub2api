@@ -33,6 +33,13 @@ import channelMonitorTemplateAPI from './channelMonitorTemplate'
 import adminPaymentAPI from './payment'
 import affiliatesAPI from './affiliates'
 import riskControlAPI from './riskControl'
+import securityPolicyAPI from './securityPolicy'
+import accountHealthAPI from './accountHealth'
+import marginsAPI from './margins'
+import tieredRoutingAPI from './tieredRouting'
+import spendGuardAPI from './spendGuard'
+import adminTicketsAPI from './tickets'
+import globalPricingAPI from './globalPricing'
 import adminComplianceAPI from './compliance'
 import auditAPI from './audit'
 import pluginsAPI from './plugins'
@@ -71,6 +78,13 @@ export const adminAPI = {
   payment: adminPaymentAPI,
   affiliates: affiliatesAPI,
   riskControl: riskControlAPI,
+  securityPolicy: securityPolicyAPI,
+  accountHealth: accountHealthAPI,
+  margins: marginsAPI,
+  tieredRouting: tieredRoutingAPI,
+  spendGuard: spendGuardAPI,
+  tickets: adminTicketsAPI,
+  globalPricing: globalPricingAPI,
   compliance: adminComplianceAPI,
   audit: auditAPI,
   plugins: pluginsAPI
@@ -107,6 +121,13 @@ export {
   adminPaymentAPI,
   affiliatesAPI,
   riskControlAPI,
+  securityPolicyAPI,
+  globalPricingAPI,
+  accountHealthAPI,
+  marginsAPI,
+  tieredRoutingAPI,
+  spendGuardAPI,
+  adminTicketsAPI,
   adminComplianceAPI,
   auditAPI,
   pluginsAPI

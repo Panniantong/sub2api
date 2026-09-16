@@ -15,12 +15,19 @@ import (
 	"strings"
 	"time"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	coderws "github.com/coder/websocket"
 	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
 )
+
+var ErrLiveBillingUnavailable = infraerrors.ServiceUnavailable("LIVE_BILLING_UNAVAILABLE", "实时会话暂不可用：费用结算尚未接入")
+
+// Re-enable only together with reservation, interruption and idempotent
+// settlement support. A group flag must not bypass the missing billing path.
+func LiveBillingAvailable() bool { return false }
 
 const (
 	defaultLiveMaxSessionDuration = time.Hour
@@ -127,6 +134,9 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 	identity LiveCallIdentity,
 	userMaxConcurrency int,
 ) (*LiveCallCreated, error) {
+	if !LiveBillingAvailable() {
+		return nil, ErrLiveBillingUnavailable
+	}
 	if err := ValidateLiveCallRequest(request); err != nil {
 		return nil, err
 	}

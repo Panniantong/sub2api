@@ -93,10 +93,15 @@ func (h *OpenAIGatewayHandler) GrokRealtime(c *gin.Context) {
 			failed[account.ID] = struct{}{}
 			continue
 		}
-		probeCtx, cancelProbe := context.WithTimeout(c.Request.Context(), service.DefaultGrokRealtimeDialTimeout)
-		candidateUpstream, openErr := h.gatewayService.OpenGrokRealtime(probeCtx, account, token, model)
-		cancelProbe()
+		candidateUpstream, openErr := h.gatewayService.OpenGrokRealtime(c.Request.Context(), account, token, model)
 		if openErr != nil {
+			var local *service.UpstreamFailoverError
+			if errors.As(openErr, &local) && local.Reason == "account_traffic_limit" {
+				release()
+				release = nil
+				h.handleFailoverExhausted(c, local, false)
+				return
+			}
 			reqLog.Warn("grok_realtime.pre_accept_failed", zap.Int64("account_id", account.ID), zap.Error(openErr))
 			statusCode := http.StatusBadGateway
 			var dialErr *service.GrokRealtimeDialError

@@ -97,6 +97,12 @@ func (r *userRepository) create(ctx context.Context, userIn *service.User, guard
 		}
 	}
 
+	releaseHierarchy, err := guardUserHierarchyCreate(txCtx, txClient, userIn)
+	if err != nil {
+		return err
+	}
+	defer releaseHierarchy()
+
 	lockKeys := []string{normalizedEmailUniquenessLockKey(userIn.Email)}
 	if guardEmailAlias {
 		// 别名变体的字面量不同，唯一索引无法兜底；用收件箱身份锁把同一收件箱的并发注册串行化。
@@ -247,25 +253,30 @@ func (r *userRepository) Update(ctx context.Context, userIn *service.User, field
 	}
 
 	// 使用 ent 事务包裹用户更新与 allowed_groups 同步，避免跨层事务不一致。
-	tx, err := r.client.Tx(ctx)
-	if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
-		return err
-	}
-
+	var tx *dbent.Tx
 	var txClient *dbent.Client
 	txCtx := ctx
-	if err == nil {
-		defer func() { _ = tx.Rollback() }()
-		txClient = tx.Client()
-		txCtx = dbent.NewTxContext(ctx, tx)
+	if existingTx := dbent.TxFromContext(ctx); existingTx != nil {
+		txClient = existingTx.Client()
 	} else {
-		// 已处于外部事务中（ErrTxStarted），复用当前事务 client 并由调用方负责提交/回滚。
-		if existingTx := dbent.TxFromContext(ctx); existingTx != nil {
-			txClient = existingTx.Client()
-		} else {
+		var err error
+		tx, err = r.client.Tx(ctx)
+		switch {
+		case errors.Is(err, dbent.ErrTxStarted):
 			txClient = r.client
+		case err != nil:
+			return err
+		default:
+			defer func() { _ = tx.Rollback() }()
+			txClient = tx.Client()
+			txCtx = dbent.NewTxContext(ctx, tx)
 		}
 	}
+	releaseHierarchy, err := guardUserHierarchyUpdate(txCtx, txClient, userIn, fields)
+	if err != nil {
+		return err
+	}
+	defer releaseHierarchy()
 
 	// 邮箱唯一性锁与查重只在本次确实要改邮箱时才做：不改邮箱的更新既不需要
 	// 串行化，也不该因为快照里的旧邮箱已被他人占用而报 ErrEmailExists。
@@ -484,6 +495,11 @@ func (r *userRepository) Delete(ctx context.Context, id int64) error {
 
 // deleteUser 在给定 client（可能是外部事务 client）上删除用户及其身份关联记录，自身不开启/提交事务。
 func (r *userRepository) deleteUser(ctx context.Context, exec *dbent.Client, id int64) error {
+	releaseHierarchy, err := guardUserHierarchyDelete(ctx, exec, id)
+	if err != nil {
+		return err
+	}
+	defer releaseHierarchy()
 	identityIDs, err := exec.AuthIdentity.Query().
 		Where(authidentity.UserIDEQ(id)).
 		IDs(ctx)
@@ -1423,10 +1439,10 @@ func (r *userRepository) RemoveGroupFromUserAllowedGroups(ctx context.Context, u
 func (r *userRepository) GetFirstAdmin(ctx context.Context) (*service.User, error) {
 	m, err := r.client.User.Query().
 		Where(
-			dbuser.RoleEQ(service.RoleAdmin),
+			dbuser.RoleIn(service.RoleAdmin, service.RoleSuperAdmin),
 			dbuser.StatusEQ(service.StatusActive),
 		).
-		Order(dbent.Asc(dbuser.FieldID)).
+		Order(dbent.Desc(dbuser.FieldRole), dbent.Asc(dbuser.FieldID)).
 		First(ctx)
 	if err != nil {
 		return nil, translatePersistenceError(err, service.ErrUserNotFound, nil)

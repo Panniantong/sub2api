@@ -559,6 +559,7 @@ export default {
       failedToLoadApiKeys: '加载用户 API 密钥失败',
       deleteConfirm: "确定要删除用户 '{email}' 吗？此操作无法撤销。",
       roles: {
+        super_admin: '超级管理员',
         admin: '管理员',
         user: '用户'
       },
@@ -1253,7 +1254,16 @@ export default {
         geminiImage: 'Gemini Image',
         hint: '至少选择一个模型系列'
       }
-    },
+    ,
+    securityPolicy: {
+        title: '安全策略',
+        hint: '开启后，涉及敏感话题（破解、逆向、渗透等）的请求将被拦截。默认关闭。',
+        mode: '命中后处置',
+        modeSession: '断开会话（需新建会话）',
+        modeRequest: '仅拦截当次请求',
+        email: '违规时邮件提醒用户'
+      },
+  },
 
     // Available Channels (aggregated read-only view)
 }

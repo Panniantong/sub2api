@@ -32,6 +32,18 @@ func stageCodexFingerprintIDs(c *gin.Context, ids *codexFingerprintIDs) {
 }
 
 func stagedCodexFingerprintIDs(c *gin.Context, account *Account) *codexFingerprintIDs {
+	if c != nil && account != nil {
+		if value, ok := c.Get(codexFingerprintIDsContextKey); ok {
+			if ids, ok := value.(*codexFingerprintIDs); ok && ids != nil && ids.accountID == account.ID {
+				return ids
+			}
+		}
+	}
+	// Native WS ingress may bypass Forward. Device-only mode1 has no per-turn
+	// random fields, so it can resolve the same persisted identity on every path.
+	if isMode1ProtectionEnabled(account) || (antiDegradeEnabled(account) && account.GetCodexFingerprintMode() == codexFingerprintDevice) {
+		return resolveCodexFingerprintIDs(account, "", codexFingerprintDevice)
+	}
 	if c == nil || account == nil || !account.UsesOpenAICodexProtocol() {
 		return nil
 	}
@@ -51,6 +63,13 @@ func stagedCodexFingerprintIDs(c *gin.Context, account *Account) *codexFingerpri
 // snapshot 的 OAuth 账号可读取，避免 stale context 跨账号 failover 泄漏。
 func applyStagedCodexFingerprintHeaders(c *gin.Context, account *Account, h http.Header) {
 	applyCodexFingerprintHeaders(h, stagedCodexFingerprintIDs(c, account))
+	if isMode1ProtectionEnabled(account) && c != nil && c.Request != nil && h != nil {
+		if session := extractClientSessionID(c.Request.Header); session != "" {
+			isolated := isolateOpenAIUpstreamSessionID(getAPIKeyIDFromContext(c), codexAccountIdentitySource(c, account), session)
+			h.Set("session-id", isolated)
+			h.Set("session_id", isolated)
+		}
+	}
 }
 
 func applyStagedCodexFingerprintClientMetadata(c *gin.Context, account *Account, reqBody map[string]any) bool {
@@ -229,6 +248,9 @@ func deriveStableUUIDv4(seed string) string {
 func resolveConvergedInstallationID(account *Account, seed string) string {
 	if account == nil {
 		return ""
+	}
+	if isMode1ProtectionEnabled(account) && seed != "" {
+		return deriveStableUUIDv4("sub2api:mode1-install-id:v2:" + seed)
 	}
 	if deviceID := account.GetOpenAIDeviceID(); deviceID != "" {
 		return deviceID
@@ -445,6 +467,9 @@ func applyCodexFingerprintToClientMetadataMap(existing map[string]any, ids *code
 
 	if ids.installationID != "" {
 		existing["x-codex-installation-id"] = ids.installationID
+		if _, exists := existing["installation_id"]; exists {
+			existing["installation_id"] = ids.installationID
+		}
 		modified = true
 	}
 
@@ -460,6 +485,11 @@ func applyCodexFingerprintToClientMetadataMap(existing map[string]any, ids *code
 	existing["thread_id"] = ids.threadID
 	existing["turn_id"] = ids.turnID
 	existing["x-codex-window-id"] = ids.windowID
+	for key, value := range map[string]string{"session-id": ids.sessionID, "thread-id": ids.threadID, "turn-id": ids.turnID, "window_id": ids.windowID, "x-client-request-id": ids.threadID} {
+		if _, present := existing[key]; present {
+			existing[key] = value
+		}
+	}
 
 	rewriteClientMetadataEmbeddedTurnMetadata(existing, map[string]any{
 		"installation_id":         ids.installationID,
@@ -470,6 +500,45 @@ func applyCodexFingerprintToClientMetadataMap(existing map[string]any, ids *code
 		"turn_started_at_unix_ms": ids.turnStartedAtUnixMs,
 	})
 	return true
+}
+
+type protectedWSClientSession struct {
+	accountID int64
+	raw       string
+}
+
+// Native WS shares the same fingerprint projection as HTTP. Keep the first
+// client session for this connection while refreshing per-turn identifiers.
+func applyCodexAccountAndProtectionIdentityRaw(c *gin.Context, account *Account, body []byte) ([]byte, bool, error) {
+	apiKeyID := getAPIKeyIDFromContext(c)
+	next, changed, err := applyCodexAccountIdentityClientMetadataRaw(body, codexAccountIdentitySource(c, account), apiKeyID)
+	if err != nil {
+		return body, false, err
+	}
+	var headers http.Header
+	if c != nil && c.Request != nil {
+		headers = c.Request.Header
+	}
+	rawSession := extractClientSessionID(headers)
+	if rawSession == "" {
+		rawSession = strings.TrimSpace(gjson.GetBytes(body, "client_metadata.session_id").String())
+	}
+	if c != nil && account != nil {
+		const key = "protection_ws_client_session"
+		value, _ := c.Get(key)
+		if saved, ok := value.(protectedWSClientSession); ok && saved.accountID == account.ID {
+			rawSession = saved.raw
+		} else {
+			if rawSession == "" {
+				rawSession = uuid.NewString()
+			}
+			c.Set(key, protectedWSClientSession{account.ID, rawSession})
+		}
+	}
+	ids := resolveCodexFingerprintIDs(account, rawSession, account.GetCodexFingerprintMode())
+	stageCodexFingerprintIDs(c, ids)
+	next, projected, err := applyCodexFingerprintClientMetadataRaw(next, ids)
+	return next, changed || projected, err
 }
 
 func captureCodexFingerprintOriginalBodySessionID(ids *codexFingerprintIDs, clientMetadata any) {

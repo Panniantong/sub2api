@@ -18,6 +18,7 @@ declare module 'vue-router' {
      * @default false
      */
     requiresAdmin?: boolean
+    requiresSuperAdmin?: boolean
 
     /**
      * Page title for this route

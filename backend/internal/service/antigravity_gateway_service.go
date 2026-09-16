@@ -373,6 +373,12 @@ func (s *AntigravityGatewayService) TestConnection(ctx context.Context, account 
 	if err != nil {
 		return nil, fmt.Errorf("构建请求失败: %w", err)
 	}
+	if intelligentPrompt(ctx) != "" {
+		requestBody, err = intelligentAntigravityBody(ctx, requestBody)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	// 代理 URL
 	proxyURL := ""
@@ -397,8 +403,17 @@ func (s *AntigravityGatewayService) TestConnection(ctx context.Context, account 
 		requestedModel: modelID,
 		handleError:    testConnectionHandleError,
 	}
-
-	result, err := s.antigravityRetryLoop(p)
+	var result *antigravityRetryLoopResult
+	if run := intelligentContext(ctx); run != nil {
+		// Capability observations make one request. The production retry loop
+		// may apply account error policies, change cache scheduling and enable
+		// credit fallback; those side effects do not belong to a test result.
+		var resp *http.Response
+		resp, err = s.runIntelligentAntigravity(ctx, account, accessToken, requestBody)
+		result = &antigravityRetryLoopResult{resp: resp}
+	} else {
+		result, err = s.antigravityRetryLoop(p)
+	}
 	if err != nil {
 		// AccountSwitchError → 测试时不切换账号，返回友好提示
 		var switchErr *AntigravityAccountSwitchError

@@ -65,6 +65,20 @@ func (Group) Fields() []ent.Field {
 			Comment("高峰时段叠加倍率，仅在 peak_rate_enabled 且处于 [peak_start, peak_end) 时乘入文本倍率"),
 		field.Bool("is_exclusive").
 			Default(false),
+		// security_policy_enabled: 分组安全策略总开关，默认关闭。
+		field.Bool("security_policy_enabled").
+			Default(false).
+			Comment("分组安全策略总开关，默认关闭"),
+		// security_policy_mode: 命中后处置，block_session 断会话（默认）/
+		// block_request 仅拦截当次请求。
+		field.String("security_policy_mode").
+			MaxLen(20).
+			Default("block_session").
+			Comment("安全策略命中后处置：block_session 断会话 / block_request 仅拦当次"),
+		// security_policy_email_enabled: 命中是否邮件提醒用户，可自由开关。
+		field.Bool("security_policy_email_enabled").
+			Default(true).
+			Comment("安全策略命中是否邮件提醒用户"),
 		field.String("status").
 			MaxLen(20).
 			Default(domain.StatusActive),

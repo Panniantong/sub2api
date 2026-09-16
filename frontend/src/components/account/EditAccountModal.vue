@@ -5,12 +5,37 @@
     width="wide"
     @close="handleClose"
   >
+    <div
+        v-if="account"
+        data-testid="account-info-summary"
+        class="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-dark-600 dark:bg-dark-700"
+      >
+        <div class="mb-2 text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.accounts.accountInfo') }}</div>
+        <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-gray-600 dark:text-gray-300 sm:grid-cols-4">
+          <div><span class="text-gray-400">{{ t('admin.accounts.columns.id') }}</span> {{ account.id }}</div>
+          <div><span class="text-gray-400">{{ t('admin.accounts.columns.platform') }}</span> {{ account.platform }}</div>
+          <div><span class="text-gray-400">{{ t('admin.accounts.columns.type') }}</span> {{ account.type }}</div>
+          <div><span class="text-gray-400">{{ t('admin.accounts.columns.status') }}</span> {{ account.status }}</div>
+          <div><span class="text-gray-400">{{ t('admin.accounts.columns.createdAt') }}</span> {{ formatDateTime(new Date(account.created_at)) }}</div>
+          <div><span class="text-gray-400">{{ t('admin.accounts.columns.lastUsed') }}</span> {{ account.last_used_at ? formatDateTime(new Date(account.last_used_at)) : '-' }}</div>
+          <div class="col-span-2 sm:col-span-2"><span class="text-gray-400">{{ t('admin.accounts.protectionStrategy') }}</span> {{ antiDegradeStatusLabel }}</div>
+        </div>
+      </div>
+    <nav v-if="account" class="sticky top-0 z-10 my-4 flex flex-wrap gap-2 border-b border-gray-200 bg-white pb-3 dark:border-dark-700 dark:bg-dark-800" aria-label="账号设置分区">
+      <button v-for="section in editSections" :key="section.id" type="button" :data-testid="`account-section-${section.id}`" :aria-pressed="activeSection === section.id" :class="['btn btn-sm', activeSection === section.id ? 'btn-primary' : 'btn-secondary']" @click="activeSection = section.id">{{ section.label }}</button>
+    </nav>
     <form
       v-if="account"
       id="edit-account-form"
+      ref="editFormElement"
+      novalidate
       @submit.prevent="handleSubmit"
+      @input="markDraftDirty"
+      @change="markDraftDirty"
+      @click.capture="markCustomControlDirty"
       class="space-y-5"
     >
+      <fieldset :disabled="submitting || antiDegradeBusy" v-show="activeSection === 'basic'" data-edit-section="basic" class="min-w-0 space-y-5">
       <div>
         <label class="input-label">{{ t('common.name') }}</label>
         <input v-model="form.name" type="text" required class="input" data-tour="edit-account-form-name" />
@@ -26,6 +51,279 @@
         <p class="input-hint">{{ t('admin.accounts.notesHint') }}</p>
       </div>
 
+      <!-- Account identity summary: keep the immutable/runtime identity visible
+           while editing so operators can verify they are changing the intended
+           upstream account and see which protection strategy is effective. -->
+      <GroupSelector
+        v-model="form.group_ids"
+        :groups="selectableGroups"
+        :platform="account?.platform"
+        :mixed-scheduling="mixedScheduling"
+        data-tour="account-form-groups"
+      />
+<div class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <div>
+          <label class="input-label">{{ t('common.status') }}</label>
+          <Select v-model="form.status" :options="statusOptions" />
+        </div>
+
+        <!-- Mixed Scheduling (only for antigravity accounts, read-only in edit mode) -->
+        <div v-if="account?.platform === 'antigravity'" class="flex items-center gap-2">
+          <label class="flex cursor-not-allowed items-center gap-2 opacity-60">
+            <input
+              type="checkbox"
+              v-model="mixedScheduling"
+              disabled
+              class="h-4 w-4 cursor-not-allowed rounded border-gray-300 text-primary-500 focus:ring-primary-500 dark:border-dark-500"
+            />
+            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
+              {{ t('admin.accounts.mixedScheduling') }}
+            </span>
+          </label>
+          <div class="group relative">
+            <span
+              class="inline-flex h-4 w-4 cursor-help items-center justify-center rounded-full bg-gray-200 text-xs text-gray-500 hover:bg-gray-300 dark:bg-dark-600 dark:text-gray-400 dark:hover:bg-dark-500"
+            >
+              ?
+            </span>
+            <!-- Tooltip（向下显示避免被弹窗裁剪） -->
+            <div
+              class="pointer-events-none absolute left-0 top-full z-[100] mt-1.5 w-72 rounded bg-gray-900 px-3 py-2 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100 dark:bg-gray-700"
+            >
+              {{ t('admin.accounts.mixedSchedulingTooltip') }}
+              <div
+                class="absolute bottom-full left-3 border-4 border-transparent border-b-gray-900 dark:border-b-gray-700"
+              ></div>
+            </div>
+          </div>
+        </div>
+        <div v-if="account?.platform === 'antigravity'" class="mt-3 flex items-center gap-2">
+          <label class="flex cursor-pointer items-center gap-2">
+            <input
+              type="checkbox"
+              v-model="allowOverages"
+              class="h-4 w-4 rounded border-gray-300 text-primary-500 focus:ring-primary-500 dark:border-dark-500"
+            />
+            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
+              {{ t('admin.accounts.allowOverages') }}
+            </span>
+          </label>
+          <div class="group relative">
+            <span
+              class="inline-flex h-4 w-4 cursor-help items-center justify-center rounded-full bg-gray-200 text-xs text-gray-500 hover:bg-gray-300 dark:bg-dark-600 dark:text-gray-400 dark:hover:bg-dark-500"
+            >
+              ?
+            </span>
+            <div
+              class="pointer-events-none absolute left-0 top-full z-[100] mt-1.5 w-72 rounded bg-gray-900 px-3 py-2 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100 dark:bg-gray-700"
+            >
+              {{ t('admin.accounts.allowOveragesTooltip') }}
+              <div
+                class="absolute bottom-full left-3 border-4 border-transparent border-b-gray-900 dark:border-b-gray-700"
+              ></div>
+            </div>
+          </div>
+        </div>
+      </div>
+<div class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <label class="input-label">{{ t('admin.accounts.expiresAt') }}</label>
+        <input v-model="expiresAtInput" type="datetime-local" class="input" />
+        <div class="mt-2 flex gap-2">
+          <button type="button" class="btn btn-secondary btn-sm" @click="form.expires_at = getAccountExpiryTimestamp(1)">
+            {{ t('payment.oneMonth') }}
+          </button>
+          <button type="button" class="btn btn-secondary btn-sm" @click="form.expires_at = getAccountExpiryTimestamp(12)">
+            {{ t('payment.oneYear') }}
+          </button>
+        </div>
+        <p class="input-hint">
+          {{ t('admin.accounts.expiresAtHint') }}
+          {{ t('admin.accounts.expiresAtTimezoneHint', { timezone: browserTimeZone }) }}
+        </p>
+      </div>
+      </fieldset>
+      <fieldset :disabled="submitting || antiDegradeBusy" v-show="activeSection === 'protection'" data-edit-section="protection" class="min-w-0 space-y-5">
+
+      <!-- 一键防降智 -->
+      <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <div class="space-y-4">
+          <div class="min-w-0">
+            <label class="input-label mb-0">
+              {{ t('admin.accounts.antiDegrade') }}
+              <span
+                v-if="antiDegradeOn"
+                data-testid="anti-degrade-status"
+                class="ml-2 rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700 dark:bg-dark-600 dark:text-gray-300"
+              >
+                {{ antiDegradeStatusLabel }}
+              </span>
+            </label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.antiDegradeDesc') }}
+            </p>
+            <p v-if="antiDegradeOn && antiDegradeCurrentMode" class="mt-1 text-xs font-medium text-primary-700 dark:text-primary-300" data-testid="anti-degrade-current-mode">
+              {{ t('admin.accounts.antiDegradeActiveMode') }}：{{ antiDegradeModeLabel(antiDegradeCurrentMode) }}
+            </p>
+          </div>
+          <div class="flex min-w-0 flex-wrap items-center gap-3">
+            <button
+              type="button"
+              data-testid="anti-degrade-toggle"
+              role="switch"
+              :aria-checked="antiDegradeOn"
+              :aria-label="t('admin.accounts.antiDegrade')"
+              :disabled="submitting || antiDegradeBusy"
+              @click="handleAntiDegradeToggle"
+              :class="[
+                'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60',
+                antiDegradeOn ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+              ]"
+            >
+              <span
+                :class="[
+                  'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                  antiDegradeOn ? 'translate-x-5' : 'translate-x-0'
+                ]"
+              />
+            </button>
+            <div class="flex w-full min-w-0 flex-wrap gap-2" data-testid="anti-degrade-strategies">
+              <button
+                v-for="strategy in visibleAntiDegradeStrategies"
+                v-show="!strategy.diagnostic_only || showDiagnosticStrategies || antiDegradeCurrentMode === strategy.id"
+                :key="strategy.id"
+                type="button"
+                :class="['btn btn-sm', antiDegradeCurrentMode === strategy.id ? 'btn-primary' : 'btn-secondary']"
+                :disabled="submitting || antiDegradeBusy || !strategy.apply_supported"
+                :aria-pressed="antiDegradeCurrentMode === strategy.id"
+                :data-testid="strategy.id === 'mode1' ? 'anti-degrade-mode-1' : strategy.id === 'mode2' ? 'anti-degrade-mode-2' : strategy.id === 'legacy' ? 'anti-degrade-mode-legacy' : `anti-degrade-strategy-${strategy.id}`"
+                :title="strategy.description"
+                @click="openAntiDegradePreview(strategy.id)"
+              >
+                {{ strategy.name }}
+                <span v-if="strategy.id === DEFAULT_ANTI_DEGRADE_MODE"> · 默认</span>
+              </button>
+            </div>
+            <button v-if="visibleAntiDegradeStrategies.some(strategy => strategy.diagnostic_only)" type="button" class="text-xs text-primary-600" :aria-expanded="showDiagnosticStrategies" @click="showDiagnosticStrategies = !showDiagnosticStrategies">{{ showDiagnosticStrategies ? '收起诊断策略' : '查看诊断策略' }}</button>
+            <button
+              v-if="antiDegradeOn"
+              type="button"
+              class="btn btn-secondary btn-sm"
+              data-testid="anti-degrade-revert"
+              :disabled="submitting || antiDegradeBusy"
+              @click="revertAntiDegrade"
+            >
+              {{ t('admin.accounts.antiDegradeRevert') }}
+            </button>
+          </div>
+        </div>
+        <p class="mt-3 text-xs text-gray-500">保护开关、策略应用与还原会立即生效；其他字段通过底部保存。诊断策略用于对照排查。</p>
+      </div>
+
+    <ConfirmDialog :show="antiDegradeDisableConfirm" title="关闭账号保护？" message="关闭会立即还原该策略管理的身份与传输设置。管理员配置的并发数保持不变。尚未保存的编辑会保留在当前表单中。" confirm-text="确认关闭" cancel-text="取消" danger @cancel="antiDegradeDisableConfirm = false" @confirm="confirmRevertAntiDegrade" />
+
+    <BaseDialog :show="antiDegradeDialog" :title="antiDegradeModeLabel(antiDegradeSelectedMode)" width="normal" @close="antiDegradeDialog = false">
+      <div v-if="antiDegradePreview" class="space-y-2">
+        <p class="text-sm text-gray-600 dark:text-gray-300">{{ selectedAntiDegradeDescription }}</p>
+        <div data-testid="anti-degrade-preview-state" class="space-y-1 rounded-lg bg-gray-50 p-3 text-sm dark:bg-dark-700">
+          <div>{{ t('admin.accounts.antiDegradeConfiguration') }}: {{ antiDegradeStatusLabel }}</div>
+          <div>{{ t('admin.accounts.antiDegradeActiveMode') }}: {{ antiDegradeModeLabel(antiDegradePreview.active_mode) }}</div>
+          <div>{{ t('admin.accounts.antiDegradePolicyVersion') }}: {{ antiDegradePolicyVersionLabel(antiDegradePreview) }}</div>
+          <div>{{ t('admin.accounts.antiDegradeIdentity') }}: {{ antiDegradePreview.identity_ready === true ? t('admin.accounts.antiDegradeIdentityReady') : antiDegradePreview.identity_ready === false ? t('admin.accounts.antiDegradeIdentityMissing') : t('admin.accounts.antiDegradeUnverified') }}</div>
+          <div>{{ t('admin.accounts.antiDegradeTLSProfile') }}: {{ antiDegradePreview.tls_profile || t('admin.accounts.antiDegradeNotConfigured') }}</div>
+          <template v-if="antiDegradePreview.runtime">
+            <div>当前有效传输：{{ antiDegradePreview.runtime.effective_tls }}</div>
+            <div>有效并发上限：{{ antiDegradePreview.runtime.concurrency }}</div>
+            <p v-if="antiDegradePreview.runtime.tls_reason" class="text-amber-700 dark:text-amber-300">{{ antiDegradePreview.runtime.tls_reason }}</p>
+            <p class="text-xs text-gray-500">{{ antiDegradePreview.runtime.observed ? '已有传输观测' : '以上为配置计算结果，尚无握手观测' }}</p>
+          </template>
+        </div>
+        <ul v-if="antiDegradePreview.issues?.length" data-testid="anti-degrade-issues" class="list-inside list-disc text-sm text-amber-700 dark:text-amber-300">
+          <li v-for="issue in antiDegradePreview.issues" :key="issue">{{ issue }}</li>
+        </ul>
+        <p v-if="antiDegradePreview.reason" class="text-sm text-gray-500 dark:text-gray-400">
+          {{ antiDegradeReasonLabel(antiDegradePreview.reason) }}
+        </p>
+        <div
+          v-for="chg in antiDegradeVisibleChanges"
+          :key="chg.key"
+          class="rounded-lg bg-gray-50 p-3 text-sm dark:bg-dark-700"
+        >
+          <p class="font-medium text-gray-900 dark:text-white">{{ antiDegradeChangeLabel(chg.key) }}</p>
+          <p class="mt-1 text-gray-900 dark:text-white">
+            <span class="text-gray-400">{{ fmtAntiDegradeValue(chg.from) }}</span>
+            <span class="mx-1">→</span>
+            <span class="font-medium">{{ fmtAntiDegradeValue(chg.to) }}</span>
+          </p>
+        </div>
+        <p v-if="antiDegradePreview.enabled" class="text-xs text-amber-600 dark:text-amber-400">
+          {{ t('admin.accounts.antiDegradeRevertHint') }}
+        </p>
+      </div>
+      <template #footer>
+        <div class="flex justify-end gap-3">
+          <button type="button" class="btn btn-secondary" @click="antiDegradeDialog = false">{{ t('common.cancel') }}</button>
+          <button
+            v-if="antiDegradePreview?.eligible"
+            type="button"
+            class="btn btn-primary"
+            data-testid="anti-degrade-confirm"
+            :disabled="submitting || antiDegradeBusy"
+            @click="applyAntiDegrade"
+          >
+            {{ t('common.confirm') }}
+          </button>
+        </div>
+      </template>
+    </BaseDialog>
+
+
+      <div v-if="account.platform === 'openai'" class="rounded-xl border border-gray-200 p-4 dark:border-dark-700" data-testid="request-integrity-control">
+        <label class="input-label">请求完整性检查</label>
+        <select v-model="requestIntegrityMode" class="input">
+          <option value="default">跟随策略默认</option>
+          <option value="off">关闭独立检查</option><option value="observe">仅观察转换差异</option><option value="enforce">严格拦截转换差异</option>
+        </select>
+        <p class="input-hint">检查已接入的 Responses / WebSocket 请求转换是否保留上下文、工具与推理参数。此项独立于身份和 TLS，可单独关闭；仅观察不会阻止请求，严格拦截可能拒绝不兼容的转换。</p>
+        <p class="input-hint">默认：初代兼容仅观察，兼容架构 v3 严格拦截。手动选择优先于策略默认。</p>
+      </div>
+      <div class="max-w-md"><div>
+          <label class="input-label">{{ t('admin.accounts.concurrency') }}</label>
+          <input v-model.number="form.concurrency" type="number" min="1" class="input"
+            @input="form.concurrency = Math.max(1, form.concurrency || 1)" />
+          <p class="input-hint">所有策略均可独立设置并发；切换或关闭身份保护不会恢复为预设值。自适应并发仅在此上限内运行。</p>
+        </div></div>
+      <AccountTrafficControls ref="trafficControls" v-model="trafficPolicyDraft" :account-id="account.id" :platform="account.platform" :hard-limit="form.concurrency" :disabled="submitting || antiDegradeBusy" embedded />
+      </fieldset>
+      <fieldset :disabled="submitting || antiDegradeBusy" v-show="activeSection === 'connection'" data-edit-section="connection" class="min-w-0 space-y-5">
+      <div v-if="!isSparkShadow">
+        <div class="mb-1 flex items-center gap-2">
+          <label class="input-label mb-0">{{ t('admin.accounts.proxy') }}</label>
+          <ProxyAdBanner />
+        </div>
+        <ProxySelector v-model="form.proxy_id" :proxies="proxies" :disabled="randomProxyEnabled" />
+        <label class="mt-2 flex cursor-pointer items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+          <input
+            v-model="randomProxyEnabled"
+            type="checkbox"
+            :disabled="protectionIdentityManaged"
+            class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+            @change="handleRandomProxyChange"
+          />
+          <span>{{ t('admin.accounts.randomProxy') }}</span>
+        </label>
+        <p class="input-hint">{{ t('admin.accounts.randomProxyHint') }}</p>
+        <p v-if="protectionIdentityManaged" class="input-hint">当前{{ antiDegradeModeLabel(antiDegradeCurrentMode) }}策略管理身份与出口模式。启用随机代理前，请先关闭或切换保护策略。</p>
+        <label class="input-label mt-3">{{ t('admin.accounts.accountPool') }}</label>
+        <div class="w-52">
+          <Select v-model="accountPoolSelection" :options="accountPoolOptions" />
+        </div>
+        <p class="input-hint">{{ t('admin.accounts.accountPoolHint') }}</p>
+      </div>
+<UpstreamRequestIdHeaderField
+        v-model="upstreamRequestIdHeader"
+        :platform="account.platform"
+        :type="account.type"
+      />
       <!-- API Key fields (only for apikey type) -->
       <div v-if="account.type === 'apikey'" class="space-y-4">
         <div v-if="!isCNApiKeyAccount || editApiProtocol !== 'adaptive'">
@@ -1273,7 +1571,9 @@
 
       <!-- Antigravity model restriction (applies to all antigravity types) -->
       <!-- Antigravity 只支持模型映射模式，不支持白名单模式 -->
-      <div v-if="account.platform === 'antigravity'" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+      </fieldset>
+      <fieldset :disabled="submitting || antiDegradeBusy" v-show="activeSection === 'advanced'" data-edit-section="advanced" class="min-w-0 space-y-5">
+<div v-if="account.platform === 'antigravity'" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
 
         <!-- Mapping Mode Only (no toggle for Antigravity) -->
@@ -1586,26 +1886,12 @@
         </div>
       </div>
 
-      <div v-if="!isSparkShadow">
-        <div class="mb-1 flex items-center gap-2">
-          <label class="input-label mb-0">{{ t('admin.accounts.proxy') }}</label>
-          <ProxyAdBanner />
-        </div>
-        <ProxySelector v-model="form.proxy_id" :proxies="proxies" />
-      </div>
+      
 
-      <UpstreamRequestIdHeaderField
-        v-model="upstreamRequestIdHeader"
-        :platform="account.platform"
-        :type="account.type"
-      />
+      
 
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <div>
-          <label class="input-label">{{ t('admin.accounts.concurrency') }}</label>
-          <input v-model.number="form.concurrency" type="number" min="1" class="input"
-            @input="form.concurrency = Math.max(1, form.concurrency || 1)" />
-        </div>
+        
         <div>
           <label class="input-label">{{ t('admin.accounts.loadFactor') }}</label>
           <input v-model.number="form.load_factor" type="number" min="1"
@@ -1665,22 +1951,7 @@
           </div>
         </div>
       </div>
-      <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
-        <label class="input-label">{{ t('admin.accounts.expiresAt') }}</label>
-        <input v-model="expiresAtInput" type="datetime-local" class="input" />
-        <div class="mt-2 flex gap-2">
-          <button type="button" class="btn btn-secondary btn-sm" @click="form.expires_at = getAccountExpiryTimestamp(1)">
-            {{ t('payment.oneMonth') }}
-          </button>
-          <button type="button" class="btn btn-secondary btn-sm" @click="form.expires_at = getAccountExpiryTimestamp(12)">
-            {{ t('payment.oneYear') }}
-          </button>
-        </div>
-        <p class="input-hint">
-          {{ t('admin.accounts.expiresAtHint') }}
-          {{ t('admin.accounts.expiresAtTimezoneHint', { timezone: browserTimeZone }) }}
-        </p>
-      </div>
+      
 
       <!-- OpenAI 自动透传开关（OAuth/API Key） -->
       <div
@@ -2194,9 +2465,9 @@
         </div>
       </div>
 
-      <!-- Codex 指纹收敛模式（仅 OpenAI OAuth） -->
+      <!-- Codex 指纹收敛模式（OpenAI OAuth / Setup Token） -->
       <div
-        v-if="account?.platform === 'openai' && account?.type === 'oauth'"
+        v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'setup-token')"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between gap-4">
@@ -2207,7 +2478,7 @@
             </p>
           </div>
           <div class="w-52 flex-shrink-0">
-            <Select v-model="codexFingerprintMode" data-testid="edit-codex-fingerprint-mode-select" :options="codexFingerprintModeOptions" />
+            <Select v-model="codexFingerprintMode" data-testid="edit-codex-fingerprint-mode-select" :options="codexFingerprintModeOptions" :disabled="protectionIdentityManaged" />
           </div>
         </div>
       </div>
@@ -2708,6 +2979,7 @@
             <button
               type="button"
               @click="tlsFingerprintEnabled = !tlsFingerprintEnabled"
+              :disabled="protectionIdentityManaged"
               :class="[
                 'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
                 tlsFingerprintEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
@@ -2723,7 +2995,7 @@
           </div>
           <!-- Profile selector -->
           <div v-if="tlsFingerprintEnabled" class="mt-3">
-            <select v-model="tlsFingerprintProfileId" class="input">
+            <select v-model="tlsFingerprintProfileId" class="input" :disabled="protectionIdentityManaged">
               <option :value="null">{{ t('admin.accounts.quotaControl.tlsFingerprint.defaultProfile') }}</option>
               <option v-if="tlsFingerprintProfiles.length > 0" :value="-1">{{ t('admin.accounts.quotaControl.tlsFingerprint.randomProfile') }}</option>
               <option v-for="p in tlsFingerprintProfiles" :key="p.id" :value="p.id">{{ p.name }}</option>
@@ -2834,91 +3106,25 @@
         </div>
       </div>
 
-      <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
-        <div>
-          <label class="input-label">{{ t('common.status') }}</label>
-          <Select v-model="form.status" :options="statusOptions" />
-        </div>
-
-        <!-- Mixed Scheduling (only for antigravity accounts, read-only in edit mode) -->
-        <div v-if="account?.platform === 'antigravity'" class="flex items-center gap-2">
-          <label class="flex cursor-not-allowed items-center gap-2 opacity-60">
-            <input
-              type="checkbox"
-              v-model="mixedScheduling"
-              disabled
-              class="h-4 w-4 cursor-not-allowed rounded border-gray-300 text-primary-500 focus:ring-primary-500 dark:border-dark-500"
-            />
-            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
-              {{ t('admin.accounts.mixedScheduling') }}
-            </span>
-          </label>
-          <div class="group relative">
-            <span
-              class="inline-flex h-4 w-4 cursor-help items-center justify-center rounded-full bg-gray-200 text-xs text-gray-500 hover:bg-gray-300 dark:bg-dark-600 dark:text-gray-400 dark:hover:bg-dark-500"
-            >
-              ?
-            </span>
-            <!-- Tooltip（向下显示避免被弹窗裁剪） -->
-            <div
-              class="pointer-events-none absolute left-0 top-full z-[100] mt-1.5 w-72 rounded bg-gray-900 px-3 py-2 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100 dark:bg-gray-700"
-            >
-              {{ t('admin.accounts.mixedSchedulingTooltip') }}
-              <div
-                class="absolute bottom-full left-3 border-4 border-transparent border-b-gray-900 dark:border-b-gray-700"
-              ></div>
-            </div>
-          </div>
-        </div>
-        <div v-if="account?.platform === 'antigravity'" class="mt-3 flex items-center gap-2">
-          <label class="flex cursor-pointer items-center gap-2">
-            <input
-              type="checkbox"
-              v-model="allowOverages"
-              class="h-4 w-4 rounded border-gray-300 text-primary-500 focus:ring-primary-500 dark:border-dark-500"
-            />
-            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
-              {{ t('admin.accounts.allowOverages') }}
-            </span>
-          </label>
-          <div class="group relative">
-            <span
-              class="inline-flex h-4 w-4 cursor-help items-center justify-center rounded-full bg-gray-200 text-xs text-gray-500 hover:bg-gray-300 dark:bg-dark-600 dark:text-gray-400 dark:hover:bg-dark-500"
-            >
-              ?
-            </span>
-            <div
-              class="pointer-events-none absolute left-0 top-full z-[100] mt-1.5 w-72 rounded bg-gray-900 px-3 py-2 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100 dark:bg-gray-700"
-            >
-              {{ t('admin.accounts.allowOveragesTooltip') }}
-              <div
-                class="absolute bottom-full left-3 border-4 border-transparent border-b-gray-900 dark:border-b-gray-700"
-              ></div>
-            </div>
-          </div>
-        </div>
-      </div>
+      
 
       <!-- Group Selection - 仅标准模式显示 -->
-      <GroupSelector
-        v-model="form.group_ids"
-        :groups="selectableGroups"
-        :platform="account?.platform"
-        :mixed-scheduling="mixedScheduling"
-        data-tour="account-form-groups"
-      />
+      
 
+      </fieldset>
     </form>
+    <ConfirmDialog :show="discardConfirm" title="放弃未保存的修改？" message="当前表单有未保存的修改。已单独应用的保护策略仍然生效。" confirm-text="放弃修改" cancel-text="继续编辑" @confirm="closeEditor" @cancel="discardConfirm = false" />
 
     <template #footer>
-      <div v-if="account" class="flex justify-end gap-3">
+      <div v-if="account" class="flex w-full flex-wrap items-center justify-end gap-3">
+        <span v-if="draftDirty" class="mr-auto text-xs text-amber-700 dark:text-amber-300">有未保存的修改</span>
         <button @click="handleClose" type="button" class="btn btn-secondary">
           {{ t('common.cancel') }}
         </button>
         <button
           type="submit"
           form="edit-account-form"
-          :disabled="submitting"
+          :disabled="submitting || antiDegradeBusy"
           class="btn btn-primary"
           data-tour="account-form-submit"
         >
@@ -2981,7 +3187,12 @@ import type {
   GrokMediaEligibilityMode,
   GrokMediaEligibilityState
 } from '@/types'
+import type { AntiDegradeMode, AntiDegradePreview, AntiDegradeStrategyProfile } from '@/api/admin/accounts'
+import { DEFAULT_ANTI_DEGRADE_MODE } from '@/utils/accountProtection'
+import { extractApiErrorMessage } from '@/utils/apiError'
 import BaseDialog from '@/components/common/BaseDialog.vue'
+import AccountTrafficControls from './AccountTrafficControls.vue'
+import { defaultTrafficPolicy, normalizeTrafficDraft, trafficPolicyError } from '@/api/admin/accountTraffic'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Select from '@/components/common/Select.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
@@ -3754,6 +3965,341 @@ const form = reactive({
   group_ids: [] as number[],
   expires_at: null as number | null
 })
+const randomProxyEnabled = ref(false)
+const requestIntegrityMode = ref('default')
+const trafficPolicyDraft = ref(defaultTrafficPolicy())
+const trafficControls = ref<InstanceType<typeof AccountTrafficControls> | null>(null)
+const editFormElement = ref<HTMLFormElement | null>(null)
+const activeSection = ref('basic')
+const editSections = [{ id: 'basic', label: '基本信息' }, { id: 'connection', label: '连接与模型' }, { id: 'protection', label: '保护与流量' }, { id: 'advanced', label: '计费与高级' }]
+const draftDirty = ref(false)
+const discardConfirm = ref(false)
+const showDiagnosticStrategies = ref(false)
+const initialAccountConcurrency = ref(1)
+let initialTrafficPolicy = JSON.stringify(defaultTrafficPolicy())
+const markDraftDirty = () => { draftDirty.value = true }
+const markCustomControlDirty = (event: MouseEvent) => {
+  const button = (event.target as HTMLElement).closest('button')
+  if (!button || button.closest('[data-testid="account-traffic-controls"]') || button.dataset.testid?.startsWith('anti-degrade')) return
+  if (button.getAttribute('role') === 'switch' || button.getAttribute('role') === 'option') markDraftDirty()
+}
+watch(form, () => { if (!syncingForm.value) markDraftDirty() }, { deep: true, flush: 'sync' })
+watch(trafficPolicyDraft, () => { if (!syncingForm.value) markDraftDirty() }, { deep: true, flush: 'sync' })
+let initialRequestIntegrityMode = 'default'
+// 打开弹窗时的快照：提交时仅在开关状态变化时才写回 proxy_mode，
+// 避免用旧快照覆盖 extra 运行态键。
+let initialRandomProxyEnabled = false
+const accountPoolSelection = ref<'standard' | 'premium'>('standard')
+let initialAccountPool: 'standard' | 'premium' = 'standard'
+const accountPoolOptions = computed(() => [
+  { label: t('admin.accounts.poolStandard'), value: 'standard' },
+  { label: t('admin.accounts.poolPremium'), value: 'premium' }
+])
+
+const handleRandomProxyChange = () => {
+  if (randomProxyEnabled.value) {
+    form.proxy_id = null
+  }
+}
+
+// 一键防降智：预览 → 应用 → 还原，本地镜像与父列表同步刷新。
+const antiDegradeBusy = ref(false)
+const antiDegradeDialog = ref(false)
+const antiDegradeDisableConfirm = ref(false)
+const antiDegradePreview = ref<AntiDegradePreview | null>(null)
+const antiDegradeSelectedMode = ref<AntiDegradeMode>(DEFAULT_ANTI_DEGRADE_MODE)
+const antiDegradeStrategies = ref<AntiDegradeStrategyProfile[]>([])
+const fallbackAntiDegradeStrategies: AntiDegradeStrategyProfile[] = [
+  { id: 'minimal_compat', name: '最小兼容', description: '仅固定账号设备身份，保留独立会话和线程。', category: '常用', identity_mode: 'device', tls_profile: 'standard', max_concurrency: 8, risk: '低', apply_supported: true },
+  { id: 'session_standard', name: '会话兼容', description: '固定设备与账号会话，按客户端会话派生线程。', category: '诊断', identity_mode: 'session', tls_profile: 'standard', max_concurrency: 8, risk: '中', apply_supported: true, diagnostic_only: true },
+  { id: 'mode1', name: '兼容架构 v3', description: '稳定设备身份、独立会话、标准传输和并发上限。', category: '常用', identity_mode: 'device', tls_profile: 'standard', max_concurrency: 16, risk: '中', apply_supported: true },
+  { id: 'legacy', name: '初代兼容', description: '默认策略，复用 sub2 初代的 session 身份和 Node.js 24 传输。', category: '常用', identity_mode: 'session', tls_profile: 'nodejs24', max_concurrency: 16, risk: '中', apply_supported: true },
+  { id: 'tls_node24', name: 'Node.js 24 对照', description: '保持设备身份，单独对照 Node.js 24 TLS。', category: '诊断', identity_mode: 'device', tls_profile: 'nodejs24', max_concurrency: 8, risk: '中', apply_supported: true, diagnostic_only: true },
+  { id: 'low_concurrency', name: '低并发稳定', description: '会话兼容配合低并发，用于排查限流和连接复用。', category: '诊断', identity_mode: 'session', tls_profile: 'standard', max_concurrency: 4, risk: '低', apply_supported: true, diagnostic_only: true },
+  { id: 'mode2', name: '完整收敛', description: '设备、会话和线程全部收敛，仅用于强对照实验。', category: '诊断', identity_mode: 'full', tls_profile: 'nodejs22', max_concurrency: 8, risk: '高', apply_supported: true, diagnostic_only: true }
+]
+const knownAntiDegradeStrategies = computed(() => antiDegradeStrategies.value.length ? antiDegradeStrategies.value : fallbackAntiDegradeStrategies)
+const visibleAntiDegradeStrategies = computed(() => knownAntiDegradeStrategies.value
+  .filter(strategy => strategy.id !== 'native_baseline' && strategy.apply_supported)
+  .filter(strategy => {
+    const a = props.account
+    if (!a || !['oauth', 'setup-token'].includes(a.type)) return false
+    if (a.parent_account_id || a.extra?.proxy_mode === 'random') return false
+    return strategy.id === 'legacy' ? ['openai', 'anthropic'].includes(a.platform) : a.platform === 'openai'
+  })
+  .sort((a, b) => Number(b.id === DEFAULT_ANTI_DEGRADE_MODE) - Number(a.id === DEFAULT_ANTI_DEGRADE_MODE)))
+const selectedAntiDegradeStrategy = computed(() => knownAntiDegradeStrategies.value.find(strategy => strategy.id === antiDegradeSelectedMode.value))
+const selectedAntiDegradeDescription = computed(() => {
+  if (antiDegradeSelectedMode.value === 'mode1') return t('admin.accounts.antiDegradeMode1Desc')
+  if (antiDegradeSelectedMode.value === 'mode2') return t('admin.accounts.antiDegradeMode2Desc')
+  if (antiDegradeSelectedMode.value === 'legacy') return t('admin.accounts.antiDegradeModeLegacyDesc')
+  return selectedAntiDegradeStrategy.value?.description || selectedAntiDegradeStrategy.value?.name || ''
+})
+const antiDegradeExtra = (extra: unknown): Record<string, unknown> =>
+  extra && typeof extra === 'object' ? extra as Record<string, unknown> : {}
+// Keep returned policy fields across stale parent refreshes and reopening this account.
+// Identity seeds remain server-owned and are never included in an edit payload.
+const antiDegradeAccountOverride = ref<Account | null>(null)
+const antiDegradeManagedKeys = [
+  'anti_degradation', 'protection_scope', 'anti_degrade', 'codex_fingerprint_mode', 'enable_tls_fingerprint',
+  'tls_fingerprint_builtin', 'tls_fingerprint_profile_id'
+] as const
+let antiDegradeRequestGeneration = 0
+let antiDegradeMutationGeneration = 0
+const antiDegradeMutationBusy = ref(false)
+const mergeAntiDegradeExtra = (extra: unknown, source: unknown): Record<string, unknown> => {
+  const merged = { ...antiDegradeExtra(extra) }
+  const policy = antiDegradeExtra(source)
+  for (const key of antiDegradeManagedKeys) {
+    if (Object.prototype.hasOwnProperty.call(policy, key)) merged[key] = policy[key]
+    else delete merged[key]
+  }
+  delete merged.codex_fingerprint_seed
+  return merged
+}
+const accountWithAntiDegradeState = (account: Account): Account => {
+  const latest = antiDegradeAccountOverride.value
+  if (!latest || latest.id !== account.id) return account
+  return {
+    ...account,
+    anti_degradation: latest.anti_degradation,
+    protection_scope: latest.protection_scope,
+    protection_mode: latest.protection_mode,
+    concurrency: latest.concurrency,
+    extra: mergeAntiDegradeExtra(account.extra, latest.extra),
+    enable_tls_fingerprint: latest.enable_tls_fingerprint ?? antiDegradeExtra(latest.extra).enable_tls_fingerprint === true,
+    tls_fingerprint_profile_id: latest.tls_fingerprint_profile_id ?? antiDegradeExtra(latest.extra).tls_fingerprint_profile_id as number | undefined
+  }
+}
+const antiDegradeOn = computed(() => {
+  const account = props.account ? accountWithAntiDegradeState(props.account) : null
+  const marker = antiDegradeExtra(account?.extra).anti_degrade as Record<string, unknown> | undefined
+  // Treat either persisted marker as authoritative. During migrations older
+  // rows may have one field updated before the other; using nullish-coalescing
+  // here could incorrectly hide an enabled strategy when the boolean is stale.
+  return account?.anti_degradation === true || marker?.enabled === true
+})
+// Resolve the actually persisted strategy even before opening the preview
+// dialog. This avoids showing "unverified" for accounts that are already
+// protected and makes it clear which strategy is active.
+const antiDegradeCurrentMode = computed<AntiDegradeMode | ''>(() => {
+  const account = props.account ? accountWithAntiDegradeState(props.account) : null
+  const explicit = account?.protection_mode
+  if (explicit && knownAntiDegradeStrategies.value.some(strategy => strategy.id === explicit)) return explicit as AntiDegradeMode
+  const marker = antiDegradeExtra(account?.extra).anti_degrade as Record<string, unknown> | undefined
+  const dtoMode = typeof (account as any)?.protection_mode === 'string' ? (account as any).protection_mode : ''
+  if (dtoMode && knownAntiDegradeStrategies.value.some(strategy => strategy.id === dtoMode)) return dtoMode as AntiDegradeMode
+  const raw = typeof marker?.mode === 'string' ? marker.mode : ''
+  if (raw && knownAntiDegradeStrategies.value.some(strategy => strategy.id === raw)) return raw as AntiDegradeMode
+  // Accounts created by the original implementation may only carry the
+  // protection scope; treat those as the original strategy for display.
+  if (antiDegradeOn.value && account?.protection_scope === 'legacy') return 'legacy'
+  if (antiDegradeOn.value && account?.protection_scope === 'codex_v3') return 'mode1'
+  return ''
+})
+const antiDegradeModeLabel = (mode?: string) => mode === 'mode1'
+  ? t('admin.accounts.antiDegradeMode1')
+  : mode === 'mode2' ? t('admin.accounts.antiDegradeMode2')
+      : mode === 'legacy' ? t('admin.accounts.antiDegradeModeLegacy')
+        : knownAntiDegradeStrategies.value.find(strategy => strategy.id === mode)?.name || t('admin.accounts.antiDegradeNotConfigured')
+const protectionIdentityManaged = computed(() => antiDegradeOn.value && !!antiDegradeCurrentMode.value && knownAntiDegradeStrategies.value.some(strategy => strategy.id === antiDegradeCurrentMode.value && strategy.apply_supported))
+const antiDegradeStatusLabel = computed(() => {
+  const preview = antiDegradePreview.value
+  if (!preview) {
+    if (antiDegradeOn.value) {
+      const mode = antiDegradeCurrentMode.value
+      return mode ? `${t('admin.accounts.antiDegradeEnabled')} · ${antiDegradeModeLabel(mode)}` : t('admin.accounts.antiDegradeEnabled')
+    }
+    return (props.account && accountWithAntiDegradeState(props.account).protection_scope === 'generic_v1') ? '通用保护（并发上限）' : t('admin.accounts.antiDegradeNotConfigured')
+  }
+  if (preview.issues?.length) return t('admin.accounts.antiDegradeConfigurationIssue')
+  if (!preview.enabled) return t('admin.accounts.antiDegradeNotConfigured')
+  if (!preview.active_mode || preview.identity_ready == null || preview.tls_profile == null) {
+    return t('admin.accounts.antiDegradeUnverified')
+  }
+  if (preview.active_mode === 'mode1' && (![2, 3].includes(preview.policy_version ?? 0) || !preview.identity_ready || !preview.tls_profile)) {
+    return t('admin.accounts.antiDegradeConfigurationIssue')
+  }
+  return t('admin.accounts.antiDegradeEnabled')
+})
+const antiDegradeVisibleChanges = computed(() =>
+  (antiDegradePreview.value?.changes || []).filter(change => !/seed|identity_secret/i.test(change.key))
+)
+const fmtAntiDegradeValue = (v: unknown): string => {
+  if (v === undefined || v === null || v === '') return '-'
+  if (typeof v === 'boolean') return v ? t('common.enabled') : t('common.disabled')
+  if (v === 'off') return t('admin.accounts.openai.codexFingerprintOff')
+  if (v === 'device') return t('admin.accounts.openai.codexFingerprintDevice')
+  if (v === 'session') return t('admin.accounts.openai.codexFingerprintSession')
+  if (v === 'full') return t('admin.accounts.openai.codexFingerprintFull')
+  return String(v)
+}
+const antiDegradeReasonLabel = (reason?: string): string => {
+  if (reason === 'account not found') return t('admin.accounts.antiDegradeAccountNotFound')
+  if (reason === 'already enabled, can revert') return t('admin.accounts.antiDegradeAlreadyEnabled')
+  if (reason === 'platform has no fingerprint convergence; only generic items apply') return t('admin.accounts.antiDegradeGenericOnly')
+  if (!reason || reason === 'nothing to change') return t('admin.accounts.antiDegradeNoChange')
+  return reason
+}
+const antiDegradeChangeLabel = (key: string): string => {
+  if (key === 'strategy') return '生效策略'
+  if (key === 'extra.codex_fingerprint_mode') return t('admin.accounts.antiDegradeChangeFingerprint')
+  if (key === 'extra.enable_tls_fingerprint') return t('admin.accounts.antiDegradeChangeTLS')
+  if (key === 'extra.tls_fingerprint_builtin') return t('admin.accounts.antiDegradeChangeTLS')
+  if (key === 'transport') return t('admin.accounts.antiDegradeTLSProfile')
+  if (key === 'policy_version') return t('admin.accounts.antiDegradePolicyVersion')
+  if (key === 'concurrency') return t('admin.accounts.antiDegradeChangeConcurrency')
+  return key
+}
+const antiDegradePolicyVersionLabel = (preview: AntiDegradePreview | null): string => {
+  if (!preview) return '-'
+  // The original strategy intentionally has no v3 policy version. Avoid
+  // displaying the JSON zero value as if it were a real policy revision.
+  if (preview.active_mode === 'legacy' || antiDegradeSelectedMode.value === 'legacy') return t('admin.accounts.antiDegradeLegacyVersion')
+  return preview.policy_version == null || preview.policy_version === 0 ? '-' : String(preview.policy_version)
+}
+const syncAntiDegradeState = (updated: Account) => {
+  const wasDirty = draftDirty.value
+  antiDegradeAccountOverride.value = updated
+  const extra = antiDegradeExtra(updated.extra)
+  const fpMode = extra.codex_fingerprint_mode as string | undefined
+  if (['off', 'device', 'session', 'full'].includes(fpMode || '')) {
+    codexFingerprintMode.value = fpMode as typeof codexFingerprintMode.value
+  } else {
+    codexFingerprintMode.value = 'off'
+  }
+  if (typeof (updated as unknown as Record<string, unknown>).enable_tls_fingerprint === 'boolean') {
+    tlsFingerprintEnabled.value = (updated as unknown as { enable_tls_fingerprint: boolean }).enable_tls_fingerprint
+  } else {
+    const tlsRaw = extra.enable_tls_fingerprint
+    tlsFingerprintEnabled.value = tlsRaw === true
+  }
+  tlsFingerprintProfileId.value = updated.tls_fingerprint_profile_id ?? (extra.tls_fingerprint_profile_id as number | undefined) ?? null
+  if (typeof updated.concurrency === 'number' && form.concurrency === initialAccountConcurrency.value) {
+    form.concurrency = updated.concurrency
+  }
+  initialAccountConcurrency.value = updated.concurrency
+  draftDirty.value = wasDirty
+  antiDegradePreview.value = null
+  antiDegradeDialog.value = false
+  emit('updated', updated)
+}
+const openAntiDegradePreview = async (mode: AntiDegradeMode = DEFAULT_ANTI_DEGRADE_MODE) => {
+  if (props.account == null || antiDegradeBusy.value || submitting.value) return
+  const accountID = props.account.id
+  const generation = ++antiDegradeRequestGeneration
+  antiDegradeBusy.value = true
+  try {
+    antiDegradeSelectedMode.value = mode
+    const preview = await adminAPI.accounts.previewAntiDegrade(accountID, mode)
+    if (generation !== antiDegradeRequestGeneration || props.account?.id !== accountID || !props.show) return
+    antiDegradePreview.value = preview
+    antiDegradeDialog.value = true
+  } catch (error: any) {
+    if (generation === antiDegradeRequestGeneration) appStore.showError(extractApiErrorMessage(error, t('admin.accounts.antiDegradeFailed')))
+  } finally {
+    if (generation === antiDegradeRequestGeneration) antiDegradeBusy.value = false
+  }
+}
+const handleAntiDegradeToggle = async () => {
+  if (antiDegradeOn.value) {
+    await revertAntiDegrade()
+  } else {
+    if (props.account == null || antiDegradeBusy.value || submitting.value) return
+    const accountID = props.account.id
+    const generation = ++antiDegradeMutationGeneration
+    antiDegradeBusy.value = true
+    antiDegradeMutationBusy.value = true
+    try {
+      const updated = await adminAPI.accounts.setProtection(accountID, true)
+      if (generation === antiDegradeMutationGeneration && props.account?.id === accountID) syncAntiDegradeState(updated)
+    } catch (error: any) {
+      if (generation === antiDegradeMutationGeneration) appStore.showError(extractApiErrorMessage(error, t('admin.accounts.antiDegradeFailed')))
+      await reloadAntiDegradeState(accountID, generation)
+    } finally {
+      if (generation === antiDegradeMutationGeneration) {
+        antiDegradeBusy.value = false
+        antiDegradeMutationBusy.value = false
+      }
+    }
+  }
+}
+const applyAntiDegrade = async () => {
+  if (props.account == null || antiDegradeBusy.value || submitting.value) return
+  const accountID = props.account.id
+  const generation = ++antiDegradeMutationGeneration
+  antiDegradeMutationBusy.value = true
+  antiDegradeBusy.value = true
+  try {
+    const updated = await adminAPI.accounts.applyAntiDegrade(accountID, antiDegradeSelectedMode.value)
+    if (generation !== antiDegradeMutationGeneration || props.account?.id !== accountID) return
+    syncAntiDegradeState(updated)
+    if (antiDegradeOn.value) appStore.showSuccess(t('admin.accounts.antiDegradeApplied'))
+    else appStore.showInfo(t('admin.accounts.antiDegradeNotConfigured'))
+  } catch (error: any) {
+    if (generation === antiDegradeMutationGeneration) appStore.showError(extractApiErrorMessage(error, t('admin.accounts.antiDegradeFailed')))
+    await reloadAntiDegradeState(accountID, generation)
+  } finally {
+    if (generation === antiDegradeMutationGeneration) {
+      antiDegradeMutationBusy.value = false
+      antiDegradeBusy.value = false
+    }
+  }
+}
+const revertAntiDegrade = () => { if (!antiDegradeBusy.value) antiDegradeDisableConfirm.value = true }
+
+async function reloadAntiDegradeState(accountID: number, generation: number) {
+  try {
+    const updated = await adminAPI.accounts.getById(accountID)
+    if (generation === antiDegradeMutationGeneration && props.account?.id === accountID) syncAntiDegradeState(updated)
+  } catch { /* The original error stays visible when reloading is unavailable. */ }
+}
+const confirmRevertAntiDegrade = async () => {
+  antiDegradeDisableConfirm.value = false
+  if (props.account == null || antiDegradeBusy.value || submitting.value) return
+  const accountID = props.account.id
+  const generation = ++antiDegradeMutationGeneration
+  antiDegradeMutationBusy.value = true
+  antiDegradeBusy.value = true
+  try {
+    const updated = await adminAPI.accounts.revertAntiDegrade(accountID, true)
+    if (generation !== antiDegradeMutationGeneration || props.account?.id !== accountID) return
+    syncAntiDegradeState(updated)
+    if (!antiDegradeOn.value) appStore.showSuccess(t('admin.accounts.antiDegradeReverted'))
+    else appStore.showInfo(t('admin.accounts.antiDegradeUnverified'))
+  } catch (error: any) {
+    if (generation === antiDegradeMutationGeneration) appStore.showError(extractApiErrorMessage(error, t('admin.accounts.antiDegradeFailed')))
+    await reloadAntiDegradeState(accountID, generation)
+  } finally {
+    if (generation === antiDegradeMutationGeneration) {
+      antiDegradeMutationBusy.value = false
+      antiDegradeBusy.value = false
+    }
+  }
+}
+watch(
+  [() => props.show, () => props.account?.id],
+  async ([show, accountID], [, previousID]) => {
+    antiDegradeRequestGeneration++
+    antiDegradeDisableConfirm.value = false
+    antiDegradeDialog.value = false
+    antiDegradePreview.value = null
+    antiDegradeSelectedMode.value = DEFAULT_ANTI_DEGRADE_MODE
+    if (accountID !== previousID) {
+      antiDegradeAccountOverride.value = null
+      antiDegradeMutationGeneration++
+      antiDegradeMutationBusy.value = false
+    }
+    antiDegradeBusy.value = antiDegradeMutationBusy.value
+    if (show && antiDegradeStrategies.value.length === 0) {
+      try {
+        antiDegradeStrategies.value = await adminAPI.accounts.listAntiDegradeStrategies()
+      } catch {
+        // Keep the small compatibility list when an older backend is used.
+      }
+    }
+  }
+)
 
 const handleUpstreamBillingRateSyncChange = (enabled: boolean) => {
   upstreamBillingRateSyncEnabled.value = enabled
@@ -3855,6 +4401,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   form.notes = newAccount.notes || ''
   form.proxy_id = newAccount.proxy_id
   form.concurrency = newAccount.concurrency
+  initialAccountConcurrency.value = newAccount.concurrency
   form.load_factor = newAccount.load_factor ?? null
   form.priority = newAccount.priority
   form.rate_multiplier = newAccount.rate_multiplier ?? 1
@@ -3882,6 +4429,17 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   mixedScheduling.value = false
   allowOverages.value = false
 	const extra = newAccount.extra as Record<string, unknown> | undefined
+	trafficPolicyDraft.value = { ...defaultTrafficPolicy(), ...((extra?.account_traffic_control as Partial<ReturnType<typeof defaultTrafficPolicy>>) || {}) }
+	initialTrafficPolicy = JSON.stringify(trafficPolicyDraft.value)
+	requestIntegrityMode.value = ['off','observe','enforce'].includes(String(extra?.request_integrity_mode)) ? String(extra?.request_integrity_mode) : 'default'
+	initialRequestIntegrityMode = requestIntegrityMode.value
+	randomProxyEnabled.value = extra?.proxy_mode === 'random'
+	initialRandomProxyEnabled = randomProxyEnabled.value
+	accountPoolSelection.value = extra?.pool === 'premium' ? 'premium' : 'standard'
+	initialAccountPool = accountPoolSelection.value
+	if (randomProxyEnabled.value) {
+	  form.proxy_id = null
+	}
 	mixedScheduling.value = extra?.mixed_scheduling === true
 	allowOverages.value = extra?.allow_overages === true
 	upstreamRequestIdHeader.value = readUpstreamRequestIdHeader(extra)
@@ -3964,7 +4522,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       codexCLIOnlyAppServerEnabled.value =
         extra?.codex_cli_only_allow_app_server === true
     }
-    if (newAccount.type === 'oauth') {
+    if (newAccount.type === 'oauth' || newAccount.type === 'setup-token') {
       const fpMode = extra?.codex_fingerprint_mode as string | undefined
       // 缺省/非法值按 off 呈现，与后端 GetCodexFingerprintMode 的 opt-in 语义一致（#5610）
       codexFingerprintMode.value = (['off', 'device', 'session', 'full'].includes(fpMode || '')
@@ -4276,7 +4834,15 @@ watch(
       return
     }
     if (!wasShow || newAccount !== previousAccount) {
-      syncFormFromAccount(newAccount)
+      if (wasShow && newAccount.id === previousAccount?.id && draftDirty.value) return
+      if (!wasShow || newAccount.id !== previousAccount?.id) activeSection.value = 'basic'
+      const returned = antiDegradeAccountOverride.value
+      if (returned && Date.parse(newAccount.updated_at) > Date.parse(returned.updated_at)) {
+        antiDegradeAccountOverride.value = null
+      }
+      antiDegradePreview.value = null
+      syncFormFromAccount(accountWithAntiDegradeState(newAccount))
+      draftDirty.value = false
       loadTLSProfiles()
     }
   },
@@ -4778,6 +5344,13 @@ const parseDateTimeLocal = parseDateTimeLocalInput
 
 // Methods
 const handleClose = () => {
+  if (submitting.value || antiDegradeBusy.value) return
+  if (draftDirty.value) { discardConfirm.value = true; return }
+  closeEditor()
+}
+const closeEditor = () => {
+  discardConfirm.value = false
+  draftDirty.value = false
   antigravityMixedChannelConfirmed.value = false
   clearMixedChannelDialog()
   emit('close')
@@ -4825,9 +5398,10 @@ const submitUpdateAccount = async (accountID: number, updatePayload: Record<stri
   try {
     let updatedAccount = await adminAPI.accounts.update(accountID, withAntigravityConfirmFlag(updatePayload))
     updatedAccount = await persistGrokMediaEligibility(accountID, updatedAccount)
+    if (antiDegradeAccountOverride.value?.id === accountID) antiDegradeAccountOverride.value = updatedAccount
     appStore.showSuccess(t('admin.accounts.accountUpdated'))
     emit('updated', updatedAccount)
-    handleClose()
+    closeEditor()
   } catch (error: any) {
     if (error.status === 409 && error.error === 'mixed_channel_warning' && needsMixedChannelCheck()) {
       openMixedChannelDialog({
@@ -4846,8 +5420,20 @@ const submitUpdateAccount = async (accountID: number, updatePayload: Record<stri
 }
 
 const handleSubmit = async () => {
-  if (!props.account) return
+  if (!props.account || antiDegradeBusy.value || submitting.value) return
   const accountID = props.account.id
+  const traffic = normalizeTrafficDraft(trafficPolicyDraft.value)
+  const trafficError = trafficPolicyError(traffic, form.concurrency)
+  if (trafficError) { activeSection.value = 'protection'; trafficControls.value?.prepareForSave?.(); appStore.showError(trafficError); return }
+  trafficPolicyDraft.value = traffic
+  const invalid = editFormElement.value?.querySelector<HTMLElement>(':invalid')
+  if (invalid) {
+    activeSection.value = invalid.closest<HTMLElement>('[data-edit-section]')?.dataset.editSection || 'basic'
+    await nextTick()
+    editFormElement.value?.reportValidity()
+    invalid.focus()
+    return
+  }
 
   if (form.status !== 'active' && form.status !== 'inactive' && form.status !== 'error') {
     appStore.showError(t('admin.accounts.pleaseSelectStatus'))
@@ -4861,6 +5447,7 @@ const handleSubmit = async () => {
 		}
 	}
 
+  submitting.value = true
   const updatePayload: Record<string, unknown> = { ...form }
   try {
     // 后端期望 proxy_id: 0 表示清除代理，而不是 null
@@ -5486,7 +6073,7 @@ const handleSubmit = async () => {
 
       // 指纹收敛模式：默认 off（不写入）；device/session/full 是显式 opt-in，
       // 必须落键，否则管理员的选择会被后端当作"未设置"而回落到 off（#5610）。
-      if (props.account.type === 'oauth') {
+      if (props.account.type === 'oauth' || props.account.type === 'setup-token') {
         if (codexFingerprintMode.value !== 'off') {
           newExtra.codex_fingerprint_mode = codexFingerprintMode.value
         } else {
@@ -5569,6 +6156,50 @@ const handleSubmit = async () => {
       }
       updatePayload.extra = newExtra
     }
+    // Random proxy mode is persisted in the existing extra JSON field. Clear
+    // the fixed foreign key while enabled so runtime hydration can rotate it.
+    // 仅在开关状态变化时写回，避免无条件全量 extra 覆盖运行态键。
+    if (randomProxyEnabled.value !== initialRandomProxyEnabled) {
+      const proxyExtra: Record<string, unknown> = {
+        ...((updatePayload.extra as Record<string, unknown>) ||
+          ((props.account.extra as Record<string, unknown>) || {}))
+      }
+      if (randomProxyEnabled.value) {
+        proxyExtra.proxy_mode = 'random'
+        updatePayload.proxy_id = 0
+      } else {
+        delete proxyExtra.proxy_mode
+      }
+      updatePayload.extra = proxyExtra
+    }
+    // 账号池标记同样只在变化时写回。
+    if (accountPoolSelection.value !== initialAccountPool) {
+      const poolExtra: Record<string, unknown> = {
+        ...((updatePayload.extra as Record<string, unknown>) ||
+          ((props.account.extra as Record<string, unknown>) || {}))
+      }
+      if (accountPoolSelection.value === 'premium') {
+        poolExtra.pool = 'premium'
+      } else {
+        delete poolExtra.pool
+      }
+      updatePayload.extra = poolExtra
+    }
+
+    // Keep the complete returned policy when this form still has older account props.
+    const latestAntiDegrade = antiDegradeAccountOverride.value
+    if (latestAntiDegrade?.id === accountID) {
+      updatePayload.extra = mergeAntiDegradeExtra(updatePayload.extra || props.account.extra, latestAntiDegrade.extra)
+    }
+    if (props.account.platform === 'openai' && requestIntegrityMode.value !== initialRequestIntegrityMode) {
+      updatePayload.extra = { ...((updatePayload.extra as Record<string, unknown>) || props.account.extra || {}), request_integrity_mode: requestIntegrityMode.value === 'default' ? null : requestIntegrityMode.value }
+    }
+    if (JSON.stringify(traffic) !== initialTrafficPolicy) {
+      updatePayload.extra = { ...((updatePayload.extra as Record<string, unknown>) || props.account.extra || {}), account_traffic_control: { ...traffic } }
+    }
+    if (updatePayload.extra) {
+      delete (updatePayload.extra as Record<string, unknown>).codex_fingerprint_seed
+    }
 
     const canContinue = await ensureAntigravityMixedChannelConfirmed(async () => {
       await submitUpdateAccount(accountID, updatePayload)
@@ -5580,6 +6211,8 @@ const handleSubmit = async () => {
     await submitUpdateAccount(accountID, updatePayload)
   } catch (error: any) {
     appStore.showError(error.message || t('admin.accounts.failedToUpdate'))
+  } finally {
+    submitting.value = false
   }
 }
 

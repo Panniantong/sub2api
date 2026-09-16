@@ -122,6 +122,9 @@ func APIKeyFromService(k *service.APIKey) *APIKey {
 		t := k.Window7dStart.Add(service.RateLimitWindow7d)
 		out.Reset7dAt = &t
 	}
+	if k.Key == "" && k.KeyHash != "" {
+		out.KeyDisplay = k.KeyPrefix + "********"
+	}
 	return out
 }
 
@@ -185,6 +188,9 @@ func groupFromServiceBase(g *service.Group) Group {
 		Platform:                        g.Platform,
 		RateMultiplier:                  g.RateMultiplier,
 		IsExclusive:                     g.IsExclusive,
+		SecurityPolicyEnabled:           g.SecurityPolicyEnabled,
+		SecurityPolicyMode:              g.SecurityPolicyMode,
+		SecurityPolicyEmailEnabled:      g.SecurityPolicyEmailEnabled,
 		Status:                          g.Status,
 		SubscriptionType:                g.SubscriptionType,
 		DailyLimitUSD:                   g.DailyLimitUSD,
@@ -242,6 +248,9 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		ollamaCloudUsage = state
 	}
 	out := &Account{
+		AntiDegradation:         a.AntiDegradationEnabled(),
+		ProtectionScope:         a.ProtectionScope(),
+		ProtectionMode:          a.ProtectionMode(),
 		ID:                      a.ID,
 		Name:                    a.Name,
 		Notes:                   a.Notes,
@@ -415,6 +424,8 @@ func redactAccountManagedExtra(extra map[string]any) map[string]any {
 	redacted := make(map[string]any, len(extra))
 	for key, value := range extra {
 		switch key {
+		case "codex_fingerprint_seed":
+			continue
 		case service.OllamaCloudUsageSessionExtraKey,
 			service.OllamaCloudUsageAutoRefreshExtraKey,
 			service.OllamaCloudUsageSnapshotExtraKey:
@@ -456,7 +467,10 @@ func AccountListItemFromAccount(a *Account) *AccountListItem {
 		return nil
 	}
 	return &AccountListItem{
-		ID: a.ID, Name: a.Name, Notes: a.Notes, Platform: a.Platform, Type: a.Type,
+		AntiDegradation: a.AntiDegradation,
+		ProtectionScope: a.ProtectionScope,
+		ProtectionMode:  a.ProtectionMode,
+		ID:              a.ID, Name: a.Name, Notes: a.Notes, Platform: a.Platform, Type: a.Type,
 		Credentials: a.Credentials, CredentialsStatus: a.CredentialsStatus, Extra: a.Extra,
 		OllamaCloudUsage: a.OllamaCloudUsage,
 		ProxyID:          a.ProxyID, ProxyFallbackOriginID: a.ProxyFallbackOriginID, ProxyFallbackOriginName: a.ProxyFallbackOriginName,
@@ -956,3 +970,38 @@ func PromoCodeUsageFromService(u *service.PromoCodeUsage) *PromoCodeUsage {
 		User:        UserFromServiceShallow(u.User),
 	}
 }
+
+// SecurityPolicyKeywordFromService converts a service keyword to admin DTO.
+func SecurityPolicyKeywordFromService(w *service.SecurityPolicyKeyword) *SecurityPolicyKeyword {
+	if w == nil {
+		return nil
+	}
+	return &SecurityPolicyKeyword{
+		ID:        w.ID,
+		GroupID:   w.GroupID,
+		Keyword:   w.Keyword,
+		Category:  w.Category,
+		Enabled:   w.Enabled,
+		CreatedAt: w.CreatedAt,
+		UpdatedAt: w.UpdatedAt,
+	}
+}
+
+// SecurityPolicyKeywordsFromService converts a service keyword list to admin DTOs.
+func SecurityPolicyKeywordsFromService(words []service.SecurityPolicyKeyword) []SecurityPolicyKeyword {
+	out := make([]SecurityPolicyKeyword, 0, len(words))
+	for i := range words {
+		if dto := SecurityPolicyKeywordFromService(&words[i]); dto != nil {
+			out = append(out, *dto)
+		}
+	}
+	return out
+}
+
+// SecurityPolicyKeywordSeedFromService converts a builtin seed to admin DTO.
+func SecurityPolicyKeywordSeedFromService(seed service.SecurityPolicyKeywordSeed) SecurityPolicyKeywordSeed {
+	return SecurityPolicyKeywordSeed{Keyword: seed.Keyword, Category: seed.Category}
+}
+
+// ProxyWithAccountCountFromServiceAdmin converts a service ProxyWithAccountCount to AdminProxyWithAccountCount DTO.
+// It includes the password field - user-facing endpoints must not use this.

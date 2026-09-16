@@ -26,6 +26,9 @@ func (r *userSubscriptionRepository) Create(ctx context.Context, sub *service.Us
 	if sub == nil {
 		return service.ErrSubscriptionNilInput
 	}
+	if needsManagedResourceGuard(ctx) {
+		return withManagedResourceWrite(ctx, r.client, "", 0, sub.UserID, func(next context.Context) error { return r.Create(next, sub) })
+	}
 
 	client := clientFromContext(ctx, r.client)
 	builder := client.UserSubscription.Create().
@@ -76,6 +79,15 @@ func (r *userSubscriptionRepository) GetByID(ctx context.Context, id int64) (*se
 }
 
 func (r *userSubscriptionRepository) GetByIDForUpdate(ctx context.Context, id int64) (*service.UserSubscription, error) {
+	if needsManagedResourceGuard(ctx) {
+		var result *service.UserSubscription
+		err := withManagedResourceWrite(ctx, r.client, "user_subscriptions", id, 0, func(next context.Context) error {
+			var err error
+			result, err = r.GetByIDForUpdate(next, id)
+			return err
+		})
+		return result, err
+	}
 	client := clientFromContext(ctx, r.client)
 	m, err := client.UserSubscription.Query().
 		Where(usersubscription.IDEQ(id)).
@@ -135,6 +147,9 @@ func (r *userSubscriptionRepository) Update(ctx context.Context, sub *service.Us
 	if sub == nil {
 		return service.ErrSubscriptionNilInput
 	}
+	if needsManagedResourceGuard(ctx) {
+		return withManagedResourceWrite(ctx, r.client, "user_subscriptions", sub.ID, sub.UserID, func(next context.Context) error { return r.Update(next, sub) })
+	}
 
 	client := clientFromContext(ctx, r.client)
 	builder := client.UserSubscription.UpdateOneID(sub.ID).
@@ -162,6 +177,9 @@ func (r *userSubscriptionRepository) Update(ctx context.Context, sub *service.Us
 }
 
 func (r *userSubscriptionRepository) Delete(ctx context.Context, id int64) error {
+	if needsManagedResourceGuard(ctx) {
+		return withManagedResourceWrite(ctx, r.client, "user_subscriptions", id, 0, func(next context.Context) error { return r.Delete(next, id) })
+	}
 	// Match GORM semantics: deleting a missing row is not an error.
 	client := clientFromContext(ctx, r.client)
 	_, err := client.UserSubscription.Delete().Where(usersubscription.IDEQ(id)).Exec(ctx)
@@ -169,6 +187,15 @@ func (r *userSubscriptionRepository) Delete(ctx context.Context, id int64) error
 }
 
 func (r *userSubscriptionRepository) Restore(ctx context.Context, subscriptionID int64, restoredStatus string) (*service.UserSubscription, error) {
+	if needsManagedResourceGuard(ctx) {
+		var result *service.UserSubscription
+		err := withManagedResourceWrite(ctx, r.client, "user_subscriptions", subscriptionID, 0, func(next context.Context) error {
+			var err error
+			result, err = r.Restore(next, subscriptionID, restoredStatus)
+			return err
+		})
+		return result, err
+	}
 	client := clientFromContext(ctx, r.client)
 	queryCtx := mixins.SkipSoftDelete(ctx)
 	_, err := client.UserSubscription.UpdateOneID(subscriptionID).
@@ -345,6 +372,9 @@ func (r *userSubscriptionRepository) ExistsActiveByUserIDAndGroupID(ctx context.
 }
 
 func (r *userSubscriptionRepository) ExtendExpiry(ctx context.Context, subscriptionID int64, newExpiresAt time.Time) error {
+	if needsManagedResourceGuard(ctx) {
+		return withManagedResourceWrite(ctx, r.client, "user_subscriptions", subscriptionID, 0, func(next context.Context) error { return r.ExtendExpiry(next, subscriptionID, newExpiresAt) })
+	}
 	client := clientFromContext(ctx, r.client)
 	_, err := client.UserSubscription.UpdateOneID(subscriptionID).
 		SetExpiresAt(newExpiresAt).
@@ -353,6 +383,9 @@ func (r *userSubscriptionRepository) ExtendExpiry(ctx context.Context, subscript
 }
 
 func (r *userSubscriptionRepository) UpdateStatus(ctx context.Context, subscriptionID int64, status string) error {
+	if needsManagedResourceGuard(ctx) {
+		return withManagedResourceWrite(ctx, r.client, "user_subscriptions", subscriptionID, 0, func(next context.Context) error { return r.UpdateStatus(next, subscriptionID, status) })
+	}
 	client := clientFromContext(ctx, r.client)
 	_, err := client.UserSubscription.UpdateOneID(subscriptionID).
 		SetStatus(status).
@@ -361,6 +394,9 @@ func (r *userSubscriptionRepository) UpdateStatus(ctx context.Context, subscript
 }
 
 func (r *userSubscriptionRepository) UpdateNotes(ctx context.Context, subscriptionID int64, notes string) error {
+	if needsManagedResourceGuard(ctx) {
+		return withManagedResourceWrite(ctx, r.client, "user_subscriptions", subscriptionID, 0, func(next context.Context) error { return r.UpdateNotes(next, subscriptionID, notes) })
+	}
 	client := clientFromContext(ctx, r.client)
 	_, err := client.UserSubscription.UpdateOneID(subscriptionID).
 		SetNotes(notes).
@@ -385,6 +421,11 @@ func (r *userSubscriptionRepository) ActivateWindows(ctx context.Context, id int
 }
 
 func (r *userSubscriptionRepository) ResetUsageWindows(ctx context.Context, id int64, resetDaily, resetWeekly, resetMonthly bool, dailyStart, periodicStart time.Time) error {
+	if needsManagedResourceGuard(ctx) {
+		return withManagedResourceWrite(ctx, r.client, "user_subscriptions", id, 0, func(next context.Context) error {
+			return r.ResetUsageWindows(next, id, resetDaily, resetWeekly, resetMonthly, dailyStart, periodicStart)
+		})
+	}
 	client := clientFromContext(ctx, r.client)
 	update := client.UserSubscription.UpdateOneID(id)
 	if resetDaily {

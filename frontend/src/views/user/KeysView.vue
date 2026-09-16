@@ -97,9 +97,10 @@
           <template #cell-key="{ value, row }">
             <div class="flex items-center gap-2">
               <code class="code text-xs">
-                {{ maskApiKey(value) }}
+                {{ maskApiKey(value) || row.key_display }}
               </code>
               <button
+                v-if="value"
                 @click="copyToClipboard(value, row.id)"
                 class="rounded-lg p-1 transition-colors hover:bg-gray-100 dark:hover:bg-dark-700"
                 :class="

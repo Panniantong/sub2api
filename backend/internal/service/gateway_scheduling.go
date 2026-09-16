@@ -182,7 +182,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 					localExcluded[account.ID] = struct{}{} // 排除此账号
 					continue                               // 重新选择
 				}
-				return s.newSelectionResult(ctx, account, true, result.ReleaseFunc, nil)
+				return s.newSelectionResultFromHydratedAccount(ctx, account, true, result.ReleaseFunc, nil), nil
 			}
 
 			// 对于等待计划的情况，也需要先检查会话限制
@@ -194,20 +194,20 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 			if stickyAccountID > 0 && stickyAccountID == account.ID && s.concurrencyService != nil {
 				waitingCount, _ := s.concurrencyService.GetAccountWaitingCount(ctx, account.ID)
 				if waitingCount < cfg.StickySessionMaxWaiting {
-					return s.newSelectionResult(ctx, account, false, nil, &AccountWaitPlan{
+					return s.newSelectionResultFromHydratedAccount(ctx, account, false, nil, &AccountWaitPlan{
 						AccountID:      account.ID,
 						MaxConcurrency: account.Concurrency,
 						Timeout:        cfg.StickySessionWaitTimeout,
 						MaxWaiting:     cfg.StickySessionMaxWaiting,
-					})
+					}), nil
 				}
 			}
-			return s.newSelectionResult(ctx, account, false, nil, &AccountWaitPlan{
+			return s.newSelectionResultFromHydratedAccount(ctx, account, false, nil, &AccountWaitPlan{
 				AccountID:      account.ID,
 				MaxConcurrency: account.Concurrency,
 				Timeout:        cfg.FallbackWaitTimeout,
 				MaxWaiting:     cfg.FallbackMaxWaiting,
-			})
+			}), nil
 		}
 	}
 
@@ -1036,6 +1036,9 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 				}
 			}
 		}
+		if err == nil {
+			accounts = FilterTierPoolAccounts(accounts, TierPoolFromContext(ctx))
+		}
 		return accounts, useMixed, err
 	}
 	useMixed := (platform == PlatformAnthropic || platform == PlatformGemini) && !hasForcePlatform
@@ -1080,7 +1083,7 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 					"tls_fingerprint", acc.IsTLSFingerprintEnabled())
 			}
 		}
-		return s.filterAccountsBySchedulingThreshold(ctx, filtered), useMixed, nil
+		return FilterTierPoolAccounts(s.filterAccountsBySchedulingThreshold(ctx, filtered), TierPoolFromContext(ctx)), useMixed, nil
 	}
 
 	var accounts []Account
@@ -1119,7 +1122,7 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 	if platform == PlatformGrok || strings.EqualFold(platform, PlatformGrok) {
 		accounts = s.filterGrokFreeQuotaAccountsForGateway(ctx, accounts)
 	}
-	return accounts, useMixed, nil
+	return FilterTierPoolAccounts(accounts, TierPoolFromContext(ctx)), useMixed, nil
 }
 
 // IsSingleAntigravityAccountGroup 检查指定分组是否只有一个 antigravity 平台的可调度账号。
@@ -1559,15 +1562,22 @@ func (s *GatewayService) isAccountBlockedBySchedulingThreshold(ctx context.Conte
 }
 
 func (s *GatewayService) hydrateSelectedAccount(ctx context.Context, account *Account) (*Account, error) {
-	if account == nil || s.schedulerSnapshot == nil {
-		return account, nil
+	if account == nil {
+		return nil, nil
 	}
-	hydrated, err := s.schedulerSnapshot.GetAccount(ctx, account.ID)
-	if err != nil {
+	hydrated := account
+	if s.schedulerSnapshot != nil {
+		var err error
+		hydrated, err = s.schedulerSnapshot.GetAccount(ctx, account.ID)
+		if err != nil {
+			return nil, err
+		}
+		if hydrated == nil {
+			return nil, fmt.Errorf("selected gateway account %d not found during hydration", account.ID)
+		}
+	}
+	if err := ResolveRandomProxyFromSource(ctx, hydrated, s.accountRepo); err != nil {
 		return nil, err
-	}
-	if hydrated == nil {
-		return nil, fmt.Errorf("selected gateway account %d not found during hydration", account.ID)
 	}
 	return hydrated, nil
 }
@@ -1577,12 +1587,23 @@ func (s *GatewayService) newSelectionResult(ctx context.Context, account *Accoun
 	if err != nil {
 		return nil, err
 	}
+	return s.newSelectionResultFromHydratedAccount(ctx, hydrated, acquired, release, waitPlan), nil
+}
+
+// newSelectionResultFromHydratedAccount builds a result for a caller that has
+// already loaded the full account payload. Keeping this separate from
+// newSelectionResult prevents the no-load scheduling path from fetching the
+// same scheduler snapshot (and selecting a random proxy) twice.
+func (s *GatewayService) newSelectionResultFromHydratedAccount(ctx context.Context, account *Account, acquired bool, release func(), waitPlan *AccountWaitPlan) *AccountSelectionResult {
+	if account == nil {
+		return nil
+	}
 	return attachSelectionProfitGate(ctx, &AccountSelectionResult{
-		Account:     hydrated,
+		Account:     account,
 		Acquired:    acquired,
 		ReleaseFunc: release,
 		WaitPlan:    waitPlan,
-	}), nil
+	})
 }
 
 // filterByMinPriority 过滤出优先级最小的账号集合

@@ -61,6 +61,7 @@
                 :class="loading ? 'animate-spin' : ''"
               />
             </button>
+            <label class="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300"><input v-model="detailedStatsEnabled" type="checkbox" data-testid="group-stats-toggle" />完整统计</label>
             <div class="relative" ref="columnDropdownRef">
               <button
                 @click="showColumnDropdown = !showColumnDropdown"
@@ -379,6 +380,7 @@
 
           <template #cell-actions="{ row }">
             <div class="flex items-center gap-1">
+              <button v-if="detailedStatsEnabled" type="button" class="rounded-lg p-1.5 text-xs text-primary-600" data-testid="group-detailed-stats" @click="statisticsGroupId = row.id">统计</button>
               <button
                 @click="handleEdit(row)"
                 class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-dark-700 dark:hover:text-primary-400"
@@ -701,6 +703,54 @@
                   : t("admin.groups.public")
               }}
             </span>
+          </div>
+        </div>
+
+        <!-- 安全策略：敏感话题拦截 + 违规断会话（默认关闭） -->
+        <div class="mt-4 border-t border-gray-200 dark:border-dark-400 pt-4">
+          <div class="flex items-center gap-3">
+            <button
+              type="button"
+              @click="createForm.security_policy_enabled = !createForm.security_policy_enabled"
+              :class="[
+                'relative inline-flex h-6 w-11 items-center rounded-full transition-colors',
+                createForm.security_policy_enabled
+                  ? 'bg-primary-500'
+                  : 'bg-gray-300 dark:bg-dark-600',
+              ]"
+            >
+              <span
+                :class="[
+                  'inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform',
+                  createForm.security_policy_enabled ? 'translate-x-6' : 'translate-x-1',
+                ]"
+              />
+            </button>
+            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
+              {{ t("admin.groups.securityPolicy.title") }}
+            </span>
+          </div>
+          <p class="input-hint mt-1">
+            {{ t("admin.groups.securityPolicy.hint") }}
+          </p>
+          <div v-if="createForm.security_policy_enabled" class="mt-3 space-y-3">
+            <div>
+              <label class="input-label">{{
+                t("admin.groups.securityPolicy.mode")
+              }}</label>
+              <Select
+                v-model="createForm.security_policy_mode"
+                :options="securityPolicyModeOptions"
+              />
+            </div>
+            <label class="flex cursor-pointer items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+              <input
+                v-model="createForm.security_policy_email_enabled"
+                type="checkbox"
+                class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              />
+              <span>{{ t("admin.groups.securityPolicy.email") }}</span>
+            </label>
           </div>
         </div>
 
@@ -1605,11 +1655,12 @@
             }}</label>
             <Toggle
               :model-value="createForm.allow_live"
+              :disabled="!createForm.allow_live"
               @update:model-value="toggleLive('create')"
             />
           </div>
           <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-            {{ t("admin.groups.openaiLive.hint") }}
+            当前暂不可用，恢复开放前需完成费用结算。
           </p>
         </div>
 
@@ -2341,6 +2392,54 @@
         <div>
           <label class="input-label">{{ t("admin.groups.form.status") }}</label>
           <Select v-model="editForm.status" :options="editStatusOptions" />
+        </div>
+
+        <!-- 安全策略：敏感话题拦截 + 违规断会话（默认关闭） -->
+        <div class="mt-4 border-t border-gray-200 dark:border-dark-400 pt-4">
+          <div class="flex items-center gap-3">
+            <button
+              type="button"
+              @click="editForm.security_policy_enabled = !editForm.security_policy_enabled"
+              :class="[
+                'relative inline-flex h-6 w-11 items-center rounded-full transition-colors',
+                editForm.security_policy_enabled
+                  ? 'bg-primary-500'
+                  : 'bg-gray-300 dark:bg-dark-600',
+              ]"
+            >
+              <span
+                :class="[
+                  'inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform',
+                  editForm.security_policy_enabled ? 'translate-x-6' : 'translate-x-1',
+                ]"
+              />
+            </button>
+            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
+              {{ t("admin.groups.securityPolicy.title") }}
+            </span>
+          </div>
+          <p class="input-hint mt-1">
+            {{ t("admin.groups.securityPolicy.hint") }}
+          </p>
+          <div v-if="editForm.security_policy_enabled" class="mt-3 space-y-3">
+            <div>
+              <label class="input-label">{{
+                t("admin.groups.securityPolicy.mode")
+              }}</label>
+              <Select
+                v-model="editForm.security_policy_mode"
+                :options="securityPolicyModeOptions"
+              />
+            </div>
+            <label class="flex cursor-pointer items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+              <input
+                v-model="editForm.security_policy_email_enabled"
+                type="checkbox"
+                class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              />
+              <span>{{ t("admin.groups.securityPolicy.email") }}</span>
+            </label>
+          </div>
         </div>
 
         <!-- Subscription Configuration -->
@@ -3255,11 +3354,12 @@
             }}</label>
             <Toggle
               :model-value="editForm.allow_live"
+              :disabled="!editForm.allow_live"
               @update:model-value="toggleLive('edit')"
             />
           </div>
           <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-            {{ t("admin.groups.openaiLive.hint") }}
+            当前暂不可用，恢复开放前需完成费用结算。
           </p>
         </div>
 
@@ -4257,11 +4357,13 @@
       @close="showRPMOverridesModal = false"
       @success="loadGroups"
     />
+    <GroupStatisticsDialog :group-id="statisticsGroupId" @close="statisticsGroupId = null" />
   </AppLayout>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from "vue";
+import GroupStatisticsDialog from '@/components/admin/groups/GroupStatisticsDialog.vue'
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "@/stores/app";
 import { useAuthStore } from "@/stores/auth";
@@ -4436,6 +4538,16 @@ const groupPricingToAPI = (
     }));
 
 const { t } = useI18n();
+const securityPolicyModeOptions = computed(() => [
+  {
+    value: "block_session",
+    label: t("admin.groups.securityPolicy.modeSession"),
+  },
+  {
+    value: "block_request",
+    label: t("admin.groups.securityPolicy.modeRequest"),
+  },
+]);
 const appStore = useAppStore();
 const authStore = useAuthStore();
 const onboardingStore = useOnboardingStore();
@@ -4479,6 +4591,10 @@ const toggleableColumns = computed(() =>
 const hiddenColumns = reactive<Set<string>>(new Set());
 const showColumnDropdown = ref(false);
 const columnDropdownRef = ref<HTMLElement | null>(null);
+const detailedStatsEnabled = ref(false)
+const statisticsGroupId = ref<number | null>(null)
+try { detailedStatsEnabled.value = localStorage.getItem('admin_groups_detailed_stats') === 'true' } catch { /* unavailable browser storage */ }
+watch(detailedStatsEnabled, value => { if (!value) statisticsGroupId.value = null; try { localStorage.setItem('admin_groups_detailed_stats', String(value)) } catch { /* preference only */ } })
 
 const getValidHiddenColumnKeys = () =>
   new Set(toggleableColumns.value.map((col) => col.key));
@@ -4930,6 +5046,9 @@ const createForm = reactive({
   platform: "anthropic" as GroupPlatform,
   rate_multiplier: 1.0,
   is_exclusive: false,
+  security_policy_enabled: false,
+  security_policy_mode: "block_session",
+  security_policy_email_enabled: true,
   subscription_type: "standard" as SubscriptionType,
   daily_limit_usd: null as number | null,
   weekly_limit_usd: null as number | null,
@@ -5294,6 +5413,9 @@ const editForm = reactive({
   platform: "anthropic" as GroupPlatform,
   rate_multiplier: 1.0,
   is_exclusive: false,
+  security_policy_enabled: false,
+  security_policy_mode: "block_session",
+  security_policy_email_enabled: true,
   status: "active" as "active" | "inactive",
   subscription_type: "standard" as SubscriptionType,
   daily_limit_usd: null as number | null,
@@ -5560,17 +5682,10 @@ const toggleLive = async (target: "create" | "edit") => {
     form.allow_live = false;
     return;
   }
-  const capability = await loadLiveCapability();
-  if (capability.supported) {
-    form.allow_live = true;
-    return;
-  }
-  pendingLiveForm.value = target;
+  appStore.showError("实时会话暂不可用：费用结算尚未接入");
 };
 
 const confirmUnsupportedLive = () => {
-  if (pendingLiveForm.value === "create") createForm.allow_live = true;
-  if (pendingLiveForm.value === "edit") editForm.allow_live = true;
   pendingLiveForm.value = null;
 };
 
@@ -5757,6 +5872,9 @@ const closeCreateModal = () => {
   createForm.platform = "anthropic";
   createForm.rate_multiplier = 1.0;
   createForm.is_exclusive = false;
+  createForm.security_policy_enabled = false;
+  createForm.security_policy_mode = "block_session";
+  createForm.security_policy_email_enabled = true;
   createForm.subscription_type = "standard";
   createForm.daily_limit_usd = null;
   createForm.weekly_limit_usd = null;
@@ -6026,6 +6144,9 @@ const handleEdit = async (group: AdminGroup) => {
   editForm.platform = group.platform;
   editForm.rate_multiplier = group.rate_multiplier;
   editForm.is_exclusive = group.is_exclusive;
+  editForm.security_policy_enabled = group.security_policy_enabled ?? false;
+  editForm.security_policy_mode = group.security_policy_mode || "block_session";
+  editForm.security_policy_email_enabled = group.security_policy_email_enabled ?? true;
   editForm.status = group.status;
   editForm.subscription_type = group.subscription_type || "standard";
   editForm.daily_limit_usd = group.daily_limit_usd;

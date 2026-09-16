@@ -469,6 +469,27 @@ func (r *proxyRepository) ExistsByHostPortAuth(ctx context.Context, host string,
 	return count > 0, err
 }
 
+// ExistsByProtocolHostPortAuth includes the transport protocol in proxy
+// identity. This keeps HTTP and SOCKS proxies at the same endpoint distinct.
+func (r *proxyRepository) ExistsByProtocolHostPortAuth(ctx context.Context, protocolName, host string, port int, username, password string) (bool, error) {
+	q := r.client.Proxy.Query().
+		Where(proxy.ProtocolEQ(protocolName), proxy.HostEQ(host), proxy.PortEQ(port))
+
+	if username == "" {
+		q = q.Where(proxy.Or(proxy.UsernameIsNil(), proxy.UsernameEQ("")))
+	} else {
+		q = q.Where(proxy.UsernameEQ(username))
+	}
+	if password == "" {
+		q = q.Where(proxy.Or(proxy.PasswordIsNil(), proxy.PasswordEQ("")))
+	} else {
+		q = q.Where(proxy.PasswordEQ(password))
+	}
+
+	count, err := q.Count(ctx)
+	return count > 0, err
+}
+
 // CountAccountsByProxyID returns the number of accounts using a specific proxy
 func (r *proxyRepository) CountAccountsByProxyID(ctx context.Context, proxyID int64) (int64, error) {
 	var count int64

@@ -253,6 +253,30 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/billing',
+    name: 'Billing',
+    component: () => import('@/views/user/BillingView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: false,
+      title: 'Billing Statement',
+      titleKey: 'billing.title',
+      descriptionKey: 'billing.description'
+    }
+  },
+  {
+    path: '/tickets',
+    name: 'Tickets',
+    component: () => import('@/views/user/TicketsView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: false,
+      title: 'Support Tickets',
+      titleKey: 'tickets.title',
+      descriptionKey: 'tickets.description'
+    }
+  },
+  {
     path: '/affiliate',
     name: 'Affiliate',
     component: () => import('@/views/user/AffiliateView.vue'),
@@ -478,6 +502,66 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/global-pricing',
+    name: 'AdminGlobalPricing',
+    component: () => import('@/views/admin/GlobalPricingView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Global Model Pricing',
+      titleKey: 'admin.globalPricing.title',
+      descriptionKey: 'admin.globalPricing.description'
+    }
+  },
+  {
+    path: '/admin/account-health',
+    name: 'AdminAccountHealth',
+    component: () => import('@/views/admin/AccountHealthView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Account Health',
+      titleKey: 'admin.accountHealth.title',
+      descriptionKey: 'admin.accountHealth.description'
+    }
+  },
+  {
+    path: '/admin/margins',
+    name: 'AdminMargins',
+    component: () => import('@/views/admin/MarginView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Margin Center',
+      titleKey: 'admin.margin.title',
+      descriptionKey: 'admin.margin.description'
+    }
+  },
+  {
+    path: '/admin/tiered-routing',
+    name: 'AdminTieredRouting',
+    component: () => import('@/views/admin/TieredRoutingView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Tiered Routing',
+      titleKey: 'admin.tieredRouting.title',
+      descriptionKey: 'admin.tieredRouting.description'
+    }
+  },
+  {
+    path: '/admin/spend-guard',
+    name: 'AdminSpendGuard',
+    component: () => import('@/views/admin/SpendGuardView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Spend Guard',
+      titleKey: 'admin.spendGuard.title',
+      descriptionKey: 'admin.spendGuard.description'
+    }
+  },
+  {
     path: '/admin/channels/monitor',
     name: 'AdminChannelMonitor',
     component: () => import('@/views/admin/ChannelMonitorView.vue'),
@@ -513,6 +597,27 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/accounts/tests',
+    name: 'AdminIntelligentTests',
+    component: () => import('@/views/admin/IntelligentTestsView.vue'),
+    props: { mode: 'tests' },
+    meta: { requiresAuth: true, requiresAdmin: true, title: '智能测试中心' }
+  },
+  {
+    path: '/admin/accounts/test-history',
+    name: 'AdminIntelligentTestHistory',
+    component: () => import('@/views/admin/IntelligentTestsView.vue'),
+    props: { mode: 'history' },
+    meta: { requiresAuth: true, requiresAdmin: true, title: '测试记录' }
+  },
+  {
+    path: '/admin/accounts/test-settings',
+    name: 'AdminIntelligentTestSettings',
+    component: () => import('@/views/admin/IntelligentTestsView.vue'),
+    props: { mode: 'settings' },
+    meta: { requiresAuth: true, requiresAdmin: true, title: '测试设置' }
+  },
+  {
     path: '/admin/accounts',
     name: 'AdminAccounts',
     component: () => import('@/views/admin/AccountsView.vue'),
@@ -531,6 +636,7 @@ const routes: RouteRecordRaw[] = [
     meta: {
       requiresAuth: true,
       requiresAdmin: true,
+      requiresSuperAdmin: true,
       title: 'Plugin Management',
       titleKey: 'admin.plugins.title',
       descriptionKey: 'admin.plugins.description'
@@ -546,6 +652,18 @@ const routes: RouteRecordRaw[] = [
       title: 'Announcements',
       titleKey: 'admin.announcements.title',
       descriptionKey: 'admin.announcements.description'
+    }
+  },
+  {
+    path: '/admin/tickets',
+    name: 'AdminTickets',
+    component: () => import('@/views/admin/TicketsAdminView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Support Tickets',
+      titleKey: 'admin.tickets.title',
+      descriptionKey: 'admin.tickets.description'
     }
   },
   {
@@ -591,6 +709,7 @@ const routes: RouteRecordRaw[] = [
     meta: {
       requiresAuth: true,
       requiresAdmin: true,
+      requiresSuperAdmin: true,
       title: 'System Settings',
       titleKey: 'admin.settings.title',
       descriptionKey: 'admin.settings.description'
@@ -598,6 +717,7 @@ const routes: RouteRecordRaw[] = [
   },
   {
     path: '/admin/risk-control',
+    alias: '/admin/security-policy',
     name: 'AdminRiskControl',
     component: () => import('@/views/admin/RiskControlView.vue'),
     meta: {
@@ -886,6 +1006,11 @@ router.beforeEach(async (to, _from, next) => {
   if (requiresAdmin && !authStore.isAdmin) {
     // User is authenticated but not admin, redirect to user dashboard
     next('/dashboard')
+    return
+  }
+
+  if (to.meta.requiresSuperAdmin && !authStore.isSuperAdmin) {
+    next(authStore.isAdmin ? '/admin/dashboard' : '/dashboard')
     return
   }
 

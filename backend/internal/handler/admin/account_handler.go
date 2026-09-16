@@ -65,6 +65,7 @@ type AccountHandler struct {
 	grokImportProber        grokImportProber
 	upstreamBillingProbe    *service.UpstreamBillingProbeService
 	ollamaCloudUsage        *service.OllamaCloudUsageService
+	accountTraffic          *AccountTrafficHandler
 	cfg                     *config.Config
 }
 
@@ -75,6 +76,10 @@ func (h *AccountHandler) SetUpstreamBillingProbeService(probe *service.UpstreamB
 
 func (h *AccountHandler) SetOllamaCloudUsageService(usage *service.OllamaCloudUsageService) {
 	h.ollamaCloudUsage = usage
+}
+
+func (h *AccountHandler) SetAccountTrafficHandler(traffic *AccountTrafficHandler) {
+	h.accountTraffic = traffic
 }
 
 // NewAccountHandler creates a new admin account handler
@@ -1189,6 +1194,12 @@ func (h *AccountHandler) Update(c *gin.Context) {
 	}
 
 	// OpenAI APIKey: credentials 修改后重新探测上游能力（base_url/api_key 可能变更）。
+	if h.accountTraffic != nil && account.Extra[service.AccountTrafficPolicyKey] != nil {
+		if err := h.accountTraffic.traffic.Sync(c.Request.Context(), account); err != nil {
+			slog.Warn("account_traffic_sync_after_edit_failed", "account_id", account.ID, "error", err)
+			c.Header("X-Account-Traffic-State", "unavailable")
+		}
+	}
 	// 异步执行，探测失败不影响账号更新响应。
 	if len(req.Credentials) > 0 {
 		h.scheduleOpenAIResponsesProbe(account)

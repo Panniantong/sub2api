@@ -13,8 +13,8 @@ const (
 	openAIAccountStateUpdateTimeout       = 5 * time.Second
 	openAIOAuth429FallbackCooldown        = 5 * time.Second
 	openAIOAuth429RetryWindow             = 2 * time.Minute
-	openAIOAuth429RetryDelay              = 500 * time.Millisecond
-	openAIOAuth429MaxRetryDelay           = 8 * time.Second
+	openAIOAuth429RetryDelay              = time.Second
+	openAIOAuth429MaxSameAccountRetries   = 3
 	openAIOAuth429MaxAccountAttempts      = 3
 	openAIStopSchedulingBridgeCooldown    = 2 * time.Minute
 	openAIOAuth429StormWindow             = 10 * time.Second
@@ -35,6 +35,7 @@ const (
 	openAIOAuth429Quota5h
 	openAIOAuth429Quota7d
 	openAIOAuth429QuotaReset
+	openAIOAuth429RetryAfter
 )
 
 // classifyOpenAIOAuth429 区分账号配额耗尽信号与普通瞬时 429。只有窗口达到
@@ -66,6 +67,9 @@ func classifyOpenAIOAuth429(headers http.Header, responseBody []byte) (openAIOAu
 	if resetUnix := parseOpenAIRateLimitResetTime(responseBody); resetUnix != nil {
 		resetAt := time.Unix(*resetUnix, 0)
 		return openAIOAuth429QuotaReset, &resetAt
+	}
+	if resetAt := parseRetryAfterResetTime(headers, time.Now()); resetAt != nil && resetAt.After(time.Now()) {
+		return openAIOAuth429RetryAfter, resetAt
 	}
 	return openAIOAuth429Transient, nil
 }
@@ -309,17 +313,12 @@ func openAIOAuth429SameAccountRetryDelay(headers http.Header, deadline time.Time
 	delay := openAIOAuth429RetryDelay
 	now := time.Now()
 	if resetAt := parseRetryAfterResetTime(headers, now); resetAt != nil && resetAt.After(now) {
-		delay = resetAt.Sub(now)
+		if wait := resetAt.Sub(now); wait > delay {
+			delay = wait
+		}
 	}
-	if delay > openAIOAuth429MaxRetryDelay {
-		delay = openAIOAuth429MaxRetryDelay
-	}
-	if remaining := time.Until(deadline); !deadline.IsZero() && delay > remaining {
-		delay = remaining
-	}
-	if delay < 0 {
-		return 0
-	}
+	// A deadline limits whether a retry is allowed, never the upstream's wait.
+	// The handler rejects attempts that cannot fit inside the remaining budget.
 	return delay
 }
 

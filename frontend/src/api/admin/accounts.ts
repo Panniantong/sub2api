@@ -4,6 +4,7 @@
  */
 
 import { apiClient } from '../client'
+import { DEFAULT_ANTI_DEGRADE_MODE } from '@/utils/accountProtection'
 import type {
   Account,
   AccountListItem,
@@ -381,6 +382,102 @@ export async function getUsage(id: number, source?: 'passive' | 'active', force?
 export interface BatchAccountUsageResponse {
   usage: Record<string, AccountUsageInfo>
   errors: Record<string, string>
+}
+
+export async function setProtection(id: number, enabled: boolean, confirmDisable = false): Promise<Account> {
+  const { data } = await apiClient.post<Account>(`/admin/accounts/${id}/protection`, { enabled, confirm_disable: confirmDisable })
+  return data
+}
+
+export async function enableProtectionBatch(accountIds: number[]): Promise<{ success_ids: number[]; failures: Record<string, string> }> {
+  const { data } = await apiClient.post('/admin/accounts/protection/enable-batch', { account_ids: accountIds })
+  return data
+}
+
+export interface AntiDegradeChange {
+  key: string
+  from?: unknown
+  to: unknown
+  note?: string
+}
+
+// Protection strategy identifiers. `legacy` is the original sub2 strategy
+// kept as an explicit option so operators can compare/restore it directly.
+export type AntiDegradeMode =
+  | 'mode1'
+  | 'mode2'
+  | 'legacy'
+  | 'native_baseline'
+  | 'minimal_compat'
+  | 'session_standard'
+  | 'tls_node24'
+  | 'low_concurrency'
+
+export interface AntiDegradeStrategyProfile {
+  id: AntiDegradeMode
+  name: string
+  description: string
+  category: string
+  identity_mode: string
+  tls_profile: string
+  max_concurrency: number
+  risk: string
+  apply_supported: boolean
+  requires_openai_oauth?: boolean
+  diagnostic_only?: boolean
+}
+
+export interface AntiDegradePreview {
+  runtime?: {
+    strategy: string; identity_mode: string; configured_tls: string; effective_tls: string
+    tls_reason?: string; observed: boolean; concurrency: number
+    integrity_mode?: 'off' | 'observe' | 'enforce'
+  }
+  account_id: number
+  enabled: boolean
+  eligible: boolean
+  active_mode?: AntiDegradeMode | ''
+  policy_version?: number
+  identity_ready?: boolean
+  tls_profile?: string
+  issues?: string[]
+  reason?: string
+  changes: AntiDegradeChange[]
+}
+
+/**
+ * Preview one-click anti-degrade changes (no writes).
+ */
+export async function previewAntiDegrade(id: number, mode: AntiDegradeMode = DEFAULT_ANTI_DEGRADE_MODE): Promise<AntiDegradePreview> {
+  const { data } = await apiClient.get<AntiDegradePreview>(`/admin/accounts/${id}/anti-degrade`, { params: { mode } })
+  return data
+}
+
+export async function listAntiDegradeStrategies(): Promise<AntiDegradeStrategyProfile[]> {
+  const { data } = await apiClient.get<{ strategies: AntiDegradeStrategyProfile[] }>('/admin/accounts/anti-degrade/strategies')
+  return data.strategies || []
+}
+
+/**
+ * Apply one-click anti-degrade (snapshots old values for revert).
+ */
+export async function applyAntiDegrade(id: number, mode: AntiDegradeMode = DEFAULT_ANTI_DEGRADE_MODE): Promise<Account> {
+  const { data } = await apiClient.post<Account>(`/admin/accounts/${id}/anti-degrade/apply`, null, { params: { mode } })
+  return data
+}
+
+/**
+ * Revert one-click anti-degrade (restores snapshotted values).
+ */
+export async function revertAntiDegrade(id: number, confirmDisable = false): Promise<Account> {
+  const url = `/admin/accounts/${id}/anti-degrade/revert`
+  // Keep the historical no-body request shape for callers that only preview
+  // the endpoint; the UI's destructive action always passes true and sends
+  // the explicit confirmation required by the backend.
+  const { data } = confirmDisable
+    ? await apiClient.post<Account>(url, { confirm_disable: true })
+    : await apiClient.post<Account>(url)
+  return data
 }
 
 export async function getBatchUsage(accountIds: number[], force?: boolean): Promise<BatchAccountUsageResponse> {
@@ -1084,6 +1181,12 @@ export const accountsAPI = {
   applyOAuthCredentials,
   getStats,
   clearError,
+  setProtection,
+  enableProtectionBatch,
+  previewAntiDegrade,
+  listAntiDegradeStrategies,
+  applyAntiDegrade,
+  revertAntiDegrade,
   getUsage,
   getBatchUsage,
   getTodayStats,

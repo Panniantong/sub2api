@@ -12,8 +12,9 @@ const (
 
 // Role constants
 const (
-	RoleAdmin = "admin"
-	RoleUser  = "user"
+	RoleAdmin      = "admin"
+	RoleSuperAdmin = "super_admin"
+	RoleUser       = "user"
 )
 
 // Platform constants

@@ -54,6 +54,7 @@ type AdminUser struct {
 }
 
 type APIKey struct {
+	KeyDisplay  string     `json:"key_display,omitempty"`
 	ID          int64      `json:"id"`
 	UserID      int64      `json:"user_id"`
 	Key         string     `json:"key"`
@@ -91,13 +92,16 @@ type APIKey struct {
 }
 
 type Group struct {
-	ID             int64   `json:"id"`
-	Name           string  `json:"name"`
-	Description    string  `json:"description"`
-	Platform       string  `json:"platform"`
-	RateMultiplier float64 `json:"rate_multiplier"`
-	IsExclusive    bool    `json:"is_exclusive"`
-	Status         string  `json:"status"`
+	SecurityPolicyEnabled      bool    `json:"security_policy_enabled"`
+	SecurityPolicyMode         string  `json:"security_policy_mode"`
+	SecurityPolicyEmailEnabled bool    `json:"security_policy_email_enabled"`
+	ID                         int64   `json:"id"`
+	Name                       string  `json:"name"`
+	Description                string  `json:"description"`
+	Platform                   string  `json:"platform"`
+	RateMultiplier             float64 `json:"rate_multiplier"`
+	IsExclusive                bool    `json:"is_exclusive"`
+	Status                     string  `json:"status"`
 
 	SubscriptionType          string   `json:"subscription_type"`
 	DailyLimitUSD             *float64 `json:"daily_limit_usd"`
@@ -205,11 +209,14 @@ type AdminGroup struct {
 }
 
 type Account struct {
-	ID       int64   `json:"id"`
-	Name     string  `json:"name"`
-	Notes    *string `json:"notes"`
-	Platform string  `json:"platform"`
-	Type     string  `json:"type"`
+	AntiDegradation bool    `json:"anti_degradation"`
+	ProtectionScope string  `json:"protection_scope"`
+	ProtectionMode  string  `json:"protection_mode"`
+	ID              int64   `json:"id"`
+	Name            string  `json:"name"`
+	Notes           *string `json:"notes"`
+	Platform        string  `json:"platform"`
+	Type            string  `json:"type"`
 	// Credentials 经 RedactCredentials 处理后只含非敏感子键；敏感 token / api_key / 私钥
 	// 的存在性通过 CredentialsStatus（has_<key>）暴露，原始值不返回前端。
 	Credentials             map[string]any                 `json:"credentials"`
@@ -330,11 +337,14 @@ type Account struct {
 // repeated account_groups and groups object graphs. Fetch /admin/accounts/:id
 // for the complete Account DTO when editing or inspecting an account.
 type AccountListItem struct {
-	ID       int64   `json:"id"`
-	Name     string  `json:"name"`
-	Notes    *string `json:"notes"`
-	Platform string  `json:"platform"`
-	Type     string  `json:"type"`
+	AntiDegradation bool    `json:"anti_degradation"`
+	ProtectionScope string  `json:"protection_scope"`
+	ProtectionMode  string  `json:"protection_mode"`
+	ID              int64   `json:"id"`
+	Name            string  `json:"name"`
+	Notes           *string `json:"notes"`
+	Platform        string  `json:"platform"`
+	Type            string  `json:"type"`
 
 	Credentials       map[string]any                 `json:"credentials,omitempty"`
 	CredentialsStatus map[string]bool                `json:"credentials_status,omitempty"`
@@ -815,4 +825,21 @@ type PromoCodeUsage struct {
 	UsedAt      time.Time `json:"used_at"`
 
 	User *User `json:"user,omitempty"`
+}
+
+// SecurityPolicyKeyword 是安全策略自定义词的管理端 DTO。
+type SecurityPolicyKeyword struct {
+	ID        int64     `json:"id"`
+	GroupID   *int64    `json:"group_id"`
+	Keyword   string    `json:"keyword"`
+	Category  string    `json:"category"`
+	Enabled   bool      `json:"enabled"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// SecurityPolicyKeywordSeed 是内置 seed 词的管理端 DTO（只读）。
+type SecurityPolicyKeywordSeed struct {
+	Keyword  string `json:"keyword"`
+	Category string `json:"category"`
 }

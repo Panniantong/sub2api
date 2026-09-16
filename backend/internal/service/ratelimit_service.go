@@ -1233,6 +1233,13 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 		// 不适合按 5h/7d 窗口长时间封禁；但完全不标记会导致账号永不冷却，
 		// 调度器让每个请求反复撞同一批持续 429 的账号（failover 预算被白白烧掉，
 		// 客户端稳定收到 429）。因此同样走可配置的秒级兜底回避，管理端可调大或关闭。
+		if resetAt := parseRetryAfterResetTime(headers, time.Now()); resetAt != nil && resetAt.After(time.Now()) {
+			s.notifyAccountSchedulingBlocked(account, *resetAt, "429_retry_after")
+			if err := s.accountRepo.SetRateLimited(ctx, account.ID, *resetAt); err != nil {
+				slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
+			}
+			return
+		}
 		if account.Platform == PlatformAnthropic {
 			slog.Warn("rate_limit_429_no_reset_time",
 				"account_id", account.ID,
@@ -2134,10 +2141,14 @@ func (s *RateLimitService) RecoverAccountState(ctx context.Context, accountID in
 	return result, nil
 }
 
-// RecoverAccountAfterSuccessfulTest 将一次成功测试视为正常请求，
-// 按需恢复 error / rate-limit / overload / temp-unsched / model-rate-limit 等运行时状态。
+// A successful probe describes only that request. It cannot clear unrelated
+// model limits or newer failures written by another request. Administrators
+// can explicitly recover state through RecoverAccountState after reviewing it.
 func (s *RateLimitService) RecoverAccountAfterSuccessfulTest(ctx context.Context, accountID int64) (*SuccessfulTestRecoveryResult, error) {
-	return s.RecoverAccountState(ctx, accountID, AccountRecoveryOptions{})
+	if _, err := s.accountRepo.GetByID(ctx, accountID); err != nil {
+		return nil, err
+	}
+	return &SuccessfulTestRecoveryResult{}, nil
 }
 
 func (s *RateLimitService) ClearTempUnschedulable(ctx context.Context, accountID int64) error {

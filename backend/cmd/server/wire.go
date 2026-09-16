@@ -100,6 +100,9 @@ func provideCleanup(
 	cnProviderBalanceCheck *service.CNProviderBalanceCheckService,
 	codexVersionSync *service.OpenAICodexVersionSyncService,
 	proxyExpiry *service.ProxyExpiryService,
+	accountHealth *service.AccountHealthService,
+	margin *service.MarginService,
+	spendGuard *service.SpendGuardService,
 	subscriptionExpiry *service.SubscriptionExpiryService,
 	usageCleanup *service.UsageCleanupService,
 	idempotencyCleanup *service.IdempotencyCleanupService,
@@ -117,6 +120,7 @@ func provideCleanup(
 	grokOAuth *service.GrokOAuthService,
 	openAIGateway *service.OpenAIGatewayService,
 	scheduledTestRunner *service.ScheduledTestRunnerService,
+	intelligentTests *service.IntelligentTestService,
 	backupSvc *service.BackupService,
 	paymentOrderExpiry *service.PaymentOrderExpiryService,
 	channelMonitorRunner *service.ChannelMonitorRunner,
@@ -140,6 +144,12 @@ func provideCleanup(
 
 		// 应用层清理步骤可并行执行，基础设施资源（Redis/Ent）最后按顺序关闭。
 		parallelSteps := []cleanupStep{
+			{"IntelligentTests", func() error {
+				if intelligentTests != nil {
+					intelligentTests.Stop()
+				}
+				return nil
+			}},
 			{"PluginManager", func() error {
 				if pluginManager != nil {
 					pluginManager.Stop()
@@ -274,6 +284,18 @@ func provideCleanup(
 			}},
 			{"ProxyExpiryService", func() error {
 				proxyExpiry.Stop()
+				return nil
+			}},
+			{"AccountHealthService", func() error {
+				accountHealth.Stop()
+				return nil
+			}},
+			{"MarginService", func() error {
+				margin.Stop()
+				return nil
+			}},
+			{"SpendGuardService", func() error {
+				spendGuard.Stop()
 				return nil
 			}},
 			{"SubscriptionExpiryService", func() error {

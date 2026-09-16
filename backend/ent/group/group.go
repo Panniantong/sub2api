@@ -38,6 +38,12 @@ const (
 	FieldPeakRateMultiplier = "peak_rate_multiplier"
 	// FieldIsExclusive holds the string denoting the is_exclusive field in the database.
 	FieldIsExclusive = "is_exclusive"
+	// FieldSecurityPolicyEnabled holds the string denoting the security_policy_enabled field in the database.
+	FieldSecurityPolicyEnabled = "security_policy_enabled"
+	// FieldSecurityPolicyMode holds the string denoting the security_policy_mode field in the database.
+	FieldSecurityPolicyMode = "security_policy_mode"
+	// FieldSecurityPolicyEmailEnabled holds the string denoting the security_policy_email_enabled field in the database.
+	FieldSecurityPolicyEmailEnabled = "security_policy_email_enabled"
 	// FieldStatus holds the string denoting the status field in the database.
 	FieldStatus = "status"
 	// FieldDuplicateOperationID holds the string denoting the duplicate_operation_id field in the database.
@@ -234,6 +240,9 @@ var Columns = []string{
 	FieldPeakEnd,
 	FieldPeakRateMultiplier,
 	FieldIsExclusive,
+	FieldSecurityPolicyEnabled,
+	FieldSecurityPolicyMode,
+	FieldSecurityPolicyEmailEnabled,
 	FieldStatus,
 	FieldDuplicateOperationID,
 	FieldPlatform,
@@ -342,6 +351,14 @@ var (
 	DefaultPeakRateMultiplier float64
 	// DefaultIsExclusive holds the default value on creation for the "is_exclusive" field.
 	DefaultIsExclusive bool
+	// DefaultSecurityPolicyEnabled holds the default value on creation for the "security_policy_enabled" field.
+	DefaultSecurityPolicyEnabled bool
+	// DefaultSecurityPolicyMode holds the default value on creation for the "security_policy_mode" field.
+	DefaultSecurityPolicyMode string
+	// SecurityPolicyModeValidator is a validator for the "security_policy_mode" field. It is called by the builders before save.
+	SecurityPolicyModeValidator func(string) error
+	// DefaultSecurityPolicyEmailEnabled holds the default value on creation for the "security_policy_email_enabled" field.
+	DefaultSecurityPolicyEmailEnabled bool
 	// DefaultStatus holds the default value on creation for the "status" field.
 	DefaultStatus string
 	// StatusValidator is a validator for the "status" field. It is called by the builders before save.
@@ -497,6 +514,21 @@ func ByPeakRateMultiplier(opts ...sql.OrderTermOption) OrderOption {
 // ByIsExclusive orders the results by the is_exclusive field.
 func ByIsExclusive(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldIsExclusive, opts...).ToFunc()
+}
+
+// BySecurityPolicyEnabled orders the results by the security_policy_enabled field.
+func BySecurityPolicyEnabled(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldSecurityPolicyEnabled, opts...).ToFunc()
+}
+
+// BySecurityPolicyMode orders the results by the security_policy_mode field.
+func BySecurityPolicyMode(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldSecurityPolicyMode, opts...).ToFunc()
+}
+
+// BySecurityPolicyEmailEnabled orders the results by the security_policy_email_enabled field.
+func BySecurityPolicyEmailEnabled(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldSecurityPolicyEmailEnabled, opts...).ToFunc()
 }
 
 // ByStatus orders the results by the status field.

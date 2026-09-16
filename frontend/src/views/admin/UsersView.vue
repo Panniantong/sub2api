@@ -28,6 +28,7 @@
                 v-model="filters.role"
                 :options="[
                   { value: '', label: t('admin.users.allRoles') },
+                  { value: 'super_admin', label: '超级管理员' },
                   { value: 'admin', label: t('admin.users.admin') },
                   { value: 'user', label: t('admin.users.user') }
                 ]"
@@ -125,6 +126,7 @@
 
           <!-- Right: Actions and Settings -->
           <div class="flex flex-wrap items-center justify-end gap-2">
+            <UserCleanupControl ref="cleanupControl" @completed="handleCleanupCompleted" />
             <!-- Mobile: Secondary buttons (icon only) -->
             <div class="flex items-center gap-2 md:contents">
               <!-- Refresh Button -->
@@ -326,8 +328,8 @@
           </template>
 
           <template #cell-role="{ value }">
-            <span :class="['badge', value === 'admin' ? 'badge-purple' : 'badge-gray']">
-              {{ t('admin.users.roles.' + value) }}
+            <span :class="['badge', value === 'admin' || value === 'super_admin' ? 'badge-purple' : 'badge-gray']">
+              {{ value === 'super_admin' ? '超级管理员' : t('admin.users.roles.' + value) }}
             </span>
           </template>
 
@@ -603,6 +605,7 @@
             <div class="flex items-center gap-1">
               <!-- Edit Button -->
               <button
+                v-if="canManageUser(row)"
                 @click="handleEdit(row)"
                 class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-dark-700 dark:hover:text-primary-400"
               >
@@ -612,7 +615,7 @@
 
               <!-- Toggle Status Button (not for admin) -->
               <button
-                v-if="row.role !== 'admin'"
+                v-if="row.role === 'user'"
                 @click="handleToggleStatus(row)"
                 :class="[
                   'flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors',
@@ -628,6 +631,7 @@
 
               <!-- More Actions Menu Trigger -->
               <button
+                v-if="canManageUser(row)"
                 @click="openActionMenu(row, $event)"
                 class="action-menu-trigger flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:hover:bg-dark-700 dark:hover:text-white"
                 :class="{ 'bg-gray-100 text-gray-900 dark:bg-dark-700 dark:text-white': activeMenuId === row.id }"
@@ -734,7 +738,7 @@
 
               <!-- Delete (not for admin) -->
               <button
-                v-if="user.role !== 'admin'"
+                v-if="user.role === 'user'"
                 @click="handleDelete(user); closeActionMenu()"
                 class="flex w-full items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20"
               >
@@ -775,6 +779,7 @@
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import { useTableSelection } from '@/composables/useTableSelection'
 import { formatDateTime } from '@/utils/format'
@@ -803,6 +808,7 @@ import PlatformCostCell from '@/components/user/PlatformCostCell.vue'
 import UserPlatformQuotaCell from '@/components/user/UserPlatformQuotaCell.vue'
 import UserCreateModal from '@/components/admin/user/UserCreateModal.vue'
 import UserEditModal from '@/components/admin/user/UserEditModal.vue'
+import UserCleanupControl from '@/components/admin/user/UserCleanupControl.vue'
 import BulkEditUserModal from '@/components/admin/user/BulkEditUserModal.vue'
 import UserPlatformQuotaModal from '@/components/admin/user/UserPlatformQuotaModal.vue'
 import UserApiKeysModal from '@/components/admin/user/UserApiKeysModal.vue'
@@ -812,6 +818,9 @@ import UserBalanceHistoryModal from '@/components/admin/user/UserBalanceHistoryM
 import GroupReplaceModal from '@/components/admin/user/GroupReplaceModal.vue'
 
 const appStore = useAppStore()
+const authStore = useAuthStore()
+const cleanupControl = ref<InstanceType<typeof UserCleanupControl> | null>(null)
+const canManageUser = (user: AdminUser) => authStore.isSuperAdmin || user.role === 'user'
 
 // Generate dynamic attribute columns from enabled definitions
 const attributeColumns = computed<Column[]>(() =>
@@ -1302,7 +1311,11 @@ const {
 })
 
 const handleSelectedKeysUpdate = (keys: Array<string | number>) => {
-  setSelectedIds(keys.filter((key): key is number => typeof key === 'number'))
+  // Keep previously authorized selections on other pages while excluding any
+  // administrator rows on this page that the current operator cannot manage.
+  const allowed = new Set([...selectedIds.value, ...users.value.filter(canManageUser).map(user => user.id)])
+  for (const user of users.value) if (!canManageUser(user)) allowed.delete(user.id)
+  setSelectedIds(keys.filter((key): key is number => typeof key === 'number' && allowed.has(key)))
 }
 
 const getUserSelectionLabel = (user: AdminUser) =>
@@ -1595,6 +1608,7 @@ const loadUsers = async () => {
       return
     }
     users.value = response.items
+    void cleanupControl.value?.refreshSummary()
     pagination.total = response.total
     pagination.pages = response.pages
     usageStats.value = {}
@@ -1627,6 +1641,12 @@ const loadUsers = async () => {
 
 const handleBulkLimitsSuccess = async () => {
   clearSelection()
+  await loadUsers()
+}
+
+const handleCleanupCompleted = async () => {
+  clearSelection()
+  pagination.page = 1
   await loadUsers()
 }
 

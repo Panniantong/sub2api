@@ -1,0 +1,96 @@
+name: chengchuan-relay
+
+services:
+  app:
+    image: chengchuan-relay:${RELAY_VERSION:-local}
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${RELAY_VERSION:-relay-v3-dev}
+        GOLANG_IMAGE: golang:1.27.1-alpine
+        GOPROXY: https://proxy.golang.org,direct
+        GOSUMDB: sum.golang.org
+    restart: unless-stopped
+    security_opt: [no-new-privileges:true]
+    ports:
+      - ${BIND_HOST:-127.0.0.1}:${SERVER_PORT:-8080}:8080
+    volumes:
+      - relay-data:/app/data
+    environment:
+      AUTO_SETUP: "true"
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: "8080"
+      SERVER_MODE: release
+      RUN_MODE: standard
+      DATABASE_HOST: postgres
+      DATABASE_PORT: "5432"
+      DATABASE_USER: relay
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      DATABASE_DBNAME: relay
+      DATABASE_SSLMODE: disable
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@relay.local}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET}
+      TOTP_ENCRYPTION_KEY: ${TOTP_ENCRYPTION_KEY:?Set TOTP_ENCRYPTION_KEY}
+      TZ: Asia/Hong_Kong
+      SECURITY_URL_ALLOWLIST_ENABLED: "false"
+      SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP: "false"
+      SECURITY_URL_ALLOWLIST_ALLOW_PRIVATE_HOSTS: "false"
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, wget, -q, -T, "5", -O, /dev/null, "http://127.0.0.1:8080/health"]
+      interval: 15s
+      timeout: 6s
+      start_period: 90s
+      retries: 5
+    logging:
+      driver: json-file
+      options: {max-size: 20m, max-file: "3"}
+
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    security_opt: [no-new-privileges:true]
+    environment:
+      POSTGRES_USER: relay
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      POSTGRES_DB: relay
+    volumes:
+      - relay-postgres:/var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U relay -d relay]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    security_opt: [no-new-privileges:true]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD}
+    command: [sh, -c, 'exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"']
+    volumes:
+      - relay-redis:/data
+    healthcheck:
+      test: [CMD-SHELL, 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -q PONG']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+
+volumes:
+  relay-data:
+  relay-postgres:
+  relay-redis:

@@ -19,6 +19,7 @@ func RegisterAdminRoutes(
 	stepUpAuth middleware.StepUpAuthMiddleware,
 	settingService *service.SettingService,
 	panelRateLimiter *middleware.PanelRateLimiter,
+	userService *service.UserService,
 ) {
 	// 插件 UI 使用短时能力 URL，仅提供经过安装校验的静态资源。
 	v1.GET("/plugin-ui/:token/*path", h.Admin.Plugin.ServeUIAsset)
@@ -29,6 +30,7 @@ func RegisterAdminRoutes(
 	admin.Use(panelRateLimiter.Global())
 	// 审计中间件挂在认证之后：所有管理面变更类操作 + 敏感读取入审计日志
 	admin.Use(gin.HandlerFunc(auditLog))
+	admin.Use(middleware.UserHierarchyGuard(userService))
 	admin.Use(middleware.AdminComplianceGuard(settingService))
 	{
 		// 部署与运营合规确认
@@ -39,6 +41,7 @@ func RegisterAdminRoutes(
 
 		// 用户管理
 		registerUserManagementRoutes(admin, h)
+		registerRelayManagementRoutes(admin, h)
 
 		// 分组管理
 		registerGroupRoutes(admin, h)
@@ -86,7 +89,7 @@ func RegisterAdminRoutes(
 		registerOpsRoutes(admin, h)
 
 		// 系统管理
-		registerSystemRoutes(admin, h)
+		registerSystemRoutes(admin, h, stepUpAuth)
 
 		// 订阅管理
 		registerSubscriptionRoutes(admin, h)
@@ -121,6 +124,30 @@ func RegisterAdminRoutes(
 
 		// 风控中心
 		registerContentModerationRoutes(admin, h)
+		registerSecurityPolicyRoutes(admin, h)
+
+		// 分组安全策略（自定义词包 + 会话解封）
+
+		// 全站模型定价覆盖
+		registerGlobalPricingRoutes(admin, h)
+
+		// 账号健康分
+		registerAccountHealthRoutes(admin, h)
+
+		// 毛利看板与熔断
+		registerMarginRoutes(admin, h)
+
+		// 分级路由
+		registerTieredRoutingRoutes(admin, h)
+
+		// 烧钱防护
+		registerSpendGuardRoutes(admin, h)
+
+		// 工单系统
+		registerTicketAdminRoutes(admin, h)
+
+		// 账单导出
+		registerBillingExportAdminRoutes(admin, h)
 
 		// 独立提示词输入审计
 		registerPromptAuditRoutes(admin, h)
@@ -178,6 +205,18 @@ func registerContentModerationRoutes(admin *gin.RouterGroup, h *handler.Handlers
 		risk.POST("/users/:user_id/unban", h.Admin.ContentModeration.UnbanUser)
 		risk.DELETE("/hashes", h.Admin.ContentModeration.DeleteFlaggedHash)
 		risk.DELETE("/hashes/all", h.Admin.ContentModeration.ClearFlaggedHashes)
+	}
+}
+
+func registerSecurityPolicyRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	secpol := admin.Group("/security-policy")
+	{
+		secpol.GET("/keywords/builtin", h.Admin.SecurityPolicy.ListBuiltin)
+		secpol.GET("/keywords", h.Admin.SecurityPolicy.ListKeywords)
+		secpol.POST("/keywords", h.Admin.SecurityPolicy.CreateKeyword)
+		secpol.PUT("/keywords/:id", h.Admin.SecurityPolicy.UpdateKeyword)
+		secpol.DELETE("/keywords/:id", h.Admin.SecurityPolicy.DeleteKeyword)
+		secpol.POST("/sessions/unblock", h.Admin.SecurityPolicy.UnblockSession)
 	}
 }
 
@@ -333,7 +372,6 @@ func registerGroupRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		groups.GET("/capacity-summary", h.Admin.Group.GetCapacitySummary)
 		groups.GET("/live-capability", h.Admin.Group.GetLiveCapability)
 		groups.PUT("/sort-order", h.Admin.Group.UpdateSortOrder)
-		groups.GET("/:id/model-allowlist-candidates", h.Admin.Group.GetGroupModelAllowlistCandidates)
 		groups.GET("/:id/composite-routes", h.Admin.Group.ListCompositeRoutes)
 		groups.POST("/:id/composite-routes", h.Admin.Group.CreateCompositeRoute)
 		groups.POST("/:id/composite-routes/preview", h.Admin.Group.PreviewCompositeRoute)
@@ -358,6 +396,9 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAu
 	accounts := admin.Group("/accounts")
 	{
 		accounts.GET("", h.Admin.Account.List)
+		// Keep the registry route ahead of the dynamic /:id routes so clients can
+		// always discover the available strategy profiles without ambiguity.
+		accounts.GET("/anti-degrade/strategies", h.Admin.AntiDegrade.Strategies)
 		accounts.GET("/upstream-billing-rates", h.Admin.Account.GetUpstreamBillingRates)
 		accounts.GET("/upstream-billing-probe/settings", h.Admin.Account.GetUpstreamBillingProbeSettings)
 		accounts.PUT("/upstream-billing-probe/settings", h.Admin.Account.UpdateUpstreamBillingProbeSettings)
@@ -391,6 +432,9 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAu
 		accounts.GET("/:id/stats", h.Admin.Account.GetStats)
 		accounts.POST("/:id/clear-error", h.Admin.Account.ClearError)
 		accounts.POST("/:id/revert-proxy-fallback", h.Admin.Account.RevertProxyFallback)
+		accounts.GET("/:id/anti-degrade", h.Admin.AntiDegrade.Preview)
+		accounts.POST("/:id/anti-degrade/apply", h.Admin.AntiDegrade.Apply)
+		accounts.POST("/:id/anti-degrade/revert", h.Admin.AntiDegrade.Revert)
 		accounts.GET("/:id/usage", h.Admin.Account.GetUsage)
 		accounts.GET("/:id/today-stats", h.Admin.Account.GetTodayStats)
 		accounts.POST("/usage/batch", h.Admin.Account.GetBatchUsage)
@@ -413,6 +457,7 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAu
 		accounts.POST("/batch-delete", h.Admin.Account.BatchDelete)
 		accounts.POST("/batch-clear-error", h.Admin.Account.BatchClearError)
 		accounts.POST("/batch-refresh", h.Admin.Account.BatchRefresh)
+		// 历史明文凭据加密回填（幂等；未启用凭据加密时返回 0）
 
 		// Antigravity 默认模型映射
 		accounts.GET("/antigravity/default-model-mapping", h.Admin.Account.GetAntigravityDefaultModelMapping)
@@ -655,15 +700,15 @@ func registerBackupRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAut
 	}
 }
 
-func registerSystemRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+func registerSystemRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAuth middleware.StepUpAuthMiddleware) {
 	system := admin.Group("/system")
 	{
 		system.GET("/version", h.Admin.System.GetVersion)
 		system.GET("/check-updates", h.Admin.System.CheckUpdates)
 		system.GET("/rollback-versions", h.Admin.System.GetRollbackVersions)
-		system.POST("/update", h.Admin.System.PerformUpdate)
-		system.POST("/rollback", h.Admin.System.Rollback)
-		system.POST("/restart", h.Admin.System.RestartService)
+		system.POST("/update", gin.HandlerFunc(stepUpAuth), h.Admin.System.PerformUpdate)
+		system.POST("/rollback", gin.HandlerFunc(stepUpAuth), h.Admin.System.Rollback)
+		system.POST("/restart", gin.HandlerFunc(stepUpAuth), h.Admin.System.RestartService)
 	}
 }
 
@@ -761,6 +806,77 @@ func registerPluginRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAut
 		plugins.PUT("/:id/config", gin.HandlerFunc(stepUpAuth), h.Admin.Plugin.SaveConfig)
 		plugins.POST("/:id/test", gin.HandlerFunc(stepUpAuth), h.Admin.Plugin.Test)
 		plugins.POST("/:id/ui-session", h.Admin.Plugin.CreateUISession)
+	}
+}
+
+func registerGlobalPricingRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	pricing := admin.Group("/global-pricing")
+	{
+		pricing.GET("", h.Admin.GlobalPricing.List)
+		pricing.POST("", h.Admin.GlobalPricing.Create)
+		pricing.PUT("/:id", h.Admin.GlobalPricing.Update)
+		pricing.DELETE("/:id", h.Admin.GlobalPricing.Delete)
+		pricing.POST("/:id/enable", h.Admin.GlobalPricing.SetEnabled)
+	}
+}
+
+func registerAccountHealthRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	health := admin.Group("/account-health")
+	{
+		health.GET("", h.Admin.AccountHealth.Snapshot)
+		health.GET("/settings", h.Admin.AccountHealth.GetSettings)
+		health.PUT("/settings", h.Admin.AccountHealth.UpdateSettings)
+		health.POST("/:id/isolate", h.Admin.AccountHealth.Isolate)
+		health.POST("/:id/resume", h.Admin.AccountHealth.Resume)
+	}
+}
+
+func registerMarginRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	margins := admin.Group("/margins")
+	{
+		margins.GET("", h.Admin.Margin.Summary)
+		margins.GET("/fuse-settings", h.Admin.Margin.GetSettings)
+		margins.PUT("/fuse-settings", h.Admin.Margin.UpdateSettings)
+		margins.GET("/events", h.Admin.Margin.Events)
+		margins.POST("/channels/:id/unfuse", h.Admin.Margin.Unfuse)
+	}
+}
+
+func registerTieredRoutingRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	routing := admin.Group("/tiered-routing")
+	{
+		routing.GET("/settings", h.Admin.TieredRouting.GetSettings)
+		routing.PUT("/settings", h.Admin.TieredRouting.UpdateSettings)
+	}
+}
+
+func registerSpendGuardRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	guard := admin.Group("/spend-guard")
+	{
+		guard.GET("", h.Admin.SpendGuard.Offenders)
+		guard.GET("/settings", h.Admin.SpendGuard.GetSettings)
+		guard.PUT("/settings", h.Admin.SpendGuard.UpdateSettings)
+		guard.GET("/events", h.Admin.SpendGuard.Events)
+		guard.POST("/keys/:id/unfreeze", h.Admin.SpendGuard.Unfreeze)
+	}
+}
+
+func registerTicketAdminRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	tickets := admin.Group("/tickets")
+	{
+		tickets.GET("", h.Admin.Ticket.ListAll)
+		tickets.GET("/stats", h.Admin.Ticket.Stats)
+		tickets.GET("/:id", h.Admin.Ticket.GetAny)
+		tickets.POST("/:id/replies", h.Admin.Ticket.ReplyAny)
+		tickets.POST("/:id/close", h.Admin.Ticket.CloseAny)
+	}
+}
+
+func registerBillingExportAdminRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	billing := admin.Group("/billing/users/:userId")
+	{
+		billing.GET("/statement", h.Admin.BillingExport.AdminStatement)
+		billing.GET("/export", h.Admin.BillingExport.AdminExport)
 	}
 }
 

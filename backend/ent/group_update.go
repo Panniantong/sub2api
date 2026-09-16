@@ -195,6 +195,48 @@ func (_u *GroupUpdate) SetNillableIsExclusive(v *bool) *GroupUpdate {
 	return _u
 }
 
+// SetSecurityPolicyEnabled sets the "security_policy_enabled" field.
+func (_u *GroupUpdate) SetSecurityPolicyEnabled(v bool) *GroupUpdate {
+	_u.mutation.SetSecurityPolicyEnabled(v)
+	return _u
+}
+
+// SetNillableSecurityPolicyEnabled sets the "security_policy_enabled" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableSecurityPolicyEnabled(v *bool) *GroupUpdate {
+	if v != nil {
+		_u.SetSecurityPolicyEnabled(*v)
+	}
+	return _u
+}
+
+// SetSecurityPolicyMode sets the "security_policy_mode" field.
+func (_u *GroupUpdate) SetSecurityPolicyMode(v string) *GroupUpdate {
+	_u.mutation.SetSecurityPolicyMode(v)
+	return _u
+}
+
+// SetNillableSecurityPolicyMode sets the "security_policy_mode" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableSecurityPolicyMode(v *string) *GroupUpdate {
+	if v != nil {
+		_u.SetSecurityPolicyMode(*v)
+	}
+	return _u
+}
+
+// SetSecurityPolicyEmailEnabled sets the "security_policy_email_enabled" field.
+func (_u *GroupUpdate) SetSecurityPolicyEmailEnabled(v bool) *GroupUpdate {
+	_u.mutation.SetSecurityPolicyEmailEnabled(v)
+	return _u
+}
+
+// SetNillableSecurityPolicyEmailEnabled sets the "security_policy_email_enabled" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableSecurityPolicyEmailEnabled(v *bool) *GroupUpdate {
+	if v != nil {
+		_u.SetSecurityPolicyEmailEnabled(*v)
+	}
+	return _u
+}
+
 // SetStatus sets the "status" field.
 func (_u *GroupUpdate) SetStatus(v string) *GroupUpdate {
 	_u.mutation.SetStatus(v)
@@ -1498,6 +1540,11 @@ func (_u *GroupUpdate) check() error {
 			return &ValidationError{Name: "peak_end", err: fmt.Errorf(`ent: validator failed for field "Group.peak_end": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.SecurityPolicyMode(); ok {
+		if err := group.SecurityPolicyModeValidator(v); err != nil {
+			return &ValidationError{Name: "security_policy_mode", err: fmt.Errorf(`ent: validator failed for field "Group.security_policy_mode": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.Status(); ok {
 		if err := group.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "Group.status": %w`, err)}
@@ -1604,6 +1651,15 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.IsExclusive(); ok {
 		_spec.SetField(group.FieldIsExclusive, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.SecurityPolicyEnabled(); ok {
+		_spec.SetField(group.FieldSecurityPolicyEnabled, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.SecurityPolicyMode(); ok {
+		_spec.SetField(group.FieldSecurityPolicyMode, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.SecurityPolicyEmailEnabled(); ok {
+		_spec.SetField(group.FieldSecurityPolicyEmailEnabled, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(group.FieldStatus, field.TypeString, value)
@@ -2385,6 +2441,48 @@ func (_u *GroupUpdateOne) SetIsExclusive(v bool) *GroupUpdateOne {
 func (_u *GroupUpdateOne) SetNillableIsExclusive(v *bool) *GroupUpdateOne {
 	if v != nil {
 		_u.SetIsExclusive(*v)
+	}
+	return _u
+}
+
+// SetSecurityPolicyEnabled sets the "security_policy_enabled" field.
+func (_u *GroupUpdateOne) SetSecurityPolicyEnabled(v bool) *GroupUpdateOne {
+	_u.mutation.SetSecurityPolicyEnabled(v)
+	return _u
+}
+
+// SetNillableSecurityPolicyEnabled sets the "security_policy_enabled" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableSecurityPolicyEnabled(v *bool) *GroupUpdateOne {
+	if v != nil {
+		_u.SetSecurityPolicyEnabled(*v)
+	}
+	return _u
+}
+
+// SetSecurityPolicyMode sets the "security_policy_mode" field.
+func (_u *GroupUpdateOne) SetSecurityPolicyMode(v string) *GroupUpdateOne {
+	_u.mutation.SetSecurityPolicyMode(v)
+	return _u
+}
+
+// SetNillableSecurityPolicyMode sets the "security_policy_mode" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableSecurityPolicyMode(v *string) *GroupUpdateOne {
+	if v != nil {
+		_u.SetSecurityPolicyMode(*v)
+	}
+	return _u
+}
+
+// SetSecurityPolicyEmailEnabled sets the "security_policy_email_enabled" field.
+func (_u *GroupUpdateOne) SetSecurityPolicyEmailEnabled(v bool) *GroupUpdateOne {
+	_u.mutation.SetSecurityPolicyEmailEnabled(v)
+	return _u
+}
+
+// SetNillableSecurityPolicyEmailEnabled sets the "security_policy_email_enabled" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableSecurityPolicyEmailEnabled(v *bool) *GroupUpdateOne {
+	if v != nil {
+		_u.SetSecurityPolicyEmailEnabled(*v)
 	}
 	return _u
 }
@@ -3705,6 +3803,11 @@ func (_u *GroupUpdateOne) check() error {
 			return &ValidationError{Name: "peak_end", err: fmt.Errorf(`ent: validator failed for field "Group.peak_end": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.SecurityPolicyMode(); ok {
+		if err := group.SecurityPolicyModeValidator(v); err != nil {
+			return &ValidationError{Name: "security_policy_mode", err: fmt.Errorf(`ent: validator failed for field "Group.security_policy_mode": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.Status(); ok {
 		if err := group.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "Group.status": %w`, err)}
@@ -3828,6 +3931,15 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	}
 	if value, ok := _u.mutation.IsExclusive(); ok {
 		_spec.SetField(group.FieldIsExclusive, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.SecurityPolicyEnabled(); ok {
+		_spec.SetField(group.FieldSecurityPolicyEnabled, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.SecurityPolicyMode(); ok {
+		_spec.SetField(group.FieldSecurityPolicyMode, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.SecurityPolicyEmailEnabled(); ok {
+		_spec.SetField(group.FieldSecurityPolicyEmailEnabled, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(group.FieldStatus, field.TypeString, value)

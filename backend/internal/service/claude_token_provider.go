@@ -62,6 +62,9 @@ func (p *ClaudeTokenProvider) GetAccessToken(ctx context.Context, account *Accou
 	if account.Type == AccountTypeServiceAccount {
 		return p.getServiceAccountAccessToken(ctx, account)
 	}
+	if intelligentContext(ctx) != nil {
+		return intelligentExistingAccessToken(account)
+	}
 
 	cacheKey := ClaudeTokenCacheKey(account)
 

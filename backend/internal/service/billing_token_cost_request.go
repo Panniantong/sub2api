@@ -28,7 +28,7 @@ type TokenCostRequest struct {
 // 模型广场的阶梯表查询与网关使用同一入口，保证展示与扣费同源。
 func (s *BillingService) CalculateTokenCostForRequest(req TokenCostRequest) (*CostBreakdown, error) {
 	resolved := req.Resolved
-	if resolved != nil && (resolved.Source == PricingSourceGroup || resolved.Source == PricingSourceChannel) {
+	if resolved != nil && (resolved.Source == PricingSourceGlobal || resolved.Source == PricingSourceGroup || resolved.Source == PricingSourceChannel) {
 		return s.CalculateCostUnified(s.tokenCostInput(req, resolved))
 	}
 	if req.Resolver != nil && req.Group != nil {

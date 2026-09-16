@@ -3199,3 +3199,7 @@ data: {"type":"response.failed","error":{"message":"This content was flagged"}}
 		require.False(t, openAIForwardErrorAlreadyCommunicated(c, c.Writer.Size(), errors.New("openai cyber_policy: blocked")))
 	})
 }
+
+func (r *contentModerationHandlerTestRepo) UpdateLogOverturned(ctx context.Context, id int64) error {
+	return nil
+}
