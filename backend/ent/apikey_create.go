@@ -79,6 +79,42 @@ func (_c *APIKeyCreate) SetKey(v string) *APIKeyCreate {
 	return _c
 }
 
+// SetNillableKey sets the "key" field if the given value is not nil.
+func (_c *APIKeyCreate) SetNillableKey(v *string) *APIKeyCreate {
+	if v != nil {
+		_c.SetKey(*v)
+	}
+	return _c
+}
+
+// SetKeyHash sets the "key_hash" field.
+func (_c *APIKeyCreate) SetKeyHash(v string) *APIKeyCreate {
+	_c.mutation.SetKeyHash(v)
+	return _c
+}
+
+// SetNillableKeyHash sets the "key_hash" field if the given value is not nil.
+func (_c *APIKeyCreate) SetNillableKeyHash(v *string) *APIKeyCreate {
+	if v != nil {
+		_c.SetKeyHash(*v)
+	}
+	return _c
+}
+
+// SetKeyPrefix sets the "key_prefix" field.
+func (_c *APIKeyCreate) SetKeyPrefix(v string) *APIKeyCreate {
+	_c.mutation.SetKeyPrefix(v)
+	return _c
+}
+
+// SetNillableKeyPrefix sets the "key_prefix" field if the given value is not nil.
+func (_c *APIKeyCreate) SetNillableKeyPrefix(v *string) *APIKeyCreate {
+	if v != nil {
+		_c.SetKeyPrefix(*v)
+	}
+	return _c
+}
+
 // SetName sets the "name" field.
 func (_c *APIKeyCreate) SetName(v string) *APIKeyCreate {
 	_c.mutation.SetName(v)
@@ -433,12 +469,19 @@ func (_c *APIKeyCreate) check() error {
 	if _, ok := _c.mutation.UserID(); !ok {
 		return &ValidationError{Name: "user_id", err: errors.New(`ent: missing required field "APIKey.user_id"`)}
 	}
-	if _, ok := _c.mutation.Key(); !ok {
-		return &ValidationError{Name: "key", err: errors.New(`ent: missing required field "APIKey.key"`)}
-	}
 	if v, ok := _c.mutation.Key(); ok {
 		if err := apikey.KeyValidator(v); err != nil {
 			return &ValidationError{Name: "key", err: fmt.Errorf(`ent: validator failed for field "APIKey.key": %w`, err)}
+		}
+	}
+	if v, ok := _c.mutation.KeyHash(); ok {
+		if err := apikey.KeyHashValidator(v); err != nil {
+			return &ValidationError{Name: "key_hash", err: fmt.Errorf(`ent: validator failed for field "APIKey.key_hash": %w`, err)}
+		}
+	}
+	if v, ok := _c.mutation.KeyPrefix(); ok {
+		if err := apikey.KeyPrefixValidator(v); err != nil {
+			return &ValidationError{Name: "key_prefix", err: fmt.Errorf(`ent: validator failed for field "APIKey.key_prefix": %w`, err)}
 		}
 	}
 	if _, ok := _c.mutation.Name(); !ok {
@@ -526,6 +569,14 @@ func (_c *APIKeyCreate) createSpec() (*APIKey, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.Key(); ok {
 		_spec.SetField(apikey.FieldKey, field.TypeString, value)
 		_node.Key = value
+	}
+	if value, ok := _c.mutation.KeyHash(); ok {
+		_spec.SetField(apikey.FieldKeyHash, field.TypeString, value)
+		_node.KeyHash = value
+	}
+	if value, ok := _c.mutation.KeyPrefix(); ok {
+		_spec.SetField(apikey.FieldKeyPrefix, field.TypeString, value)
+		_node.KeyPrefix = value
 	}
 	if value, ok := _c.mutation.Name(); ok {
 		_spec.SetField(apikey.FieldName, field.TypeString, value)
@@ -748,6 +799,48 @@ func (u *APIKeyUpsert) SetKey(v string) *APIKeyUpsert {
 // UpdateKey sets the "key" field to the value that was provided on create.
 func (u *APIKeyUpsert) UpdateKey() *APIKeyUpsert {
 	u.SetExcluded(apikey.FieldKey)
+	return u
+}
+
+// ClearKey clears the value of the "key" field.
+func (u *APIKeyUpsert) ClearKey() *APIKeyUpsert {
+	u.SetNull(apikey.FieldKey)
+	return u
+}
+
+// SetKeyHash sets the "key_hash" field.
+func (u *APIKeyUpsert) SetKeyHash(v string) *APIKeyUpsert {
+	u.Set(apikey.FieldKeyHash, v)
+	return u
+}
+
+// UpdateKeyHash sets the "key_hash" field to the value that was provided on create.
+func (u *APIKeyUpsert) UpdateKeyHash() *APIKeyUpsert {
+	u.SetExcluded(apikey.FieldKeyHash)
+	return u
+}
+
+// ClearKeyHash clears the value of the "key_hash" field.
+func (u *APIKeyUpsert) ClearKeyHash() *APIKeyUpsert {
+	u.SetNull(apikey.FieldKeyHash)
+	return u
+}
+
+// SetKeyPrefix sets the "key_prefix" field.
+func (u *APIKeyUpsert) SetKeyPrefix(v string) *APIKeyUpsert {
+	u.Set(apikey.FieldKeyPrefix, v)
+	return u
+}
+
+// UpdateKeyPrefix sets the "key_prefix" field to the value that was provided on create.
+func (u *APIKeyUpsert) UpdateKeyPrefix() *APIKeyUpsert {
+	u.SetExcluded(apikey.FieldKeyPrefix)
+	return u
+}
+
+// ClearKeyPrefix clears the value of the "key_prefix" field.
+func (u *APIKeyUpsert) ClearKeyPrefix() *APIKeyUpsert {
+	u.SetNull(apikey.FieldKeyPrefix)
 	return u
 }
 
@@ -1168,6 +1261,55 @@ func (u *APIKeyUpsertOne) SetKey(v string) *APIKeyUpsertOne {
 func (u *APIKeyUpsertOne) UpdateKey() *APIKeyUpsertOne {
 	return u.Update(func(s *APIKeyUpsert) {
 		s.UpdateKey()
+	})
+}
+
+// ClearKey clears the value of the "key" field.
+func (u *APIKeyUpsertOne) ClearKey() *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.ClearKey()
+	})
+}
+
+// SetKeyHash sets the "key_hash" field.
+func (u *APIKeyUpsertOne) SetKeyHash(v string) *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.SetKeyHash(v)
+	})
+}
+
+// UpdateKeyHash sets the "key_hash" field to the value that was provided on create.
+func (u *APIKeyUpsertOne) UpdateKeyHash() *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.UpdateKeyHash()
+	})
+}
+
+// ClearKeyHash clears the value of the "key_hash" field.
+func (u *APIKeyUpsertOne) ClearKeyHash() *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.ClearKeyHash()
+	})
+}
+
+// SetKeyPrefix sets the "key_prefix" field.
+func (u *APIKeyUpsertOne) SetKeyPrefix(v string) *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.SetKeyPrefix(v)
+	})
+}
+
+// UpdateKeyPrefix sets the "key_prefix" field to the value that was provided on create.
+func (u *APIKeyUpsertOne) UpdateKeyPrefix() *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.UpdateKeyPrefix()
+	})
+}
+
+// ClearKeyPrefix clears the value of the "key_prefix" field.
+func (u *APIKeyUpsertOne) ClearKeyPrefix() *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.ClearKeyPrefix()
 	})
 }
 
@@ -1806,6 +1948,55 @@ func (u *APIKeyUpsertBulk) SetKey(v string) *APIKeyUpsertBulk {
 func (u *APIKeyUpsertBulk) UpdateKey() *APIKeyUpsertBulk {
 	return u.Update(func(s *APIKeyUpsert) {
 		s.UpdateKey()
+	})
+}
+
+// ClearKey clears the value of the "key" field.
+func (u *APIKeyUpsertBulk) ClearKey() *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.ClearKey()
+	})
+}
+
+// SetKeyHash sets the "key_hash" field.
+func (u *APIKeyUpsertBulk) SetKeyHash(v string) *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.SetKeyHash(v)
+	})
+}
+
+// UpdateKeyHash sets the "key_hash" field to the value that was provided on create.
+func (u *APIKeyUpsertBulk) UpdateKeyHash() *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.UpdateKeyHash()
+	})
+}
+
+// ClearKeyHash clears the value of the "key_hash" field.
+func (u *APIKeyUpsertBulk) ClearKeyHash() *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.ClearKeyHash()
+	})
+}
+
+// SetKeyPrefix sets the "key_prefix" field.
+func (u *APIKeyUpsertBulk) SetKeyPrefix(v string) *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.SetKeyPrefix(v)
+	})
+}
+
+// UpdateKeyPrefix sets the "key_prefix" field to the value that was provided on create.
+func (u *APIKeyUpsertBulk) UpdateKeyPrefix() *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.UpdateKeyPrefix()
+	})
+}
+
+// ClearKeyPrefix clears the value of the "key_prefix" field.
+func (u *APIKeyUpsertBulk) ClearKeyPrefix() *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.ClearKeyPrefix()
 	})
 }
 

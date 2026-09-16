@@ -31,6 +31,7 @@ const (
 	NotificationEmailEventContentModerationViolation  = "content_moderation.violation_notice"
 	NotificationEmailEventContentModerationDisabled   = "content_moderation.account_disabled"
 	NotificationEmailEventCyberPolicyNotice           = "content_moderation.cyber_policy_notice"
+	NotificationEmailEventSecurityPolicyNotice        = "security_policy.violation_notice"
 	NotificationEmailEventOpsAlert                    = "ops.alert"
 	NotificationEmailEventOpsScheduledReport          = "ops.scheduled_report"
 
@@ -1032,6 +1033,7 @@ var notificationEmailEventOrder = []string{
 	NotificationEmailEventContentModerationViolation,
 	NotificationEmailEventContentModerationDisabled,
 	NotificationEmailEventCyberPolicyNotice,
+	NotificationEmailEventSecurityPolicyNotice,
 	NotificationEmailEventOpsAlert,
 	NotificationEmailEventOpsScheduledReport,
 }
@@ -1128,6 +1130,15 @@ var notificationEmailEventDefinitions = map[string]NotificationEmailEventInfo{
 		Optional:    false,
 		Placeholders: append(append([]string{}, notificationEmailCommonPlaceholders...),
 			"triggered_at", "model", "group_name", "upstream_message"),
+	},
+	NotificationEmailEventSecurityPolicyNotice: {
+		Event:       NotificationEmailEventSecurityPolicyNotice,
+		Label:       "Group security policy notice",
+		Description: "Sent to users when a request hits the group security policy (sensitive topics) and is blocked or its session terminated.",
+		Category:    "risk_control",
+		Optional:    false,
+		Placeholders: append(append([]string{}, notificationEmailCommonPlaceholders...),
+			"triggered_at", "model", "group_name", "matched_keyword"),
 	},
 	NotificationEmailEventOpsAlert: {
 		Event:       NotificationEmailEventOpsAlert,
@@ -1402,6 +1413,34 @@ var notificationEmailOfficialTemplates = map[string]map[string]notificationEmail
   <tr><td style="width:128px;vertical-align:top;">上游说明</td><td style="overflow-wrap:anywhere;word-break:break-all;white-space:pre-wrap;">{{upstream_message}}</td></tr>
 </table>
 <p>如认为系误判，可调整请求措辞后重试，或申请获得授权的安全访问权限。</p>`),
+		},
+	},
+	NotificationEmailEventSecurityPolicyNotice: {
+		notificationEmailDefaultLocale: {
+			Subject: "[{{site_name}}] Security policy notice",
+			HTML: notificationEmailCard("#ef4444", "Security policy notice", `
+<p>Hello {{recipient_name}},</p>
+<p>Your request hit the group security policy (sensitive topics) and was blocked.</p>
+<table style="width:100%;border-collapse:collapse;table-layout:fixed;">
+  <tr><td style="width:128px;vertical-align:top;">Triggered at</td><td style="overflow-wrap:anywhere;word-break:break-word;">{{triggered_at}}</td></tr>
+  <tr><td style="width:128px;vertical-align:top;">Model</td><td style="overflow-wrap:anywhere;word-break:break-word;">{{model}}</td></tr>
+  <tr><td style="width:128px;vertical-align:top;">Group</td><td style="overflow-wrap:anywhere;word-break:break-word;">{{group_name}}</td></tr>
+  <tr><td style="width:128px;vertical-align:top;">Matched keyword</td><td style="overflow-wrap:anywhere;word-break:break-all;white-space:pre-wrap;">{{matched_keyword}}</td></tr>
+</table>
+<p>If the session was terminated, please start a new session. If you believe this is a mistake, contact the administrator.</p>`),
+		},
+		notificationEmailLocaleChinese: {
+			Subject: "[{{site_name}}] 安全策略提醒",
+			HTML: notificationEmailCard("#ef4444", "安全策略提醒", `
+<p>{{recipient_name}}，您好：</p>
+<p>您的请求触发了所在分组的安全策略（敏感话题），已被拦截。</p>
+<table style="width:100%;border-collapse:collapse;table-layout:fixed;">
+  <tr><td style="width:128px;vertical-align:top;">触发时间</td><td style="overflow-wrap:anywhere;word-break:break-word;">{{triggered_at}}</td></tr>
+  <tr><td style="width:128px;vertical-align:top;">模型</td><td style="overflow-wrap:anywhere;word-break:break-word;">{{model}}</td></tr>
+  <tr><td style="width:128px;vertical-align:top;">所属分组</td><td style="overflow-wrap:anywhere;word-break:break-word;">{{group_name}}</td></tr>
+  <tr><td style="width:128px;vertical-align:top;">命中关键词</td><td style="overflow-wrap:anywhere;word-break:break-all;white-space:pre-wrap;">{{matched_keyword}}</td></tr>
+</table>
+<p>如会话已被终止，请新建会话后继续。如认为系误判，请联系管理员。</p>`),
 		},
 	},
 	NotificationEmailEventOpsAlert: {

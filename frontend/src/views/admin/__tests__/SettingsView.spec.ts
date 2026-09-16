@@ -81,6 +81,8 @@ const {
 
 const localeRef = vi.hoisted(() => ({ value: "zh-CN" }));
 
+vi.mock("@/stores/auth", () => ({ useAuthStore: () => ({ isAdmin: true, isSuperAdmin: true }) }));
+
 vi.mock("@/api", () => ({
   adminAPI: {
     settings: {

@@ -244,6 +244,11 @@ func (s *AccountService) Create(ctx context.Context, req CreateAccountRequest) (
 		Status:      StatusActive,
 		ExpiresAt:   req.ExpiresAt,
 	}
+	// Random proxy mode owns proxy selection at request time; never persist a
+	// simultaneously supplied fixed proxy association.
+	if account.IsRandomProxy() {
+		account.ProxyID = nil
+	}
 	if req.AutoPauseOnExpired != nil {
 		account.AutoPauseOnExpired = *req.AutoPauseOnExpired
 	} else {
@@ -340,13 +345,27 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 		delete(extra, OllamaCloudUsageSessionExtraKey)
 		delete(extra, OllamaCloudUsageAutoRefreshExtraKey)
 		delete(extra, OllamaCloudUsageSnapshotExtraKey)
-		account.Extra = prepareCodexFingerprintExtraForUpdate(account, extra)
+		account.Extra = prepareCodexFingerprintExtraForUpdate(account, NormalizeProxyModeExtra(extra))
 	} else {
-		account.Extra = prepareCodexFingerprintExtraForUpdate(account, account.Extra)
+		account.Extra = prepareCodexFingerprintExtraForUpdate(account, NormalizeProxyModeExtra(account.Extra))
 	}
 
 	if req.ProxyID != nil {
-		account.ProxyID = req.ProxyID
+		// A zero proxy ID means clear the fixed association. Random mode is
+		// retained only when this request explicitly carried proxy_mode=random;
+		// otherwise changing the proxy also disables random selection.
+		randomProxyRequested := req.Extra != nil && account.IsRandomProxy()
+		if *req.ProxyID <= 0 {
+			account.ProxyID = nil
+			if !randomProxyRequested && account.Extra != nil {
+				delete(account.Extra, ProxyModeExtraKey)
+			}
+		} else {
+			account.ProxyID = req.ProxyID
+			if account.Extra != nil {
+				delete(account.Extra, ProxyModeExtraKey)
+			}
+		}
 	}
 
 	if req.Concurrency != nil {
@@ -515,7 +534,7 @@ func (s *AccountService) TestCredentials(ctx context.Context, id int64) error {
 	case PlatformGrok:
 		// Grok OAuth credentials are validated via token exchange/refresh and request-path probes.
 		return nil
-	case PlatformKimi, PlatformZhipu, PlatformDeepseek:
+	case PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax:
 		// 国产 OpenAI 兼容供应商：凭证为 API Key，实际可用性经余额/额度探测与转发路径验证。
 		return nil
 	default:

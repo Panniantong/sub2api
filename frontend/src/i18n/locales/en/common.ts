@@ -12,6 +12,12 @@ export default {
     delete: 'Delete',
     edit: 'Edit',
     create: 'Create',
+    apply: 'Apply',
+    clear: 'Clear',
+    creating: 'Creating...',
+    required: 'Required',
+    sending: 'Sending...',
+    tryAgain: 'Please try again',
     update: 'Update',
     confirm: 'Confirm',
     reset: 'Reset',
@@ -108,6 +114,8 @@ export default {
         withSuffix: '{time} to lift'
       }
     }
+  ,
+    loadMore: 'Load more',
   },
 
   adminCompliance: {
@@ -206,6 +214,15 @@ export default {
     contentModeration: 'Content Moderation',
     promptAudit: 'Prompt Audit',
     auditLogs: 'Audit Logs',
+    billing: 'Billing',
+    tickets: 'Tickets',
+    securityPolicy: 'Security Policy',
+    globalPricing: 'Global Pricing',
+    accountHealth: 'Account Health',
+    margins: 'Margin Center',
+    tieredRouting: 'Tiered Routing',
+    spendGuard: 'Spend Guard',
+    ticketsAdmin: 'Ticket Management',
   },
 
   // Auth

@@ -2,6 +2,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"hash/fnv"
@@ -82,6 +83,53 @@ type Account struct {
 	headerOverrideCacheRawPtr         uintptr
 	headerOverrideCacheRawLen         int
 	headerOverrideCacheRawSig         uint64
+}
+
+// ProxyModeExtraKey stores the account proxy selection mode in the existing
+// JSONB extra column. Keeping this in extra preserves compatibility with
+// existing installations without requiring an account table migration.
+const ProxyModeExtraKey = "proxy_mode"
+
+const ProxyModeRandom = "random"
+
+// NormalizeProxyModeExtra enforces the proxy_mode whitelist on an account
+// extra map: "random" (case/whitespace-insensitive) is canonicalized to
+// ProxyModeRandom, any other value is dropped so it can never persist.
+// A nil map is returned as-is. The same whitelist is enforced at the DB
+// layer by chk_accounts_extra_proxy_mode; this keeps the write path and the
+// constraint from drifting apart.
+func NormalizeProxyModeExtra(extra map[string]any) map[string]any {
+	if extra == nil {
+		return nil
+	}
+	raw, ok := extra[ProxyModeExtraKey]
+	if !ok {
+		return extra
+	}
+	if mode, ok := raw.(string); ok && strings.EqualFold(strings.TrimSpace(mode), ProxyModeRandom) {
+		extra[ProxyModeExtraKey] = ProxyModeRandom
+		return extra
+	}
+	delete(extra, ProxyModeExtraKey)
+	return extra
+}
+
+// IsRandomProxy reports whether the account should use a randomly selected
+// active proxy for each newly selected request. The value is deliberately
+// strict: malformed user data never enables an unexpected mode.
+func (a *Account) IsRandomProxy() bool {
+	if a == nil || a.Extra == nil {
+		return false
+	}
+	mode, ok := a.Extra[ProxyModeExtraKey].(string)
+	return ok && strings.EqualFold(strings.TrimSpace(mode), ProxyModeRandom)
+}
+
+// RandomProxySelector is implemented by repositories that can choose one
+// currently active, non-expired proxy. It is optional so narrow unit-test
+// repositories remain source-compatible.
+type RandomProxySelector interface {
+	SelectRandomActiveProxy(ctx context.Context) (*Proxy, error)
 }
 
 type OpenAIEndpointCapability string
@@ -294,8 +342,7 @@ func (a *Account) IsCNProvider() bool {
 // openai/grok 原生走 OpenAI 网关；kimi/zhipu/deepseek 同为 OpenAI Chat Completions
 // 兼容上游，也经 OpenAI 网关转发。
 func (a *Account) IsOpenAICompatible() bool {
-	return a != nil && (a.Platform == PlatformOpenAI || a.Platform == PlatformGrok ||
-		a.Platform == PlatformKimi || a.Platform == PlatformZhipu || a.Platform == PlatformDeepseek)
+	return a != nil && (a.Platform == PlatformOpenAI || a.Platform == PlatformGrok || a.IsCNProvider())
 }
 
 func (a *Account) GeminiOAuthType() string {
@@ -1362,6 +1409,8 @@ func (a *Account) GetOpenAIBaseURL() string {
 		return DefaultZhipuPayGBaseURL
 	case PlatformDeepseek:
 		return DefaultDeepseekBaseURL
+	case PlatformMiniMax:
+		return DefaultMiniMaxBaseURL
 	default:
 		return "https://api.openai.com"
 	}
@@ -1416,7 +1465,7 @@ func (a *Account) SupportsNativeCNResponses() bool {
 		return false
 	}
 	switch a.Platform {
-	case PlatformDeepseek, PlatformKimi:
+	case PlatformDeepseek, PlatformKimi, PlatformMiniMax:
 		return true
 	default:
 		return false
@@ -1477,6 +1526,8 @@ func (a *Account) defaultCNProtocolBaseURL(protocol string) string {
 			return DefaultZhipuAnthropicBaseURL
 		case PlatformDeepseek:
 			return DefaultDeepseekAnthropicBaseURL
+		case PlatformMiniMax:
+			return DefaultMiniMaxAnthropicBaseURL
 		}
 	case APIProtocolChatCompletions, APIProtocolResponses:
 		switch a.Platform {
@@ -1492,6 +1543,8 @@ func (a *Account) defaultCNProtocolBaseURL(protocol string) string {
 			return DefaultZhipuPayGBaseURL
 		case PlatformDeepseek:
 			return DefaultDeepseekBaseURL
+		case PlatformMiniMax:
+			return DefaultMiniMaxBaseURL
 		}
 	}
 	return ""
@@ -1528,6 +1581,8 @@ func (a *Account) GetAnthropicProtocolBaseURL() string {
 		return DefaultZhipuAnthropicBaseURL
 	case PlatformDeepseek:
 		return DefaultDeepseekAnthropicBaseURL
+	case PlatformMiniMax:
+		return DefaultMiniMaxAnthropicBaseURL
 	default:
 		return ""
 	}
@@ -1577,6 +1632,9 @@ func (a *Account) GetCodingPlanProvider() string {
 		return ""
 	}
 	baseURL := strings.ToLower(a.GetOpenAIBaseURL())
+	if parsed, err := url.Parse(baseURL); a.Platform == PlatformMiniMax && err == nil && (parsed.Hostname() == "api.minimaxi.com" || parsed.Hostname() == "api.minimax.io") {
+		return PlatformMiniMax
+	}
 	switch {
 	case strings.Contains(baseURL, "api.kimi.com/coding"):
 		return PlatformKimi
@@ -2319,11 +2377,11 @@ func (a *Account) IsAnthropicOAuthOrSetupToken() bool {
 }
 
 // IsTLSFingerprintEnabled 检查是否启用 TLS 指纹伪装
-// 仅适用于 Anthropic OAuth/SetupToken 类型账号
-// 启用后将模拟 Claude Code (Node.js) 客户端的 TLS 握手特征
+// 适用于 Anthropic 与 OpenAI OAuth/SetupToken 类型账号。
+// 启用后使用账号绑定的完整 TLS ClientHello 模板。
 func (a *Account) IsTLSFingerprintEnabled() bool {
-	// 仅支持 Anthropic OAuth/SetupToken 账号
-	if !a.IsAnthropicOAuthOrSetupToken() {
+	if a == nil || (a.Platform != PlatformAnthropic && a.Platform != PlatformOpenAI) ||
+		(a.Type != AccountTypeOAuth && a.Type != AccountTypeSetupToken) {
 		return false
 	}
 	if a.Extra == nil {

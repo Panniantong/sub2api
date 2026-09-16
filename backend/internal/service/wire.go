@@ -245,6 +245,7 @@ func ProvideAccountUsageService(
 }
 
 func ProvideAccountTestService(
+	concurrencyService *ConcurrencyService,
 	accountRepo AccountRepository,
 	geminiTokenProvider *GeminiTokenProvider,
 	claudeTokenProvider *ClaudeTokenProvider,
@@ -267,8 +268,10 @@ func ProvideAccountTestService(
 		cfg,
 		tlsFPProfileService,
 	)
+	service.concurrencyService = concurrencyService
 	service.agentIdentityWS = openAIGatewayService
 	service.openAIModelTransient = openAIGatewayService
+	service.SetOpenAIGatewayService(openAIGatewayService)
 	service.SetSettingService(settingService)
 	service.SetPluginManager(pluginManager)
 	return service
@@ -819,8 +822,20 @@ func ProvideAPIKeyService(
 	return svc
 }
 
+func ProvideIntelligentTestService(repo IntelligentTestRepository, runner *AccountTestService) *IntelligentTestService {
+	svc := NewIntelligentTestService(repo, runner)
+	svc.Start()
+	return svc
+}
+
+func ProvideTLSFingerprintProfileService(repo TLSFingerprintProfileRepository, cache TLSFingerprintProfileCache, cfg *config.Config) *TLSFingerprintProfileService {
+	return NewTLSFingerprintProfileService(repo, cache, cfg)
+}
+
 // ProviderSet is the Wire provider set for all services
 var ProviderSet = wire.NewSet(
+	NewUserCleanupService,
+	ProvideIntelligentTestService,
 	// Core services
 	ProvideAuthService,
 	NewPasskeyService,
@@ -835,12 +850,14 @@ var ProviderSet = wire.NewSet(
 	NewRedeemService,
 	NewPromoService,
 	NewUsageService,
+	NewAccountTrafficService,
 	NewDashboardService,
 	ProvidePricingService,
 	NewBillingService,
 	ProvideBillingCacheService,
 	NewAnnouncementService,
 	NewAdminService,
+	wire.Bind(new(AntiDegradeStore), new(AdminService)),
 	NewGatewayService,
 	NewOpenAIGatewayService,
 	ProvideImageStorageSettingService,
@@ -922,7 +939,7 @@ var ProviderSet = wire.NewSet(
 	NewUsageCache,
 	NewTotpService,
 	NewErrorPassthroughService,
-	NewTLSFingerprintProfileService,
+	ProvideTLSFingerprintProfileService,
 	NewPluginManager,
 	NewDigestSessionStore,
 	ProvideIdempotencyCoordinator,
@@ -933,9 +950,19 @@ var ProviderSet = wire.NewSet(
 	NewGroupCapacityService,
 	NewChannelService,
 	wire.Bind(new(ChannelCacheInvalidator), new(*ChannelService)),
-	NewModelPricingResolver,
+	NewModelPricingResolverWithGlobal,
 	NewModelPlazaService,
 	NewContentModerationService,
+	wire.Bind(new(SecurityPolicyModelReviewer), new(*ContentModerationService)),
+	NewSecurityPolicyService,
+	NewGlobalModelPricingService,
+	ProvideAccountHealthService,
+	ProvideMarginService,
+	NewTieredRoutingService,
+	ProvideSpendGuardService,
+	NewTicketService,
+	NewBillingExportService,
+	ProvideAntiDegradeService,
 	NewAffiliateService,
 	ProvidePaymentConfigService,
 	ProvidePaymentService,
@@ -949,6 +976,12 @@ var ProviderSet = wire.NewSet(
 	NewChannelMonitorRequestTemplateService,
 	ProvideUserPlatformQuotaUsageFlusher,
 )
+
+func ProvideAntiDegradeService(admin AdminService, cfg *config.Config, plugins *PluginManager) *AntiDegradeService {
+	svc := NewAntiDegradeService(admin)
+	svc.cfg, svc.pluginManager = cfg, plugins
+	return svc
+}
 
 // ProvideUserPlatformQuotaUsageFlusher 创建并启动 UserPlatformQuotaUsageFlusher。
 func ProvideUserPlatformQuotaUsageFlusher(cfg *config.Config, cache BillingCache, quotaRepo UserPlatformQuotaRepository, tw *TimingWheelService) *UserPlatformQuotaUsageFlusher {

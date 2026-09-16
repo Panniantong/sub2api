@@ -49,7 +49,7 @@ func (s *updateServiceGitHubClientStub) FetchChecksumFile(context.Context, strin
 	panic("FetchChecksumFile should not be called when no update is available")
 }
 
-func TestUpdateServicePerformUpdateNoUpdateReturnsSentinel(t *testing.T) {
+func TestUpdateServiceDistributionDisablesUpstreamMutation(t *testing.T) {
 	svc := NewUpdateService(
 		&updateServiceCacheStub{},
 		&updateServiceGitHubClientStub{
@@ -65,8 +65,13 @@ func TestUpdateServicePerformUpdateNoUpdateReturnsSentinel(t *testing.T) {
 	err := svc.PerformUpdate(context.Background())
 
 	require.Error(t, err)
-	require.True(t, errors.Is(err, ErrNoUpdateAvailable))
-	require.ErrorIs(t, err, ErrNoUpdateAvailable)
+	require.ErrorIs(t, err, ErrManagedUpdateRequired)
+	require.ErrorIs(t, svc.Rollback(), ErrManagedUpdateRequired)
+	require.ErrorIs(t, svc.RollbackToVersion(context.Background(), "0.1.100"), ErrManagedUpdateRequired)
+	info, err := svc.CheckUpdate(context.Background(), true)
+	require.NoError(t, err)
+	require.False(t, info.HasUpdate)
+	require.Equal(t, "source", info.BuildType)
 }
 
 func TestUpdateServiceCheckUpdateTreatsCustomBuildSuffixAsSameBaseVersion(t *testing.T) {
@@ -87,12 +92,15 @@ func TestUpdateServiceCheckUpdateTreatsCustomBuildSuffixAsSameBaseVersion(t *tes
 }
 
 func newRollbackTestService(current string, releases []*GitHubRelease) *UpdateService {
-	return NewUpdateService(
+	svc := NewUpdateService(
 		&updateServiceCacheStub{},
 		&updateServiceGitHubClientStub{recentReleases: releases},
 		current,
 		"release",
 	)
+	// Exercise legacy version-selection helpers without enabling production updates.
+	svc.inPlaceUpdatesEnabled = true
+	return svc
 }
 
 func TestUpdateServiceListRollbackVersionsFiltersAndCaps(t *testing.T) {
@@ -155,6 +163,7 @@ func TestUpdateServiceListRollbackVersionsPropagatesFetchError(t *testing.T) {
 		"0.1.147",
 		"release",
 	)
+	svc.inPlaceUpdatesEnabled = true
 
 	_, err := svc.ListRollbackVersions(context.Background())
 

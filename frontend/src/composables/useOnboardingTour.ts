@@ -93,7 +93,7 @@ export function useOnboardingTour(options: OnboardingOptions) {
 
   const startTour = async (startIndex = 0) => {
     // 动态获取当前用户角色和步骤
-    const isAdmin = userStore.user?.role === 'admin'
+    const isAdmin = userStore.isAdmin
     const isSimpleMode = userStore.isSimpleMode
     const steps = isAdmin ? getAdminSteps(t, isSimpleMode) : getUserSteps(t)
 
@@ -537,7 +537,7 @@ export function useOnboardingTour(options: OnboardingOptions) {
     }
 
     // 只在管理员+标准模式下自动启动
-    const isAdmin = userStore.user?.role === 'admin'
+    const isAdmin = userStore.isAdmin
     if (!isAdmin) {
       return
     }

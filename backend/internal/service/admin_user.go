@@ -111,8 +111,8 @@ func normalizeUserRole(role, fallback string) (string, error) {
 	if role == "" {
 		return fallback, nil
 	}
-	if role != RoleAdmin && role != RoleUser {
-		return "", fmt.Errorf("invalid role: %q (must be %s or %s)", role, RoleAdmin, RoleUser)
+	if !IsAdminRole(role) && role != RoleUser {
+		return "", fmt.Errorf("invalid role: %q (must be %s, %s or %s)", role, RoleSuperAdmin, RoleAdmin, RoleUser)
 	}
 	return role, nil
 }
@@ -131,6 +131,9 @@ func (s *adminServiceImpl) CreateUser(ctx context.Context, input *CreateUserInpu
 		return nil, err
 	}
 
+	if err := s.authorizeUserRoleChange(ctx, input.ActorAdminID, nil, role); err != nil {
+		return nil, err
+	}
 	user := &User{
 		Email:         input.Email,
 		Username:      input.Username,
@@ -147,11 +150,11 @@ func (s *adminServiceImpl) CreateUser(ctx context.Context, input *CreateUserInpu
 	if err := user.SetPassword(input.Password); err != nil {
 		return nil, err
 	}
-	if err := s.userRepo.Create(ctx, user); err != nil {
+	if err := s.userRepo.Create(WithUserManagementActor(ctx, input.ActorAdminID), user); err != nil {
 		return nil, err
 	}
 	// 创建管理员属权限敏感操作，落审计日志（含操作者），便于事后追溯。
-	if user.Role == RoleAdmin {
+	if user.IsAdmin() {
 		logger.LegacyPrintf("service.admin", "audit: admin user created actor_admin_id=%d target_user_id=%d",
 			input.ActorAdminID, user.ID)
 	}
@@ -160,10 +163,19 @@ func (s *adminServiceImpl) CreateUser(ctx context.Context, input *CreateUserInpu
 }
 
 // ensureNotLastAdmin 降级管理员前确认系统中仍存在其他管理员，防止零 admin 锁死。
-// 注：读取与写入之间存在竞态窗口，极端并发下仍可能双双降级；作为后台低频操作
-// 的兜底保护足够，彻底防护需依赖数据库层约束。
+// 此处提供提前错误；最终仓储事务在数据库锁内重新校验角色及数量。
 func (s *adminServiceImpl) ensureNotLastAdmin(ctx context.Context) error {
 	noSubs := false
+	_, superResult, err := s.userRepo.ListWithFilters(ctx,
+		pagination.PaginationParams{Page: 1, PageSize: 1},
+		UserListFilters{Role: RoleSuperAdmin, IncludeSubscriptions: &noSubs},
+	)
+	if err != nil {
+		return err
+	}
+	if superResult != nil && superResult.Total > 0 {
+		return nil
+	}
 	_, result, err := s.userRepo.ListWithFilters(ctx,
 		pagination.PaginationParams{Page: 1, PageSize: 1},
 		UserListFilters{Role: RoleAdmin, IncludeSubscriptions: &noSubs},
@@ -209,8 +221,11 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 		return nil, err
 	}
 
+	if err := s.authorizeUserRoleChange(ctx, input.ActorAdminID, user, input.Role); err != nil {
+		return nil, err
+	}
 	// Protect admin users: cannot disable admin accounts
-	if user.Role == "admin" && input.Status == "disabled" {
+	if user.IsAdmin() && input.Status == "disabled" {
 		return nil, errors.New("cannot disable admin user")
 	}
 
@@ -257,6 +272,11 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 		}
 		// 防锁死保护：不允许降级系统中最后一个管理员（自我降级已在 handler 层拦截，
 		// 此处兜底覆盖跨管理员互降导致零 admin 的场景）。
+		if user.Role == RoleSuperAdmin && role != RoleSuperAdmin {
+			if err := s.ensureNotLastSuperAdmin(ctx); err != nil {
+				return nil, err
+			}
+		}
 		if user.Role == RoleAdmin && role == RoleUser {
 			if err := s.ensureNotLastAdmin(ctx); err != nil {
 				return nil, err
@@ -287,7 +307,7 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 		fields.RestrictPublicGroups = true
 	}
 
-	if err := s.userRepo.Update(ctx, user, fields); err != nil {
+	if err := s.userRepo.Update(WithUserManagementActor(ctx, input.ActorAdminID), user, fields); err != nil {
 		return nil, err
 	}
 
@@ -362,7 +382,7 @@ func (s *adminServiceImpl) DeleteUser(ctx context.Context, id int64) error {
 	if err != nil {
 		return err
 	}
-	if user.Role == "admin" {
+	if user.IsAdmin() {
 		return errors.New("cannot delete admin user")
 	}
 
@@ -393,7 +413,7 @@ func (s *adminServiceImpl) DeleteUser(ctx context.Context, id int64) error {
 
 	if s.authCacheInvalidator != nil {
 		for _, key := range apiKeys {
-			if keyValue := strings.TrimSpace(key.Key); keyValue != "" {
+			if keyValue := strings.TrimSpace(key.AuthCacheInvalidationKey()); keyValue != "" {
 				s.authCacheInvalidator.InvalidateAuthCacheByKey(ctx, keyValue)
 			}
 		}

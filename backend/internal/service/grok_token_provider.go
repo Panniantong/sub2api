@@ -66,6 +66,12 @@ func (p *GrokTokenProvider) GetAccessToken(ctx context.Context, account *Account
 	if account.Platform != PlatformGrok || account.Type != AccountTypeOAuth {
 		return "", errors.New("not a grok oauth account")
 	}
+	if intelligentContext(ctx) != nil {
+		if account.ProxyID != nil && account.Proxy == nil {
+			return "", errGrokOAuthConfiguredProxyMiss
+		}
+		return intelligentExistingAccessToken(account)
+	}
 	selectedProxyID := cloneGrokProxyID(account.ProxyID)
 	if eligibilityErr := grokOAuthRequestAccountEligibilityError(account); eligibilityErr != nil {
 		return "", withGrokCredentialFailureSnapshot(eligibilityErr, account)
@@ -187,6 +193,9 @@ func (p *GrokTokenProvider) GetAccessTokenForManualTest(ctx context.Context, acc
 	}
 	if account.ProxyID != nil && account.Proxy == nil {
 		return "", errGrokOAuthConfiguredProxyMiss
+	}
+	if intelligentContext(ctx) != nil {
+		return intelligentExistingAccessToken(account)
 	}
 	if strings.TrimSpace(account.GetGrokRefreshToken()) == "" {
 		return "", errGrokOAuthRefreshTokenMissing

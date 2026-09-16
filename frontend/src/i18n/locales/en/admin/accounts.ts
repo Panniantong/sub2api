@@ -1,5 +1,8 @@
 export default {
     accounts: {
+      antiDegradeAccountNotFound: "Account not found",
+      antiDegradeAlreadyEnabled: "Protection is enabled; previous settings can be restored",
+      antiDegradeGenericOnly: "This platform only supports generic concurrency protection",
       title: 'Account Management',
       description: 'Manage AI platform accounts and credentials',
       createAccount: 'Create Account',
@@ -77,6 +80,8 @@ export default {
         'Existing accounts only sync fields returned by CRS; missing fields keep their current values. Credentials are merged by key — keys not returned by CRS are preserved. Proxies are kept when "Sync proxies" is unchecked.',
       crsBack: 'Back',
       editAccount: 'Edit Account',
+      accountInfo: 'Account information',
+      protectionStrategy: 'Anti-degradation strategy',
       deleteAccount: 'Delete Account',
       searchAccounts: 'Search accounts...',
       notes: 'Notes',
@@ -107,6 +112,7 @@ export default {
         kimi: 'Kimi',
         zhipu: 'Zhipu GLM',
         deepseek: 'DeepSeek',
+        minimax: 'MiniMax',
       },
       cnProviders: {
         accountMode: {
@@ -755,6 +761,8 @@ export default {
       modelRestriction: 'Model Restriction (Optional)',
       modelWhitelist: 'Model Whitelist',
       modelMapping: 'Model Mapping',
+      fromModel: 'Request model',
+      toModel: 'Target model',
       selectAllowedModels: 'Select allowed models. Leave empty to support all models.',
       mapRequestModels:
         'Map request models to actual models. Left is the requested model, right is the actual model sent to API.',
@@ -849,6 +857,30 @@ export default {
       grokClientToolCache: {
         title: 'Client Tool Cache (May Change Automatic Tool Selection)',
         hint: 'For detected Grok Free OAuth accounts, this is enabled by default for client function tools such as Codex and Trae. Turn it off to opt out if the automatic tool-selection behavior is not acceptable.'
+      },
+      grokMediaEligibility: {
+        title: 'Media Generation Eligibility',
+        hint: 'Controls whether this Grok OAuth account may be selected for image and video generation.',
+        auto: 'Automatic detection',
+        enabled: 'Force enable',
+        disabled: 'Force disable',
+        current: 'Current decision:',
+        eligible: 'Eligible',
+        ineligible: 'Not eligible',
+        loading: 'Loading eligibility…',
+        loadFailed: 'Unable to load media eligibility',
+        autoHint: 'Automatic detection only clears the manual override; it does not trigger a media request.',
+        forceEnableWarning: 'Force enable bypasses automatic eligibility checks. Use only for accounts confirmed to support image/video generation.',
+        partialSave: 'Other account settings may have been saved, but media eligibility was not updated. Please retry.',
+        reasons: {
+          eligible: 'Paid entitlement confirmed',
+          billing_inconclusive: 'Billing information inconclusive',
+          billing_forbidden: 'Billing endpoint forbidden',
+          billing_free_tier: 'Free tier account',
+          billing_unobserved: 'Billing not observed yet',
+          override_enabled: 'Manually forced enabled',
+          override_disabled: 'Manually forced disabled'
+        }
       },
       autoPauseOnExpired: 'Auto Pause On Expired',
       autoPauseOnExpiredDesc: 'When enabled, the account will auto pause scheduling after it expires',
@@ -1539,7 +1571,9 @@ export default {
         grokLastProbe: 'Probe {time}',
         grokLastHeadersSeen: 'Headers {time}',
         passiveSampled: 'Passive',
-        activeQuery: 'Query'
+        activeQuery: 'Query',
+        estimatedTotalCost: 'Est. total ${cost}',
+        estimatedTotalCostTooltip: 'Estimated total cost at 100% utilization, based on current window cost and utilization'
       },
       openaiQuotaReset: {
         count: 'Credits',
@@ -1593,7 +1627,62 @@ export default {
       needsReauth: 'Re-auth Required',
       rateLimited: 'Rate Limited',
       usageError: 'Fetch Error'
-    },
+    ,
+    randomProxy: 'Choose a random proxy',
+  
+    randomProxyHint: 'Choose a random active proxy from the current pool for each request.',
+  
+    accountPool: 'Account pool',
+  
+    accountPoolHint: 'Premium-tier users prefer premium-pool accounts; others use all accounts.',
+  
+    poolStandard: 'Standard',
+  
+    poolPremium: 'Premium',
+  
+    antiDegrade: 'Account protection configuration',
+  
+    antiDegradeDesc: 'Compatibility protection v3 uses the original standard transport, a stable device identity, separate conversations and a concurrency cap. Known protocol conversions are allowed while lost input, tools and reasoning are blocked. Preview and revert are available.',
+  
+    antiDegradeEnabled: 'Configuration enabled',
+    antiDegradeConfiguration: 'Configuration status',
+    antiDegradeConfigurationIssue: 'Configuration issue',
+    antiDegradeUnverified: 'Configuration not checked',
+    antiDegradeNotConfigured: 'Not configured',
+    antiDegradeActiveMode: 'Active mode',
+    antiDegradePolicyVersion: 'Policy version',
+    antiDegradeIdentity: 'Account identity',
+    antiDegradeIdentityReady: 'Ready (seed hidden)',
+    antiDegradeIdentityMissing: 'Not ready',
+    antiDegradeTLSProfile: 'Transport policy',
+    antiDegradeMode1Desc: 'For OpenAI OAuth / setup-token accounts. v3 uses the original standard transport without forcing a TLS template, and retains stable account identities, separate conversations and concurrency limits. Upgrade v2 explicitly after preview; revert restores the original settings. OAuth does not support max_output_tokens, so that field is removed for compatibility. Protection does not guarantee upstream model quality.',
+    antiDegradeMode2Desc: 'Mode 2 retains the legacy policy and has not been upgraded in this release. Preview or revert its existing configuration; the new Mode 1 behavior does not apply.',
+  
+    antiDegradeApply: 'Preview protection configuration',
+    antiDegradeMode1: 'Mode 1: Compatibility protection v3',
+    antiDegradeMode2: 'Mode 2: Legacy policy',
+    antiDegradeModeLegacy: 'Original strategy (sub2 legacy)',
+    antiDegradeModeLegacyDesc: 'Use the original sub2 session identity and Node.js 24 transport. Concurrency is independently editable and preserved when switching or reverting strategies. Request integrity can be disabled, observed, or enforced separately.',
+    antiDegradeLegacyVersion: 'Original (no version)',
+  
+    antiDegradeRevert: 'Revert',
+  
+    antiDegradeNoChange: 'Nothing to change.',
+  
+    antiDegradeApplied: 'Protection configuration applied',
+  
+    antiDegradeReverted: 'Protection configuration reverted',
+  
+    antiDegradeFailed: 'Operation failed',
+  
+    antiDegradeRevertHint: 'Reverting restores the snapshot, overwriting manual changes made after applying.',
+  
+    antiDegradeChangeFingerprint: 'Account identity policy',
+  
+    antiDegradeChangeTLS: 'Pin TLS handshake profile',
+  
+    antiDegradeChangeConcurrency: 'Initial concurrency (independently editable)',
+  },
 
     // Scheduled Tests
 }

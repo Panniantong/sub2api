@@ -24,6 +24,7 @@ func RegisterUserRoutes(
 	authenticated.Use(panelRateLimiter.Global())
 	// 用户管理面变更类操作入审计（含 TOTP 启用/禁用、step-up 验证、密码修改等安全事件）
 	authenticated.Use(gin.HandlerFunc(auditLog))
+	registerAccountCapabilityRoutes(authenticated, h)
 	{
 		// 用户接口
 		user := authenticated.Group("/user")
@@ -117,6 +118,23 @@ func RegisterUserRoutes(
 		{
 			announcements.GET("", h.Announcement.List)
 			announcements.POST("/:id/read", h.Announcement.MarkRead)
+		}
+
+		// 工单
+		tickets := authenticated.Group("/tickets")
+		{
+			tickets.GET("", h.Admin.Ticket.ListMine)
+			tickets.POST("", h.Admin.Ticket.Create)
+			tickets.GET("/:id", h.Admin.Ticket.GetMine)
+			tickets.POST("/:id/replies", h.Admin.Ticket.ReplyMine)
+			tickets.POST("/:id/close", h.Admin.Ticket.CloseMine)
+		}
+
+		// 账单：月账单与用量导出
+		billing := authenticated.Group("/billing")
+		{
+			billing.GET("/statement", h.Admin.BillingExport.Statement)
+			billing.GET("/export", h.Admin.BillingExport.Export)
 		}
 
 		// 卡密兑换

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -77,6 +78,9 @@ type openAIWSAcquireRequest struct {
 	ForceNewConn bool
 	// ForcePreferredConn: 强制本次只使用 PreferredConnID，禁止漂移到其它连接。
 	ForcePreferredConn bool
+	// Snapshot retained for delayed prewarm; never silently re-resolve a new
+	// template under an old handshake compatibility key.
+	tlsProfile *tlsfingerprint.Profile
 }
 
 type openAIWSHandshakeCompatibilityKey struct {
@@ -87,6 +91,8 @@ type openAIWSHandshakeCompatibilityKey struct {
 	threadID            string
 	clientRequestID     string
 	codexWindowID       string
+	conversationID      string
+	transportKey        string
 }
 
 type openAIWSConnLease struct {
@@ -851,6 +857,14 @@ func (p *openAIWSConnPool) Acquire(ctx context.Context, req openAIWSAcquireReque
 	if p != nil {
 		p.metrics.acquireTotal.Add(1)
 	}
+	profile, err := resolveMode1TLSProfile(req.Account)
+	if err != nil {
+		return nil, err
+	}
+	if profile != nil && p != nil && p.cfg != nil && !p.cfg.Gateway.TLSFingerprint.Enabled {
+		profile = nil
+	}
+	req.tlsProfile = profile
 	return p.acquire(ctx, cloneOpenAIWSAcquireRequest(req), 0)
 }
 
@@ -864,7 +878,7 @@ func (p *openAIWSConnPool) acquire(ctx context.Context, req openAIWSAcquireReque
 
 retryAcquire:
 	accountID := req.Account.ID
-	compatibility := normalizeOpenAIWSHandshakeCompatibility(req.Account, req.Headers)
+	compatibility := openAIWSAcquireCompatibility(req)
 	routingAffinity := normalizeOpenAIWSRoutingAffinity(req.Headers)
 	effectiveMaxConns := p.effectiveMaxConnsByAccount(req.Account)
 	if effectiveMaxConns <= 0 {
@@ -1798,7 +1812,8 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 			return nil, err
 		}
 	}
-	conn, status, handshakeHeaders, err := p.clientDialer.Dial(ctx, req.WSURL, headers, req.ProxyURL)
+	dialCtx := withOpenAIWSTLSProfile(ctx, req.Account.ID, req.tlsProfile)
+	conn, status, handshakeHeaders, err := p.clientDialer.Dial(dialCtx, req.WSURL, headers, req.ProxyURL)
 	if err != nil {
 		var handshakeErr *openAIWSHandshakeError
 		var responseBody []byte
@@ -1821,7 +1836,7 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 	}
 	id := p.nextConnID(req.Account.ID)
 	pooledConn := newOpenAIWSConn(id, req.Account.ID, conn, handshakeHeaders)
-	pooledConn.handshakeCompatibility = normalizeOpenAIWSHandshakeCompatibility(req.Account, req.Headers)
+	pooledConn.handshakeCompatibility = openAIWSAcquireCompatibility(req)
 	pooledConn.routingAffinity = normalizeOpenAIWSRoutingAffinity(req.Headers)
 	return pooledConn, nil
 }
@@ -1883,6 +1898,9 @@ func (p *openAIWSConnPool) maxConnsFactorByAccount(account *Account) float64 {
 
 func (p *openAIWSConnPool) effectiveMaxConnsByAccount(account *Account) int {
 	hardCap := p.maxConnsHardCap()
+	if isMode1ProtectionEnabled(account) {
+		hardCap = min(hardCap, account.Mode1EffectiveConcurrency())
+	}
 	if hardCap <= 0 {
 		return 0
 	}
@@ -1890,15 +1908,15 @@ func (p *openAIWSConnPool) effectiveMaxConnsByAccount(account *Account) int {
 		if account == nil {
 			return hardCap
 		}
-		if account.Concurrency <= 0 {
+		if account.Mode1EffectiveConcurrency() <= 0 {
 			return 0
 		}
-		return min(account.Concurrency, hardCap)
+		return min(account.Mode1EffectiveConcurrency(), hardCap)
 	}
 	if account == nil || !p.dynamicMaxConnsEnabled() {
 		return hardCap
 	}
-	if account.Concurrency <= 0 {
+	if account.Mode1EffectiveConcurrency() <= 0 {
 		// 0/-1 等“无限制”并发场景下，仍由全局硬上限兜底。
 		return hardCap
 	}
@@ -1906,7 +1924,7 @@ func (p *openAIWSConnPool) effectiveMaxConnsByAccount(account *Account) int {
 	if factor <= 0 {
 		factor = 1.0
 	}
-	effective := int(math.Ceil(float64(account.Concurrency) * factor))
+	effective := int(math.Ceil(float64(account.Mode1EffectiveConcurrency()) * factor))
 	if effective < 1 {
 		effective = 1
 	}
@@ -1990,6 +2008,9 @@ func cloneOpenAIWSAcquireRequest(req openAIWSAcquireRequest) openAIWSAcquireRequ
 	copied.WSURL = stringsTrim(req.WSURL)
 	copied.ProxyURL = stringsTrim(req.ProxyURL)
 	copied.PreferredConnID = stringsTrim(req.PreferredConnID)
+	if req.tlsProfile != nil {
+		copied.tlsProfile = req.tlsProfile.Clone()
+	}
 	return copied
 }
 
@@ -2004,7 +2025,15 @@ func cloneOpenAIWSAcquireRequestPtr(req *openAIWSAcquireRequest) *openAIWSAcquir
 func sameOpenAIWSPrewarmTarget(a, b openAIWSAcquireRequest) bool {
 	return stringsTrim(a.WSURL) == stringsTrim(b.WSURL) &&
 		stringsTrim(a.ProxyURL) == stringsTrim(b.ProxyURL) &&
-		normalizeOpenAIWSHandshakeCompatibility(a.Account, a.Headers) == normalizeOpenAIWSHandshakeCompatibility(b.Account, b.Headers)
+		openAIWSAcquireCompatibility(a) == openAIWSAcquireCompatibility(b)
+}
+
+func openAIWSAcquireCompatibility(req openAIWSAcquireRequest) openAIWSHandshakeCompatibilityKey {
+	key := normalizeOpenAIWSHandshakeCompatibility(req.Account, req.Headers)
+	if req.Account != nil {
+		key.transportKey = openAIWSTransportKey(req.Account.ID, req.WSURL, req.ProxyURL, req.tlsProfile)
+	}
+	return key
 }
 
 func normalizeOpenAIWSBetaFeatures(headers http.Header) string {
@@ -2041,7 +2070,7 @@ func normalizeOpenAIWSHandshakeCompatibility(account *Account, headers http.Head
 		return key
 	}
 	key.codexInstallationID = normalizeOpenAIWSStableIdentityHeader(headers, "x-codex-installation-id")
-	if mode == codexFingerprintDevice {
+	if mode == codexFingerprintDevice && !account.AntiDegradationEnabled() {
 		return key
 	}
 	key.sessionIDHyphen = normalizeOpenAIWSStableIdentityHeader(headers, "session-id")
@@ -2049,6 +2078,9 @@ func normalizeOpenAIWSHandshakeCompatibility(account *Account, headers http.Head
 	key.threadID = normalizeOpenAIWSStableIdentityHeader(headers, "thread-id")
 	key.clientRequestID = normalizeOpenAIWSStableIdentityHeader(headers, "x-client-request-id")
 	key.codexWindowID = normalizeOpenAIWSStableIdentityHeader(headers, "x-codex-window-id")
+	if account.AntiDegradationEnabled() {
+		key.conversationID = normalizeOpenAIWSStableIdentityHeader(headers, "conversation_id")
+	}
 	return key
 }
 

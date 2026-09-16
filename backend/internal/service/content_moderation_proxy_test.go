@@ -33,6 +33,10 @@ func (r *contentModerationTestProxyRepo) GetByID(ctx context.Context, id int64) 
 	return nil, errors.New("proxy not found")
 }
 
+func (r *contentModerationTestProxyRepo) CountGroupsByProxyID(ctx context.Context, id int64) (int64, error) {
+	return 0, nil
+}
+
 func (r *contentModerationTestProxyRepo) Create(ctx context.Context, proxy *Proxy) error {
 	panic("not implemented")
 }

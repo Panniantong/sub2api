@@ -37,7 +37,7 @@ export default {
     group: '分组',
     noGroup: '无分组',
     requests: '请求',
-    tokens: 'Token',
+    tokens: '词元数',
     actual: '实际',
     standard: '标准',
     input: '输入',
@@ -195,6 +195,12 @@ export default {
       deepseek: {
         description: '通过当前 DeepSeek 分组配置 Claude Code、Codex 或 OpenCode。',
         codexDescription: '使用 API Key 配置 Codex，并通过当前 DeepSeek 分组发送请求。',
+        codexConfigTomlHint: '下载下方模型目录，将两个文件保存到 Codex 配置目录后重启 Codex。',
+        codexNote: '启动 Codex 前先导出 SUB2API_API_KEY。下载的目录只包含模型元数据，不包含 API Key。'
+      },
+      minimax: {
+        description: '通过当前 MiniMax 分组配置 Claude Code、Codex 或 OpenCode。',
+        codexDescription: '使用 API Key 配置 Codex，并通过当前 MiniMax 分组发送请求。',
         codexConfigTomlHint: '下载下方模型目录，将两个文件保存到 Codex 配置目录后重启 Codex。',
         codexNote: '启动 Codex 前先导出 SUB2API_API_KEY。下载的目录只包含模型元数据，不包含 API Key。'
       },
@@ -357,7 +363,7 @@ export default {
     inboundEndpoint: '入站端点',
     upstreamEndpoint: '上游端点',
     type: '类型',
-    tokens: 'Token',
+    tokens: '词元数',
     cost: '费用',
     firstToken: '首 Token',
     duration: '耗时',
@@ -478,7 +484,8 @@ export default {
       antigravity: 'Antigravity',
       kimi: 'Kimi',
       zhipu: '智谱 GLM',
-      deepseek: 'DeepSeek'
+      deepseek: 'DeepSeek',
+      minimax: 'MiniMax'
     },
     // 检查模式（监控条目的工作方式）
     checkMode: {
@@ -501,7 +508,7 @@ export default {
       },
       labels: {
         requests: '请求',
-        tokens: 'Token',
+        tokens: '词元数',
         shared: '共享',
         pro: 'Pro',
         flash: 'Flash'
@@ -1016,4 +1023,50 @@ export default {
   },
 
   // Admin
+
+  billing: {
+    title: '账单',
+    description: '按模型查看月账单，导出用量明细。',
+    requests: '请求数',
+    totalCost: '总费用',
+    models: '模型数',
+    model: '模型',
+    tokens: '词元数',
+    cost: '费用（$）',
+    noData: '本月暂无计费用量。',
+    exportTitle: '用量导出',
+    startDate: '开始日期',
+    endDate: '结束日期',
+    exportCSV: '导出 CSV',
+    exporting: '导出中…',
+    exportHint: '每次最多导出 31 天，最多 10,000 行。',
+    loadFailed: '加载账单失败',
+    exportFailed: '导出失败',
+    invalidRange: '日期范围无效',
+    rangeTooLong: '范围不能超过 31 天',
+  },
+
+  tickets: {
+    title: '工单支持',
+    description: '提交问题、补充说明并查看处理进度。',
+    newTicket: '新建工单',
+    subject: '主题',
+    subjectPlaceholder: '一句话描述你的问题',
+    message: '问题描述',
+    messagePlaceholder: '详细描述你遇到的问题',
+    send: '发送',
+    replyPlaceholder: '写下你的回复…',
+    closeTicket: '关闭工单',
+    closed: '已关闭',
+    open: '待处理',
+    answered: '已回复',
+    you: '我',
+    support: '客服',
+    noTickets: '暂无工单。',
+    createSuccess: '工单已创建',
+    replySuccess: '回复已发送',
+    closeSuccess: '工单已关闭',
+    loadFailed: '加载工单失败',
+    saveFailed: '操作失败',
+  },
 }

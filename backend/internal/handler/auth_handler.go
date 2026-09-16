@@ -696,7 +696,7 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 	}
 
 	// Backend mode: block non-admin token refresh
-	if h.settingSvc.IsBackendModeEnabled(c.Request.Context()) && result.UserRole != "admin" {
+	if h.settingSvc.IsBackendModeEnabled(c.Request.Context()) && !service.IsAdminRole(result.UserRole) {
 		response.Forbidden(c, "Backend mode is active. Only admin login is allowed.")
 		return
 	}

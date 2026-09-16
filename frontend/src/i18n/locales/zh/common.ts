@@ -12,6 +12,12 @@ export default {
     delete: '删除',
     edit: '编辑',
     create: '创建',
+    apply: '应用',
+    clear: '清除',
+    creating: '创建中...',
+    required: '必填',
+    sending: '发送中...',
+    tryAgain: '请重试',
     update: '更新',
     confirm: '确认',
     reset: '重置',
@@ -108,6 +114,8 @@ export default {
         withSuffix: '{time} 后解除'
       }
     }
+  ,
+    loadMore: '加载更多',
   },
 
   adminCompliance: {
@@ -206,6 +214,15 @@ export default {
     contentModeration: '内容审核',
     promptAudit: '提示词审计',
     auditLogs: '操作日志',
+    billing: '账单',
+    tickets: '工单',
+    securityPolicy: '安全策略',
+    globalPricing: '全站定价',
+    accountHealth: '账号健康',
+    margins: '毛利中心',
+    tieredRouting: '分级路由',
+    spendGuard: '烧钱防护',
+    ticketsAdmin: '工单管理',
   },
 
   // Auth

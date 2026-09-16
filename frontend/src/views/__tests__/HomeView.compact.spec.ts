@@ -67,6 +67,12 @@ function modelPlazaDestination(wrapper: ReturnType<typeof mountHome>) {
 }
 
 describe('HomeView compact mode', () => {
+	 it('never renders executable branding URLs as document links or images', () => {
+	   const wrapper = mountHome({ doc_url: 'javascript:alert(1)', site_logo: 'javascript:alert(2)' })
+	   expect(wrapper.findAll('a').some(link => link.attributes('href')?.startsWith('javascript:'))).toBe(false)
+	   expect(wrapper.findAll('img').some(img => img.attributes('src')?.startsWith('javascript:'))).toBe(false)
+	   wrapper.unmount()
+	 })
   beforeEach(() => {
     authStore.isAuthenticated = false
     authStore.isAdmin = false

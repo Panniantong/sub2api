@@ -469,6 +469,27 @@ func (r *proxyRepository) ExistsByHostPortAuth(ctx context.Context, host string,
 	return count > 0, err
 }
 
+// ExistsByProtocolHostPortAuth includes the transport protocol in proxy
+// identity. This keeps HTTP and SOCKS proxies at the same endpoint distinct.
+func (r *proxyRepository) ExistsByProtocolHostPortAuth(ctx context.Context, protocolName, host string, port int, username, password string) (bool, error) {
+	q := r.client.Proxy.Query().
+		Where(proxy.ProtocolEQ(protocolName), proxy.HostEQ(host), proxy.PortEQ(port))
+
+	if username == "" {
+		q = q.Where(proxy.Or(proxy.UsernameIsNil(), proxy.UsernameEQ("")))
+	} else {
+		q = q.Where(proxy.UsernameEQ(username))
+	}
+	if password == "" {
+		q = q.Where(proxy.Or(proxy.PasswordIsNil(), proxy.PasswordEQ("")))
+	} else {
+		q = q.Where(proxy.PasswordEQ(password))
+	}
+
+	count, err := q.Count(ctx)
+	return count > 0, err
+}
+
 // CountAccountsByProxyID returns the number of accounts using a specific proxy
 func (r *proxyRepository) CountAccountsByProxyID(ctx context.Context, proxyID int64) (int64, error) {
 	var count int64
@@ -742,27 +763,29 @@ func (r *proxyRepository) sweepOneExpiredProxyOnExec(ctx context.Context, exec s
 		rows *sql.Rows
 		err  error
 	)
+	// Match the current proxy even after an earlier fallback. Keep the first
+	// origin so manual revert still restores the originally assigned proxy.
 	if target == nil {
 		rows, err = exec.QueryContext(ctx, `
-			UPDATE accounts SET proxy_id=NULL, proxy_fallback_origin_id=$1,
+			UPDATE accounts SET proxy_id=NULL, proxy_fallback_origin_id=COALESCE(proxy_fallback_origin_id,$1),
 				extra=CASE
 					WHEN type='apikey' AND extra ? 'upstream_billing_probe'
 					THEN extra - 'upstream_billing_probe'
 					ELSE extra
 				END,
 				updated_at=NOW()
-			WHERE proxy_id=$1 AND proxy_fallback_origin_id IS NULL AND deleted_at IS NULL
+			WHERE proxy_id=$1 AND deleted_at IS NULL
 			RETURNING id`, proxyID)
 	} else {
 		rows, err = exec.QueryContext(ctx, `
-			UPDATE accounts SET proxy_id=$2, proxy_fallback_origin_id=$1,
+			UPDATE accounts SET proxy_id=$2, proxy_fallback_origin_id=COALESCE(proxy_fallback_origin_id,$1),
 				extra=CASE
 					WHEN type='apikey' AND extra ? 'upstream_billing_probe'
 					THEN extra - 'upstream_billing_probe'
 					ELSE extra
 				END,
 				updated_at=NOW()
-			WHERE proxy_id=$1 AND proxy_fallback_origin_id IS NULL AND deleted_at IS NULL
+			WHERE proxy_id=$1 AND deleted_at IS NULL
 			RETURNING id`, proxyID, *target)
 	}
 	if err != nil {

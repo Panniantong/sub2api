@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	openaiwsv2 "github.com/Wei-Shaw/sub2api/internal/service/openai_ws_v2"
 	coderws "github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
@@ -67,6 +70,36 @@ type coderOpenAIWSClientDialer struct {
 	proxyClients map[string]*openAIWSProxyClientEntry
 	proxyHits    atomic.Int64
 	proxyMisses  atomic.Int64
+	// System roots are used in production. Local handshake tests inject their CA.
+	tlsRootCAs      *x509.CertPool
+	tlsProxyRootCAs *x509.CertPool
+}
+
+type openAIWSTLSContextKey struct{}
+
+type openAIWSTLSConfig struct {
+	accountID int64
+	profile   *tlsfingerprint.Profile
+}
+
+func withOpenAIWSTLSProfile(ctx context.Context, accountID int64, profile *tlsfingerprint.Profile) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if profile == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, openAIWSTLSContextKey{}, openAIWSTLSConfig{accountID: accountID, profile: profile.Clone()})
+}
+
+// Include the full target and proxy in the digest without keeping credentials in
+// cache keys or logs. Profile contents, rather than its display name, define TLS.
+func openAIWSTransportKey(accountID int64, target, proxy string, profile *tlsfingerprint.Profile) string {
+	if profile == nil {
+		return ""
+	}
+	value := fmt.Sprintf("%d\x00%s\x00%s\x00%s", accountID, strings.TrimSpace(target), strings.TrimSpace(proxy), profile.CacheKey())
+	return fmt.Sprintf("mode1:%x", sha256.Sum256([]byte(value)))
 }
 
 // openAIWSHandshakeError keeps a bounded, non-logged HTTP error body so the
@@ -111,7 +144,18 @@ func (d *coderOpenAIWSClientDialer) Dial(
 		HTTPHeader:      cloneHeader(headers),
 		CompressionMode: coderws.CompressionContextTakeover,
 	}
-	if proxy := strings.TrimSpace(proxyURL); proxy != "" {
+	tlsConfig, protected := ctx.Value(openAIWSTLSContextKey{}).(openAIWSTLSConfig)
+	if protected {
+		parsedTarget, err := url.Parse(targetURL)
+		if err != nil || parsedTarget.Scheme != "wss" || parsedTarget.Host == "" {
+			return nil, 0, nil, errors.New("mode1 websocket requires a valid wss target")
+		}
+		client, err := d.fingerprintHTTPClient(tlsConfig, targetURL, proxyURL)
+		if err != nil {
+			return nil, 0, nil, err
+		}
+		opts.HTTPClient = client
+	} else if proxy := strings.TrimSpace(proxyURL); proxy != "" {
 		proxyClient, err := d.proxyHTTPClient(proxy)
 		if err != nil {
 			return nil, 0, nil, err
@@ -142,6 +186,47 @@ func (d *coderOpenAIWSClientDialer) Dial(
 		respHeaders = cloneHeader(resp.Header)
 	}
 	return &coderOpenAIWSClientConn{conn: conn}, 0, respHeaders, nil
+}
+
+func (d *coderOpenAIWSClientDialer) fingerprintHTTPClient(cfg openAIWSTLSConfig, target, proxy string) (*http.Client, error) {
+	if d == nil || cfg.accountID <= 0 || cfg.profile == nil {
+		return nil, errors.New("invalid mode1 websocket TLS configuration")
+	}
+	var proxyURL *url.URL
+	if strings.TrimSpace(proxy) != "" {
+		var err error
+		proxyURL, err = url.Parse(strings.TrimSpace(proxy))
+		if err != nil {
+			return nil, errors.New("invalid mode1 websocket proxy URL")
+		}
+	}
+	key := openAIWSTransportKey(cfg.accountID, target, proxy, cfg.profile)
+	now := time.Now().UnixNano()
+	d.proxyMu.Lock()
+	defer d.proxyMu.Unlock()
+	if entry := d.proxyClients[key]; entry != nil && entry.client != nil {
+		entry.lastUsedUnixNano = now
+		d.proxyHits.Add(1)
+		return entry.client, nil
+	}
+	d.cleanupProxyClientsLocked(now)
+	transport, err := tlsfingerprint.NewHTTPTransport(cfg.profile, proxyURL, tlsfingerprint.TransportOptions{
+		RootCAs: d.tlsRootCAs, ProxyRootCAs: d.tlsProxyRootCAs, HandshakeTimeout: 10 * time.Second,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("mode1 websocket TLS transport: %w", err)
+	}
+	transport.MaxIdleConns = openAIWSProxyTransportMaxIdleConns
+	transport.MaxIdleConnsPerHost = openAIWSProxyTransportMaxIdleConnsPerHost
+	transport.IdleConnTimeout = openAIWSProxyTransportIdleConnTimeout
+	client := &http.Client{Transport: transport}
+	if d.proxyClients == nil {
+		d.proxyClients = make(map[string]*openAIWSProxyClientEntry)
+	}
+	d.proxyClients[key] = &openAIWSProxyClientEntry{client: client, lastUsedUnixNano: now}
+	d.ensureProxyClientCapacityLocked()
+	d.proxyMisses.Add(1)
+	return client, nil
 }
 
 func (d *coderOpenAIWSClientDialer) proxyHTTPClient(proxy string) (*http.Client, error) {

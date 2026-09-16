@@ -1,5 +1,8 @@
 export default {
     accounts: {
+      antiDegradeAccountNotFound: "账号不存在",
+      antiDegradeAlreadyEnabled: "已启用防护，可还原原设置",
+      antiDegradeGenericOnly: "此平台不支持指纹收敛，仅适用通用并发保护",
       title: '账号管理',
       description: '管理 AI 平台账号和 Cookie',
       createAccount: '添加账号',
@@ -76,6 +79,8 @@ export default {
         '已有账号仅同步 CRS 返回的字段，缺失字段保持原值；凭据按键合并，不会清空未下发的键；未勾选"同步代理"时保留原有代理。',
       crsBack: '返回',
       editAccount: '编辑账号',
+      accountInfo: '账号信息',
+      protectionStrategy: '防降智策略',
       deleteAccount: '删除账号',
       searchAccounts: '搜索账号...',
       notes: '备注',
@@ -310,6 +315,7 @@ export default {
         kimi: 'Kimi',
         zhipu: 'Zhipu GLM',
         deepseek: 'DeepSeek',
+        minimax: 'MiniMax',
       },
       cnProviders: {
         accountMode: {
@@ -480,7 +486,9 @@ export default {
         grokLastProbe: '探测 {time}',
         grokLastHeadersSeen: '响应头 {time}',
         passiveSampled: '被动采样',
-        activeQuery: '查询'
+        activeQuery: '查询',
+        estimatedTotalCost: '预计总费用 ${cost}',
+        estimatedTotalCostTooltip: '根据当前窗口费用和使用率估算达到 100% 使用率时的总费用'
       },
       openaiQuotaReset: {
         count: '次数',
@@ -832,6 +840,8 @@ export default {
       modelRestriction: '模型限制（可选）',
       modelWhitelist: '模型白名单',
       modelMapping: '模型映射',
+      fromModel: '请求模型',
+      toModel: '目标模型',
       selectAllowedModels: '选择允许的模型。留空则支持所有模型。',
       mapRequestModels: '将请求模型映射到实际模型。左边是请求的模型，右边是发送到 API 的实际模型。',
       selectedModels: '已选择 {count} 个模型',
@@ -919,6 +929,30 @@ export default {
       grokClientToolCache: {
         title: '客户端工具缓存（可能改变自动工具选择）',
         hint: '仅对已识别为 Free 的 Grok OAuth 账号生效，默认会为 Codex、Trae 等客户端函数工具请求启用上游提示缓存；如不接受自动工具选择行为，可关闭此开关退出。'
+      },
+      grokMediaEligibility: {
+        title: '媒体生成资格',
+        hint: '控制该 Grok OAuth 账号是否可被图片和视频生成请求选中。',
+        auto: '自动判断',
+        enabled: '强制启用',
+        disabled: '强制禁用',
+        current: '当前判定：',
+        eligible: '可用',
+        ineligible: '不可用',
+        loading: '正在读取媒体资格…',
+        loadFailed: '无法读取媒体资格',
+        autoHint: '自动判断只会清除手工覆盖，不会主动触发媒体请求。',
+        forceEnableWarning: '强制启用会绕过自动资格检查，仅应对已确认支持生图/生视频的账号使用。',
+        partialSave: '账号其他配置可能已保存，但媒体资格未更新，请重试。',
+        reasons: {
+          eligible: '已确认付费资格',
+          billing_inconclusive: 'Billing 信息不明确',
+          billing_forbidden: 'Billing 接口拒绝访问',
+          billing_free_tier: 'Free 账号',
+          billing_unobserved: '尚未探测到 Billing',
+          override_enabled: '手工强制启用',
+          override_disabled: '手工强制禁用'
+        }
       },
       autoPauseOnExpired: '过期自动暂停调度',
       autoPauseOnExpiredDesc: '启用后，账号过期将自动暂停调度',
@@ -1565,7 +1599,62 @@ export default {
         usageTrend: '30天费用与请求趋势',
         noData: '该账号暂无使用数据'
       }
-    },
+    ,
+    randomProxy: '随机选择代理',
+  
+    randomProxyHint: '每次请求从当前可用的代理池中随机选择一个代理。',
+  
+    accountPool: '账号池',
+  
+    accountPoolHint: '高级用户优先使用优选池账号，其他用户使用全部账号。',
+  
+    poolStandard: '普通池',
+  
+    poolPremium: '优选池',
+  
+    antiDegrade: '账号保护配置',
+  
+    antiDegradeDesc: '兼容保护 v3 沿用初代标准传输，稳定账号设备身份、隔离不同会话并限制突发并发。允许已知协议转换，阻止意外丢失输入、工具或推理内容。应用前可预览，应用后可还原。',
+  
+    antiDegradeEnabled: '配置已启用',
+    antiDegradeConfiguration: '配置状态',
+    antiDegradeConfigurationIssue: '配置异常',
+    antiDegradeUnverified: '配置尚未核对',
+    antiDegradeNotConfigured: '未配置',
+    antiDegradeActiveMode: '当前模式',
+    antiDegradePolicyVersion: '策略版本',
+    antiDegradeIdentity: '账号身份',
+    antiDegradeIdentityReady: '已就绪（种子不展示）',
+    antiDegradeIdentityMissing: '未就绪',
+    antiDegradeTLSProfile: '传输策略',
+    antiDegradeMode1Desc: '适用于 OpenAI OAuth / setup-token。v3 使用初代标准传输，不强制 TLS 模板；保留账号身份种子、独立会话和并发上限。v2 可在预览后显式升级，还原仍恢复首次启用前的配置。OAuth 不支持 max_output_tokens，该字段会按接口能力移除；保护配置不保证上游模型质量。',
+    antiDegradeMode2Desc: '模式二保留旧方案，本轮未升级。可预览原有配置或还原，不包含模式一新版的保证。',
+  
+    antiDegradeApply: '预览保护配置',
+    antiDegradeMode1: '模式一：兼容保护 v3',
+    antiDegradeMode2: '模式二：旧方案',
+    antiDegradeModeLegacy: '初代策略（sub2初代）',
+    antiDegradeModeLegacyDesc: '沿用 sub2 初代的 session 身份与 Node.js 24 传输。并发可独立修改，切换或还原策略保留当前并发。请求完整性检查可单独选择关闭、观察或拦截。',
+    antiDegradeLegacyVersion: '初代（无版本号）',
+  
+    antiDegradeRevert: '还原',
+  
+    antiDegradeNoChange: '无需改动。',
+  
+    antiDegradeApplied: '保护配置已应用',
+  
+    antiDegradeReverted: '保护配置已还原',
+  
+    antiDegradeFailed: '操作失败',
+  
+    antiDegradeRevertHint: '还原将恢复快照，会覆盖应用后手工改动的值。',
+  
+    antiDegradeChangeFingerprint: '账号身份策略',
+  
+    antiDegradeChangeTLS: '固定 TLS 握手特征',
+  
+    antiDegradeChangeConcurrency: '设置初始并发（可独立修改）',
+  },
 
     // Scheduled Tests
 }

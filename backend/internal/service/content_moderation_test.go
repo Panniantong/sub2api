@@ -1873,3 +1873,7 @@ func TestContentModerationUpdateConfig_CyberPolicyExcludeFromBanCount(t *testing
 	require.NoError(t, err)
 	require.False(t, view.CyberPolicyExcludeFromBanCount)
 }
+
+func (r *contentModerationTestRepo) UpdateLogOverturned(ctx context.Context, id int64) error {
+	return nil
+}

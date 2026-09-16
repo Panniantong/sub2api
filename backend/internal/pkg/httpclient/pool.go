@@ -130,7 +130,12 @@ func buildTransport(opts Options) (*http.Transport, error) {
 
 	_, parsed, err := proxyurl.Parse(opts.ProxyURL)
 	if err != nil {
-		return nil, err
+		// 尝试多格式兼容解析（host:port:user:pass 等），默认 http
+		var ferr error
+		_, parsed, ferr = proxyurl.ParseFlexible(opts.ProxyURL, "http")
+		if ferr != nil {
+			return nil, err
+		}
 	}
 	if parsed == nil {
 		return transport, nil

@@ -7,7 +7,7 @@ func (s *APIKeyService) InvalidateAuthCacheByKey(ctx context.Context, key string
 	if key == "" {
 		return
 	}
-	cacheKey := s.authCacheKey(key)
+	cacheKey := s.authInvalidationCacheKey(key)
 	s.deleteAuthCache(ctx, cacheKey)
 }
 
@@ -43,6 +43,6 @@ func (s *APIKeyService) deleteAuthCacheByKeys(ctx context.Context, keys []string
 		if key == "" {
 			continue
 		}
-		s.deleteAuthCache(ctx, s.authCacheKey(key))
+		s.deleteAuthCache(ctx, s.authInvalidationCacheKey(key))
 	}
 }

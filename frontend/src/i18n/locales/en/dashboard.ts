@@ -194,6 +194,12 @@ export default {
         codexConfigTomlHint: 'Download the model catalog below, save both files under the Codex config directory, and restart Codex.',
         codexNote: 'Export SUB2API_API_KEY before starting Codex. The downloaded catalog contains model metadata only, not your API key.',
       },
+      minimax: {
+        description: 'Configure Claude Code, Codex, or OpenCode through the current MiniMax group.',
+        codexDescription: 'Configure Codex with API key authentication through the current MiniMax group.',
+        codexConfigTomlHint: 'Download the model catalog below, save both files under the Codex config directory, and restart Codex.',
+        codexNote: 'Export SUB2API_API_KEY before starting Codex. The downloaded catalog contains model metadata only, not your API key.',
+      },
       composite: {
         description: 'Configure supported clients through the current Composite routing group.',
         codexDescription: 'Configure Codex with API key authentication and the complete model catalog for this Composite group.',
@@ -473,7 +479,8 @@ export default {
       antigravity: 'Antigravity',
       kimi: 'Kimi',
       zhipu: 'Zhipu GLM',
-      deepseek: 'DeepSeek'
+      deepseek: 'DeepSeek',
+      minimax: 'MiniMax'
     },
     // Check modes (how a monitor performs its checks)
     checkMode: {
@@ -1012,4 +1019,50 @@ export default {
   },
 
   // Admin
+
+  billing: {
+    title: 'Billing Statement',
+    description: 'Monthly cost by model and usage detail export.',
+    requests: 'Requests',
+    totalCost: 'Total cost',
+    models: 'Models',
+    model: 'Model',
+    tokens: 'Tokens',
+    cost: 'Cost ($)',
+    noData: 'No billable usage this month.',
+    exportTitle: 'Usage export',
+    startDate: 'Start date',
+    endDate: 'End date',
+    exportCSV: 'Export CSV',
+    exporting: 'Exporting...',
+    exportHint: 'Up to 31 days per export, max 10,000 rows.',
+    loadFailed: 'Failed to load statement',
+    exportFailed: 'Export failed',
+    invalidRange: 'Invalid date range',
+    rangeTooLong: 'Range must be within 31 days',
+  },
+
+  tickets: {
+    title: 'Support Tickets',
+    description: 'Ask questions or report problems. We usually reply within 24 hours.',
+    newTicket: 'New Ticket',
+    subject: 'Subject',
+    subjectPlaceholder: 'Brief summary of your issue',
+    message: 'Message',
+    messagePlaceholder: 'Describe your issue in detail',
+    send: 'Send',
+    replyPlaceholder: 'Write your reply...',
+    closeTicket: 'Close ticket',
+    closed: 'Closed',
+    open: 'Open',
+    answered: 'Answered',
+    you: 'You',
+    support: 'Support',
+    noTickets: 'No tickets yet.',
+    createSuccess: 'Ticket created',
+    replySuccess: 'Reply sent',
+    closeSuccess: 'Ticket closed',
+    loadFailed: 'Failed to load tickets',
+    saveFailed: 'Operation failed',
+  },
 }

@@ -15,6 +15,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"math/rand/v2"
 	"strconv"
 	"strings"
 	"time"
@@ -137,6 +138,7 @@ func createAccountRecord(ctx context.Context, client *dbent.Client, account *ser
 	if account == nil {
 		return service.ErrAccountNilInput
 	}
+	service.PrepareNewAccountProtection(account)
 
 	builder := client.Account.Create().
 		SetName(account.Name).
@@ -222,16 +224,21 @@ func (r *accountRepository) CreateWithAccountGroups(ctx context.Context, account
 		// Reuse a caller-owned transaction when this repository is already transactional.
 		txClient = r.client
 	}
+	groupIDs := make([]int64, 0, len(groups))
+	for i := range groups {
+		groupIDs = append(groupIDs, groups[i].GroupID)
+	}
+	if err := lockLiveGroups(ctx, txClient, groupIDs); err != nil {
+		return err
+	}
 
 	if err := createAccountRecord(ctx, txClient, account); err != nil {
 		return err
 	}
-	groupIDs := make([]int64, 0, len(groups))
 	if len(groups) > 0 {
 		builders := make([]*dbent.AccountGroupCreate, 0, len(groups))
 		for i := range groups {
 			groups[i].AccountID = account.ID
-			groupIDs = append(groupIDs, groups[i].GroupID)
 			builders = append(builders, txClient.AccountGroup.Create().
 				SetAccountID(account.ID).
 				SetGroupID(groups[i].GroupID).
@@ -270,6 +277,53 @@ func (r *accountRepository) GetByID(ctx context.Context, id int64) (*service.Acc
 		return nil, service.ErrAccountNotFound
 	}
 	return &accounts[0], nil
+}
+
+// SelectRandomActiveProxy chooses one active, non-expired proxy for an
+// account configured with proxy_mode=random. The query is intentionally
+// performed at request hydration time so the account can rotate across the
+// current pool without persisting a random choice.
+//
+// Sampling uses COUNT + OFFSET instead of ORDER BY RANDOM(): the latter
+// sorts the whole proxy table on every request and degrades as the pool
+// grows, while the count/offset pair is two indexed queries.
+func (r *accountRepository) SelectRandomActiveProxy(ctx context.Context) (*service.Proxy, error) {
+	if r == nil || r.client == nil {
+		return nil, nil
+	}
+	eligible := func() *dbent.ProxyQuery {
+		return r.client.Proxy.Query().
+			Where(
+				dbproxy.StatusEQ(service.StatusActive),
+				dbproxy.DeletedAtIsNil(),
+				dbproxy.Or(
+					dbproxy.ExpiresAtIsNil(),
+					dbproxy.ExpiresAtGT(time.Now()),
+				),
+			)
+	}
+	total, err := eligible().Count(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if total == 0 {
+		return nil, nil
+	}
+	offset := 0
+	if total > 1 {
+		offset = rand.IntN(total)
+	}
+	// Deterministic ID order keeps OFFSET sampling well-defined. A row that
+	// disappears between COUNT and SELECT surfaces as NotFound and is
+	// treated like an empty pool so callers fail closed.
+	item, err := eligible().Order(dbproxy.ByID()).Offset(offset).First(ctx)
+	if err != nil {
+		if dbent.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return proxyEntityToService(item), nil
 }
 
 func (r *accountRepository) GetByIDs(ctx context.Context, ids []int64) ([]*service.Account, error) {
@@ -521,6 +575,10 @@ func (r *accountRepository) updateLockedAccount(
 		return nil, err
 	}
 	account.Extra = extra
+	if err := preserveLockedAccountProtection(ctx, client, account); err != nil {
+		return nil, err
+	}
+	extra = normalizeJSONMap(account.Extra)
 
 	schedulable := account.Schedulable
 	if account.Status == service.StatusError {
@@ -550,7 +608,9 @@ func (r *accountRepository) updateLockedAccount(
 		builder.ClearLoadFactor()
 	}
 
-	if account.ProxyID != nil {
+	if account.IsRandomProxy() {
+		builder.ClearProxyID()
+	} else if account.ProxyID != nil {
 		builder.SetProxyID(*account.ProxyID)
 	} else {
 		builder.ClearProxyID()
@@ -1760,13 +1820,30 @@ func (r *accountRepository) ClearError(ctx context.Context, id int64) error {
 }
 
 func (r *accountRepository) AddToGroup(ctx context.Context, accountID, groupID int64, priority int) error {
-	_, err := r.client.AccountGroup.Create().
+	tx, err := r.client.Tx(ctx)
+	if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
+		return err
+	}
+	client := r.client
+	if tx != nil {
+		defer func() { _ = tx.Rollback() }()
+		client = tx.Client()
+	}
+	if err := lockLiveGroups(ctx, client, []int64{groupID}); err != nil {
+		return err
+	}
+	_, err = client.AccountGroup.Create().
 		SetAccountID(accountID).
 		SetGroupID(groupID).
 		SetPriority(priority).
 		Save(ctx)
 	if err != nil {
 		return err
+	}
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return err
+		}
 	}
 	payload := buildSchedulerGroupPayload([]int64{groupID})
 	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountGroupsChanged, &accountID, nil, payload); err != nil {
@@ -1827,6 +1904,9 @@ func (r *accountRepository) BindGroups(ctx context.Context, accountID int64, gro
 	} else {
 		// 已处于外部事务中（ErrTxStarted），复用当前 client
 		txClient = r.client
+	}
+	if err := lockLiveGroups(ctx, txClient, groupIDs); err != nil {
+		return err
 	}
 
 	if _, err := txClient.AccountGroup.Delete().Where(dbaccountgroup.AccountIDEQ(accountID)).Exec(ctx); err != nil {
@@ -2156,20 +2236,9 @@ func (r *accountRepository) ListModelAvailabilityCandidates(
 }
 
 func (r *accountRepository) SetRateLimited(ctx context.Context, id int64, resetAt time.Time) error {
-	now := time.Now()
-	_, err := r.client.Account.Update().
-		Where(dbaccount.IDEQ(id)).
-		SetRateLimitedAt(now).
-		SetRateLimitResetAt(resetAt).
-		Save(ctx)
-	if err != nil {
-		return err
-	}
-	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
-		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue rate limit failed: account=%d err=%v", id, err)
-	}
-	r.syncSchedulerAccountSnapshot(ctx, id)
-	return nil
+	// Every upstream observation extends a limit. Only an explicit recovery
+	// operation may clear it; late short responses must not undo a longer wait.
+	return r.SetRateLimitedIfLater(ctx, id, resetAt)
 }
 
 // SetRateLimitedIfLater atomically extends an account-level rate limit. Grok
@@ -2591,6 +2660,7 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 	if service.ShouldEnsureCodexFingerprintSeedForExtraUpdates(updates) {
 		extraExpression = ensureCodexFingerprintSeedSQL(extraExpression)
 	}
+	extraExpression = preserveProtectionExtraSQL(ctx, extraExpression)
 	result, err := client.ExecContext(
 		ctx,
 		`UPDATE accounts
@@ -2896,6 +2966,7 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 
 	idx := 1
 	ollamaProxyIdentityChanged := ""
+	concurrencyExpression := ""
 	if updates.Name != nil {
 		setClauses = append(setClauses, "name = $"+itoa(idx))
 		args = append(args, *updates.Name)
@@ -2915,7 +2986,8 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		}
 	}
 	if updates.Concurrency != nil {
-		setClauses = append(setClauses, "concurrency = $"+itoa(idx))
+		concurrencyExpression = protectedConcurrencySQL("$" + itoa(idx) + "::integer")
+		setClauses = append(setClauses, "concurrency = "+concurrencyExpression)
 		args = append(args, *updates.Concurrency)
 		idx++
 	}
@@ -2977,7 +3049,7 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 				" AND "+ollamaCloudBaseURLMatchesSQL(credentialPlaceholder+"::jsonb ->> 'base_url'")+")")
 	}
 
-	if len(updates.Extra) > 0 || len(ollamaGroupIdentityChanges) > 0 || ollamaProxyIdentityChanged != "" || updates.EnsureCodexFingerprintSeed {
+	if len(updates.Extra) > 0 || len(ollamaGroupIdentityChanges) > 0 || ollamaProxyIdentityChanged != "" || updates.EnsureCodexFingerprintSeed || updates.Concurrency != nil {
 		extraExpression := "COALESCE(extra, '{}'::jsonb)"
 		if len(updates.Extra) > 0 {
 			payload, err := json.Marshal(updates.Extra)
@@ -3019,6 +3091,10 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		if updates.EnsureCodexFingerprintSeed {
 			extraExpression = ensureCodexFingerprintSeedSQL(extraExpression)
 		}
+		extraExpression = preserveProtectionExtraSQL(ctx, extraExpression)
+		if concurrencyExpression != "" {
+			extraExpression = "CASE WHEN " + accountProtectionEnabledSQL + " THEN jsonb_set((" + extraExpression + "), '{anti_degrade,max_concurrency}', to_jsonb((" + concurrencyExpression + ")::integer), true) ELSE (" + extraExpression + ") END"
+		}
 		setClauses = append(setClauses, "extra = "+extraExpression)
 	}
 
@@ -3056,6 +3132,14 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		}
 	}
 
+	if mode, _ := updates.Extra[service.ProxyModeExtraKey].(string); !service.ProtectionManagedWrite(ctx) && strings.EqualFold(strings.TrimSpace(mode), service.ProxyModeRandom) {
+		if dbent.TxFromContext(ctx) == nil {
+			return 0, errors.New("random proxy bulk changes require a transaction")
+		}
+		if err := validateLockedBulkProxyMode(ctx, exec, ids, updates.Extra); err != nil {
+			return 0, err
+		}
+	}
 	result, err := exec.ExecContext(ctx, query, args...)
 	if err != nil {
 		return 0, err

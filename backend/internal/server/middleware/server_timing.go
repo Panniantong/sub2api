@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 )
 
@@ -97,7 +98,7 @@ func ServerTimingHeaderValue(c *gin.Context) string {
 	if !ok || role == "" {
 		return ""
 	}
-	if role != "admin" && !isUserTimingPath(c.Request.URL.Path) {
+	if !service.IsAdminRole(role) && !isUserTimingPath(c.Request.URL.Path) {
 		return ""
 	}
 	return servertiming.HeaderValue(c.Request.Context(), time.Now(), responseCacheStatus(c.Writer.Header()))

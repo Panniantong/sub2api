@@ -20,6 +20,7 @@
           </div>
 
           <div class="flex w-full flex-shrink-0 flex-wrap items-center justify-end gap-3 lg:w-auto">
+            <a v-if="hasCapabilities" href="#account-capabilities" class="btn btn-secondary">能力检测</a>
             <button
               @click="loadChannels"
               :disabled="loading"
@@ -45,6 +46,7 @@
         />
       </template>
     </TablePageLayout>
+    <UserAccountCapabilities id="account-capabilities" @availability="hasCapabilities = $event" />
   </AppLayout>
 </template>
 
@@ -55,6 +57,7 @@ import AppLayout from '@/components/layout/AppLayout.vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 import Icon from '@/components/icons/Icon.vue'
 import AvailableChannelsTable from '@/components/channels/AvailableChannelsTable.vue'
+import UserAccountCapabilities from '@/components/account/UserAccountCapabilities.vue'
 import userChannelsAPI, { type UserAvailableChannel } from '@/api/channels'
 import userGroupsAPI from '@/api/groups'
 import { useAppStore } from '@/stores/app'
@@ -67,6 +70,7 @@ const channels = ref<UserAvailableChannel[]>([])
 const userGroupRates = ref<Record<number, number>>({})
 const loading = ref(false)
 const searchQuery = ref('')
+const hasCapabilities = ref(false)
 
 const columnLabels = computed(() => ({
   name: t('availableChannels.columns.name'),

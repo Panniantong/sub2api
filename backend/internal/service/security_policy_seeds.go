@@ -1,0 +1,156 @@
+package service
+
+// SecurityPolicyBuiltinKeywords 是分组安全策略的内置 seed 词包。
+// 覆盖破解 / 逆向 / 渗透 / 提权 / 免杀对抗五类。选用原则是精确优先：
+// 只收多字中文词与英文短语/专有工具名，避免 "hack""破解" 这类单字词
+// 误伤正常讨论。匹配为大小写不敏感子串（复用 AC 自动机）。
+// 管理员自定义词走 security_policy_keywords 表，与本表合并生效。
+type SecurityPolicyKeywordSeed struct {
+	Keyword  string
+	Category string
+}
+
+const (
+	SecurityPolicyCategoryCrack   = "crack"
+	SecurityPolicyCategoryReverse = "reverse"
+	SecurityPolicyCategoryPentest = "pentest"
+	SecurityPolicyCategoryPrivesc = "privesc"
+	SecurityPolicyCategoryEvasion = "evasion"
+	SecurityPolicyCategoryCustom  = "custom"
+)
+
+func SecurityPolicyBuiltinKeywords() []SecurityPolicyKeywordSeed {
+	return []SecurityPolicyKeywordSeed{
+		// 破解
+		{Keyword: "破解教程", Category: SecurityPolicyCategoryCrack},
+		{Keyword: "破解补丁", Category: SecurityPolicyCategoryCrack},
+		{Keyword: "破解软件", Category: SecurityPolicyCategoryCrack},
+		{Keyword: "去验证", Category: SecurityPolicyCategoryCrack},
+		{Keyword: "去授权", Category: SecurityPolicyCategoryCrack},
+		{Keyword: "授权破解", Category: SecurityPolicyCategoryCrack},
+		{Keyword: "注册机", Category: SecurityPolicyCategoryCrack},
+		{Keyword: "算号器", Category: SecurityPolicyCategoryCrack},
+		{Keyword: "爆破密码", Category: SecurityPolicyCategoryCrack},
+		{Keyword: "暴力破解", Category: SecurityPolicyCategoryCrack},
+		{Keyword: "密码爆破", Category: SecurityPolicyCategoryCrack},
+		{Keyword: "撞库", Category: SecurityPolicyCategoryCrack},
+		{Keyword: "拖库", Category: SecurityPolicyCategoryCrack},
+		{Keyword: "洗库", Category: SecurityPolicyCategoryCrack},
+		{Keyword: "社工库", Category: SecurityPolicyCategoryCrack},
+		{Keyword: "开盒", Category: SecurityPolicyCategoryCrack},
+		{Keyword: "人肉开盒", Category: SecurityPolicyCategoryCrack},
+		{Keyword: "万能密码", Category: SecurityPolicyCategoryCrack},
+		{Keyword: "注入点", Category: SecurityPolicyCategoryCrack},
+		{Keyword: "keygen", Category: SecurityPolicyCategoryCrack},
+		{Keyword: "serial key", Category: SecurityPolicyCategoryCrack},
+		{Keyword: "license bypass", Category: SecurityPolicyCategoryCrack},
+		{Keyword: "password cracking", Category: SecurityPolicyCategoryCrack},
+		{Keyword: "brute force attack", Category: SecurityPolicyCategoryCrack},
+		{Keyword: "credential stuffing", Category: SecurityPolicyCategoryCrack},
+		{Keyword: "dictionary attack", Category: SecurityPolicyCategoryCrack},
+		{Keyword: "rainbow table", Category: SecurityPolicyCategoryCrack},
+		{Keyword: "hash cracking", Category: SecurityPolicyCategoryCrack},
+		{Keyword: "sqlmap", Category: SecurityPolicyCategoryCrack},
+		{Keyword: "sql injection", Category: SecurityPolicyCategoryCrack},
+		{Keyword: "sql 注入", Category: SecurityPolicyCategoryCrack},
+		// 逆向
+		{Keyword: "逆向工程", Category: SecurityPolicyCategoryReverse},
+		{Keyword: "逆向分析", Category: SecurityPolicyCategoryReverse},
+		{Keyword: "反编译", Category: SecurityPolicyCategoryReverse},
+		{Keyword: "反汇编", Category: SecurityPolicyCategoryReverse},
+		{Keyword: "脱壳", Category: SecurityPolicyCategoryReverse},
+		{Keyword: "反混淆", Category: SecurityPolicyCategoryReverse},
+		{Keyword: "反调试", Category: SecurityPolicyCategoryReverse},
+		{Keyword: "花指令", Category: SecurityPolicyCategoryReverse},
+		{Keyword: "控制流平坦化", Category: SecurityPolicyCategoryReverse},
+		{Keyword: "去虚拟化", Category: SecurityPolicyCategoryReverse},
+		{Keyword: "协议逆向", Category: SecurityPolicyCategoryReverse},
+		{Keyword: "封包解密", Category: SecurityPolicyCategoryReverse},
+		{Keyword: "抓包改包", Category: SecurityPolicyCategoryReverse},
+		{Keyword: "hook 绕过", Category: SecurityPolicyCategoryReverse},
+		{Keyword: "dex 脱壳", Category: SecurityPolicyCategoryReverse},
+		{Keyword: "apk 反编译", Category: SecurityPolicyCategoryReverse},
+		{Keyword: "ida pro", Category: SecurityPolicyCategoryReverse},
+		{Keyword: "ghidra", Category: SecurityPolicyCategoryReverse},
+		{Keyword: "x64dbg", Category: SecurityPolicyCategoryReverse},
+		{Keyword: "ollydbg", Category: SecurityPolicyCategoryReverse},
+		{Keyword: "frida hook", Category: SecurityPolicyCategoryReverse},
+		{Keyword: "reverse engineering", Category: SecurityPolicyCategoryReverse},
+		{Keyword: "deobfuscation", Category: SecurityPolicyCategoryReverse},
+		{Keyword: "anti-debugging", Category: SecurityPolicyCategoryReverse},
+		{Keyword: "unpacking tutorial", Category: SecurityPolicyCategoryReverse},
+		// 渗透
+		{Keyword: "渗透测试", Category: SecurityPolicyCategoryPentest},
+		{Keyword: "内网渗透", Category: SecurityPolicyCategoryPentest},
+		{Keyword: "域渗透", Category: SecurityPolicyCategoryPentest},
+		{Keyword: "横向移动", Category: SecurityPolicyCategoryPentest},
+		{Keyword: "拿站", Category: SecurityPolicyCategoryPentest},
+		{Keyword: "旁站", Category: SecurityPolicyCategoryPentest},
+		{Keyword: "C段渗透", Category: SecurityPolicyCategoryPentest},
+		{Keyword: "漏洞利用", Category: SecurityPolicyCategoryPentest},
+		{Keyword: "远控", Category: SecurityPolicyCategoryPentest},
+		{Keyword: "木马生成", Category: SecurityPolicyCategoryPentest},
+		{Keyword: "钓鱼网站", Category: SecurityPolicyCategoryPentest},
+		{Keyword: "鱼叉式钓鱼", Category: SecurityPolicyCategoryPentest},
+		{Keyword: "水坑攻击", Category: SecurityPolicyCategoryPentest},
+		{Keyword: "getshell", Category: SecurityPolicyCategoryPentest},
+		{Keyword: "webshell", Category: SecurityPolicyCategoryPentest},
+		{Keyword: "一句话木马", Category: SecurityPolicyCategoryPentest},
+		{Keyword: "penetration testing", Category: SecurityPolicyCategoryPentest},
+		{Keyword: "lateral movement", Category: SecurityPolicyCategoryPentest},
+		{Keyword: "reverse shell", Category: SecurityPolicyCategoryPentest},
+		{Keyword: "bind shell", Category: SecurityPolicyCategoryPentest},
+		{Keyword: "meterpreter", Category: SecurityPolicyCategoryPentest},
+		{Keyword: "cobalt strike", Category: SecurityPolicyCategoryPentest},
+		{Keyword: "msfvenom", Category: SecurityPolicyCategoryPentest},
+		{Keyword: "mimikatz", Category: SecurityPolicyCategoryPentest},
+		{Keyword: "bloodhound", Category: SecurityPolicyCategoryPentest},
+		// 提权
+		{Keyword: "提权", Category: SecurityPolicyCategoryPrivesc},
+		{Keyword: "权限提升", Category: SecurityPolicyCategoryPrivesc},
+		{Keyword: "sudo 提权", Category: SecurityPolicyCategoryPrivesc},
+		{Keyword: "suid 提权", Category: SecurityPolicyCategoryPrivesc},
+		{Keyword: "内核提权", Category: SecurityPolicyCategoryPrivesc},
+		{Keyword: "脏牛", Category: SecurityPolicyCategoryPrivesc},
+		{Keyword: "dirty cow", Category: SecurityPolicyCategoryPrivesc},
+		{Keyword: "juicypotato", Category: SecurityPolicyCategoryPrivesc},
+		{Keyword: "godpotato", Category: SecurityPolicyCategoryPrivesc},
+		{Keyword: "sweetpotato", Category: SecurityPolicyCategoryPrivesc},
+		{Keyword: "令牌窃取", Category: SecurityPolicyCategoryPrivesc},
+		{Keyword: "uac 绕过", Category: SecurityPolicyCategoryPrivesc},
+		{Keyword: "bypass uac", Category: SecurityPolicyCategoryPrivesc},
+		{Keyword: "getsystem", Category: SecurityPolicyCategoryPrivesc},
+		{Keyword: "privilege escalation", Category: SecurityPolicyCategoryPrivesc},
+		// 免杀/对抗
+		{Keyword: "免杀", Category: SecurityPolicyCategoryEvasion},
+		{Keyword: "免杀马", Category: SecurityPolicyCategoryEvasion},
+		{Keyword: "过杀软", Category: SecurityPolicyCategoryEvasion},
+		{Keyword: "过火绒", Category: SecurityPolicyCategoryEvasion},
+		{Keyword: "绕过杀软", Category: SecurityPolicyCategoryEvasion},
+		{Keyword: "绕过 edr", Category: SecurityPolicyCategoryEvasion},
+		{Keyword: "edr 绕过", Category: SecurityPolicyCategoryEvasion},
+		{Keyword: "杀软对抗", Category: SecurityPolicyCategoryEvasion},
+		{Keyword: "静态免杀", Category: SecurityPolicyCategoryEvasion},
+		{Keyword: "动态免杀", Category: SecurityPolicyCategoryEvasion},
+		{Keyword: "shellcode 免杀", Category: SecurityPolicyCategoryEvasion},
+		{Keyword: "shellcode 加载器", Category: SecurityPolicyCategoryEvasion},
+		{Keyword: "白加黑", Category: SecurityPolicyCategoryEvasion},
+		{Keyword: "dll 劫持", Category: SecurityPolicyCategoryEvasion},
+		{Keyword: "dll 侧加载", Category: SecurityPolicyCategoryEvasion},
+		{Keyword: "进程注入", Category: SecurityPolicyCategoryEvasion},
+		{Keyword: "进程镂空", Category: SecurityPolicyCategoryEvasion},
+		{Keyword: "僵尸网络", Category: SecurityPolicyCategoryEvasion},
+		{Keyword: "挖矿木马", Category: SecurityPolicyCategoryEvasion},
+		{Keyword: "勒索软件", Category: SecurityPolicyCategoryEvasion},
+		{Keyword: "勒索病毒", Category: SecurityPolicyCategoryEvasion},
+		{Keyword: "amsi 绕过", Category: SecurityPolicyCategoryEvasion},
+		{Keyword: "amsi bypass", Category: SecurityPolicyCategoryEvasion},
+		{Keyword: "process hollowing", Category: SecurityPolicyCategoryEvasion},
+		{Keyword: "process injection", Category: SecurityPolicyCategoryEvasion},
+		{Keyword: "dll hijacking", Category: SecurityPolicyCategoryEvasion},
+		{Keyword: "ransomware", Category: SecurityPolicyCategoryEvasion},
+		{Keyword: "botnet", Category: SecurityPolicyCategoryEvasion},
+		{Keyword: "keylogger", Category: SecurityPolicyCategoryEvasion},
+		{Keyword: "rootkit", Category: SecurityPolicyCategoryEvasion},
+	}
+}
