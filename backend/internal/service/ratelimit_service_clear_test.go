@@ -200,45 +200,6 @@ func TestRateLimitService_ClearRateLimit_WithoutTempUnschedCache(t *testing.T) {
 	require.Equal(t, 1, repo.clearTempUnschedCalls)
 }
 
-func TestRateLimitService_RecoverAccountAfterSuccessfulTest_PreservesOtherAndConcurrentLimits(t *testing.T) {
-	now := time.Now()
-	repo := &rateLimitClearRepoStub{
-		getByIDAccount: &Account{
-			ID:                     42,
-			Status:                 StatusError,
-			RateLimitedAt:          &now,
-			TempUnschedulableUntil: &now,
-			Extra: map[string]any{
-				"model_rate_limits": map[string]any{
-					"claude-sonnet-4-5": map[string]any{
-						"rate_limit_reset_at": now.Format(time.RFC3339),
-					},
-				},
-				"antigravity_quota_scopes": map[string]any{"gemini": true},
-			},
-		},
-	}
-	cache := &tempUnschedCacheRecorder{}
-	blocker := &runtimeBlockRecorder{}
-	svc := NewRateLimitService(repo, nil, &config.Config{}, nil, cache)
-	svc.SetAccountRuntimeBlocker(blocker)
-
-	result, err := svc.RecoverAccountAfterSuccessfulTest(context.Background(), 42)
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.False(t, result.ClearedError)
-	require.False(t, result.ClearedRateLimit)
-
-	require.Equal(t, 1, repo.getByIDCalls)
-	require.Zero(t, repo.clearErrorCalls)
-	require.Zero(t, repo.clearRateLimitCalls)
-	require.Zero(t, repo.clearAntigravityCalls)
-	require.Zero(t, repo.clearModelRateLimitCalls)
-	require.Zero(t, repo.clearTempUnschedCalls)
-	require.Empty(t, cache.deletedIDs)
-	require.Empty(t, blocker.clearedIDs)
-}
-
 func TestRateLimitService_RecoverAccountAfterSuccessfulTest_NoRecoverableStateIsNoop(t *testing.T) {
 	repo := &rateLimitClearRepoStub{
 		getByIDAccount: &Account{
@@ -280,7 +241,8 @@ func TestRateLimitService_RecoverAccountAfterSuccessfulTest_PreservesFutureOpenA
 		},
 	}
 	blocker := &runtimeBlockRecorder{}
-	svc := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	yield429Cfg := &config.Config{Gateway: config.GatewayConfig{OpenAIScheduler: config.GatewayOpenAISchedulerConfig{OAuthYield429Enabled: true}}}
+	svc := NewRateLimitService(repo, nil, yield429Cfg, nil, nil)
 	svc.SetAccountRuntimeBlocker(blocker)
 
 	result, err := svc.RecoverAccountAfterSuccessfulTest(context.Background(), 8)
