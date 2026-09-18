@@ -32,6 +32,9 @@ const (
 	// (payload 字段更多),Fernet token 上限给 512。长度判定从「精确等于」放宽为
 	// 「gAAAAA 前缀 + 长度在 [targetLen, max] 区间」,team 号不再被误杀。
 	openAICodexTicketMaxStateLen = 512
+	// openAICodexTicketPreferredLen: 鈊反馈 332 才是干净的 GPT6 票(356 是次优、
+	// 会被路由到风控)。harvester 对 356 的号持续重试直到抓到 332。
+	openAICodexTicketPreferredLen = 332
 )
 
 // openAICodexTicketStatePlausible 判定一个 blob 是否是合法可用的 turn-state。
@@ -118,6 +121,8 @@ func (s *OpenAIGatewayService) openAICodexTicketGatedModel(model string) bool {
 }
 
 // OpenAICodexTicketStatus 是给管理端看的门票摘要，不含 state blob。
+// 鈊方案第3条:账号级展示——一个号只展示一张共享票(GPT6),并给出实际长度
+// (332/356/292 等),不再逐模型罗列。
 type OpenAICodexTicketStatus struct {
 	Model            string     `json:"model"`
 	Length           int        `json:"length,omitempty"`
@@ -131,39 +136,30 @@ func OpenAICodexTicketStatuses(account *Account, cfg config.OpenAICodexTicketCon
 	if !cfg.Enabled || !isOpenAICodexTicketAccount(account) {
 		return nil
 	}
-	models, targetLen := cfg.Models, cfg.TargetLength
-	if len(models) == 0 {
-		models = []string{openAICodexTicketDefaultModel, openAICodexTicketDefaultSolModel}
-	}
+	targetLen := cfg.TargetLength
 	if targetLen <= 0 {
 		targetLen = 292
 	}
-	out := make([]OpenAICodexTicketStatus, 0, len(models))
-	for _, model := range models {
-		model = normalizeOpenAICodexTicketModel(model)
-		if model == "" {
-			continue
-		}
-		status := OpenAICodexTicketStatus{Model: model}
-		ticket := parseOpenAICodexTicketFromAny(0, model, nil)
-		if account != nil && account.Extra != nil {
-			ticket = parseOpenAICodexTicketFromAny(account.ID, model, account.Extra[openAICodexTicketExtraKey(model)])
-		}
-		if ticket.valid(now, targetLen) {
-			status.Ready = true
-			status.Length = ticket.Length
-			remaining := int64(ticket.ExpiresAt.Sub(now) / time.Second)
-			if remaining < 0 {
-				remaining = 0
-			}
-			status.RemainingSeconds = remaining
-			exp := ticket.ExpiresAt
-			status.ExpiresAt = &exp
-		}
-		status.Blocked = cfg.FailClosed && !status.Ready
-		out = append(out, status)
+	// 只展示 GPT6 这一张账号级票
+	model := openAICodexTicketDefaultModel
+	status := OpenAICodexTicketStatus{Model: model}
+	var ticket *openAICodexTicket
+	if account != nil && account.Extra != nil {
+		ticket = parseOpenAICodexTicketFromAny(account.ID, model, account.Extra[openAICodexTicketExtraKey(model)])
 	}
-	return out
+	if ticket.valid(now, targetLen) {
+		status.Ready = true
+		status.Length = ticket.Length
+		remaining := int64(ticket.ExpiresAt.Sub(now) / time.Second)
+		if remaining < 0 {
+			remaining = 0
+		}
+		status.RemainingSeconds = remaining
+		exp := ticket.ExpiresAt
+		status.ExpiresAt = &exp
+	}
+	status.Blocked = cfg.FailClosed && !status.Ready
+	return []OpenAICodexTicketStatus{status}
 }
 
 func (s *OpenAIGatewayService) openAICodexTicketEnabled() bool {
@@ -540,6 +536,8 @@ func (s *OpenAIGatewayService) refreshOpenAICodexTickets(ctx context.Context) {
 	cfg := s.openAICodexTicketConfig()
 	now := time.Now()
 	refreshBefore := time.Duration(cfg.RefreshBeforeSeconds) * time.Second
+	// 鈊方案第2条:一个号只打 GPT6 一张票,不再逐模型重复打。
+	probeModels := []string{openAICodexTicketDefaultModel}
 	var wg sync.WaitGroup
 	probed := 0
 	for i := range accounts {
@@ -547,13 +545,15 @@ func (s *OpenAIGatewayService) refreshOpenAICodexTickets(ctx context.Context) {
 		if account.Status != StatusActive || !isOpenAICodexTicketAccount(&account) {
 			continue
 		}
-		for _, model := range cfg.Models {
+		for _, model := range probeModels {
 			model := normalizeOpenAICodexTicketModel(model)
 			if model == "" {
 				continue
 			}
-			// 已有一张有效且未临近过期的票 → 本周期不打，省得白刷。
-			if t := s.lookupOpenAICodexTicket(&account, model); t.valid(now, cfg.TargetLength) && !t.needsRefresh(now, refreshBefore) {
+			existing := s.lookupOpenAICodexTicket(&account, model)
+			// 已有干净的 332 票且未临近过期 → 本周期不打。
+			// 鈊方案第1条:拿到 356/其他(非 332)也持续重试,直到 332。
+			if existing.valid(now, cfg.TargetLength) && existing.Length == openAICodexTicketPreferredLen && !existing.needsRefresh(now, refreshBefore) {
 				continue
 			}
 			acc := account

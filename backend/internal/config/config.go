@@ -2429,7 +2429,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_codex_ticket.ttl_seconds", 3600)
 	viper.SetDefault("gateway.openai_codex_ticket.refresh_before_seconds", 600)
 	viper.SetDefault("gateway.openai_codex_ticket.harvest_proxy_url", "")
-	viper.SetDefault("gateway.openai_codex_ticket.harvest_probe_interval_seconds", 6)
+	viper.SetDefault("gateway.openai_codex_ticket.harvest_probe_interval_seconds", 10)
 	viper.SetDefault("gateway.openai_codex_ticket.harvest_attempt_timeout_seconds", 25)
 	// fail_closed 默认关(我们 fork 改):默认 true 时没打到 292 票就「该模型已暂停」
 	// 自锁,team 号 target_length 对不上必全挂(鈊实测 5.6/6 全灭)。默认关 = 没票

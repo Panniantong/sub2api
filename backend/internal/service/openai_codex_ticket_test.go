@@ -317,13 +317,13 @@ func TestOpenAICodexTicketStatuses_ReportsRemainingTTL(t *testing.T) {
 	}
 	now := time.Now()
 	got := OpenAICodexTicketStatuses(account, config.OpenAICodexTicketConfig{Enabled: true, FailClosed: true}, now)
-	require.Len(t, got, 2)
+	// 账号级展示:只一张 GPT6 共享票,不再逐模型罗列
+	require.Len(t, got, 1)
 	require.Equal(t, "gpt-6-astra", got[0].Model)
 	require.True(t, got[0].Ready)
+	require.Equal(t, 292, got[0].Length)
 	require.Greater(t, got[0].RemainingSeconds, int64(40*60))
 	require.LessOrEqual(t, got[0].RemainingSeconds, int64(50*60))
-	require.Equal(t, "gpt-5.6-sol", got[1].Model)
-	require.False(t, got[1].Ready)
 }
 
 func TestExtractOpenAICodexTicketModel(t *testing.T) {
@@ -362,7 +362,7 @@ type codexTicketConcurrentUpstream struct {
 }
 
 func (u *codexTicketConcurrentUpstream) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
-	if u.started.Add(1) == 2 {
+	if u.started.Add(1) == 1 {
 		close(u.ready)
 	}
 	select {
@@ -383,25 +383,26 @@ func TestRefreshOpenAICodexTickets_ConcurrentModelsPreserveAccountSnapshot(t *te
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{Enabled: true, HarvestProxyURL: "socks5h://proxy.example.com:1080"}, upstream)
 	svc.accountRepo = repo
 	svc.refreshOpenAICodexTickets(context.Background())
-	require.Equal(t, int64(2), upstream.started.Load())
+	// 鈊方案第2条:一个号只打 GPT6 一张票
+	require.Equal(t, int64(1), upstream.started.Load())
 	require.Equal(t, map[string]any{"existing": true}, account.Extra)
-	require.Len(t, repo.updates, 2)
-	for _, model := range []string{openAICodexTicketDefaultModel, openAICodexTicketDefaultSolModel} {
-		ticket := svc.lookupOpenAICodexTicket(account, model)
-		require.NotNil(t, ticket)
-		require.True(t, ticket.valid(time.Now(), 292))
-	}
-	// Valid tickets do not produce another probe on the next cycle.
+	require.Len(t, repo.updates, 1)
+	ticket := svc.lookupOpenAICodexTicket(account, openAICodexTicketDefaultModel)
+	require.NotNil(t, ticket)
+	require.True(t, ticket.valid(time.Now(), 292))
+	// 已有有效票:若长度非 332,下一周期仍会重试(鈊方案第1条);
+	// 若是 332 才跳过。这里上游返回的是默认假票(非 332),故会重试。
 	svc.refreshOpenAICodexTickets(context.Background())
 	require.Equal(t, int64(2), upstream.started.Load())
 }
 func TestOpenAICodexTicketStatuses_RespectRuntimeConfiguration(t *testing.T) {
 	account := ticketTestAccount(41)
 	require.Empty(t, OpenAICodexTicketStatuses(account, config.OpenAICodexTicketConfig{}, time.Now()))
+	// 账号级展示:无论配置多少模型,只展示 GPT6 共享票
 	cfg := config.OpenAICodexTicketConfig{Enabled: true, Models: []string{"custom-model"}}
 	status := OpenAICodexTicketStatuses(account, cfg, time.Now())
 	require.Len(t, status, 1)
-	require.Equal(t, "custom-model", status[0].Model)
+	require.Equal(t, "gpt-6-astra", status[0].Model)
 	require.False(t, status[0].Blocked)
 	cfg.FailClosed = true
 	require.True(t, OpenAICodexTicketStatuses(account, cfg, time.Now())[0].Blocked)
