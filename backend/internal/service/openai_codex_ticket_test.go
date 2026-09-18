@@ -162,8 +162,9 @@ func TestApplyOpenAICodexTicket_WrongLengthNotInjected(t *testing.T) {
 	svc.storeOpenAICodexTicket(context.Background(), account, &openAICodexTicket{
 		AccountID:  41,
 		Model:      "gpt-6-astra",
-		State:      fakeCodexTicketState(312),
-		Length:     312,
+		// 超出 512 上限仍算无效(team 356/332 已合法,见 codex_ticket_team_test.go)
+		State:      fakeCodexTicketState(600),
+		Length:     600,
 		CapturedAt: time.Now(),
 		ExpiresAt:  time.Now().Add(time.Hour),
 	})
@@ -196,22 +197,23 @@ func TestApplyOpenAICodexTicket_DisabledNoop(t *testing.T) {
 }
 
 func TestHarvestOpenAICodexTicket_StopsAt292AndUsesHarvestProxy(t *testing.T) {
-	state312 := fakeCodexTicketState(312)
-	state292 := fakeCodexTicketState(292)
-	header312 := http.Header{}
-	header312.Set(openAICodexTurnStateHeader, state312)
-	header292 := http.Header{}
-	header292.Set(openAICodexTurnStateHeader, state292)
+	// 区间语义:超长(600)不取,合格的 team 长度(356)取。
+	state600 := fakeCodexTicketState(600)
+	state356 := fakeCodexTicketState(356)
+	header600 := http.Header{}
+	header600.Set(openAICodexTurnStateHeader, state600)
+	header356 := http.Header{}
+	header356.Set(openAICodexTurnStateHeader, state356)
 	upstream := &httpUpstreamRecorder{
 		responses: []*http.Response{
 			{
 				StatusCode: http.StatusOK,
-				Header:     header312,
+				Header:     header600,
 				Body:       io.NopCloser(strings.NewReader("data: {}\n\n")),
 			},
 			{
 				StatusCode: http.StatusOK,
-				Header:     header292,
+				Header:     header356,
 				Body:       io.NopCloser(strings.NewReader("data: {}\n\n")),
 			},
 		},
@@ -231,11 +233,11 @@ func TestHarvestOpenAICodexTicket_StopsAt292AndUsesHarvestProxy(t *testing.T) {
 	svc.probeOnceOpenAICodexTicket(context.Background(), account, "gpt-6-astra")
 	ticket := svc.lookupOpenAICodexTicket(account, "gpt-6-astra")
 	require.NotNil(t, ticket)
-	require.Equal(t, state292, ticket.State)
+	require.Equal(t, state356, ticket.State)
 	h := http.Header{}
 	h.Set(openAICodexTurnStateHeader, "stale")
 	require.NoError(t, svc.applyOpenAICodexTicket(context.Background(), account, "gpt-6-astra", h))
-	require.Equal(t, state292, h.Get(openAICodexTurnStateHeader))
+	require.Equal(t, state356, h.Get(openAICodexTurnStateHeader))
 	require.Equal(t, "socks5h://user:pass@harvest.example:31", upstream.lastProxyURL)
 	require.Len(t, upstream.requests, 2)
 	require.Empty(t, upstream.requests[0].Header.Get(openAICodexTurnStateHeader))
@@ -401,7 +403,8 @@ func TestOpenAICodexTicketStatuses_RespectRuntimeConfiguration(t *testing.T) {
 	require.True(t, OpenAICodexTicketStatuses(account, cfg, time.Now())[0].Blocked)
 }
 func TestProbeOpenAICodexTicket_RejectsInvalidState(t *testing.T) {
-	for _, state := range []string{fakeCodexTicketState(312), strings.Repeat("X", 292), ""} {
+	// 坏前缀 / 空 / 超长(>512)拒绝;team 的 356/332 已合法,不再拒绝。
+	for _, state := range []string{fakeCodexTicketState(600), strings.Repeat("X", 292), ""} {
 		h := http.Header{}
 		h.Set(openAICodexTurnStateHeader, state)
 		upstream := &httpUpstreamRecorder{responses: []*http.Response{{StatusCode: 200, Header: h, Body: io.NopCloser(strings.NewReader(""))}}}
@@ -412,9 +415,12 @@ func TestProbeOpenAICodexTicket_RejectsInvalidState(t *testing.T) {
 	}
 }
 func TestOpenAICodexTicket_RequiresActualLengthAndExpiry(t *testing.T) {
-	ticket := &openAICodexTicket{State: fakeCodexTicketState(312), Length: 292, ExpiresAt: time.Now().Add(time.Hour)}
+	// 长度不在 [292,512] 区间(too short)仍无效
+	ticket := &openAICodexTicket{State: fakeCodexTicketState(200), Length: 200, ExpiresAt: time.Now().Add(time.Hour)}
 	require.False(t, ticket.valid(time.Now(), 292))
+	// 缺过期时间无效
 	ticket.State = fakeCodexTicketState(292)
+	ticket.Length = 292
 	ticket.ExpiresAt = time.Time{}
 	require.False(t, ticket.valid(time.Now(), 292))
 }
