@@ -78,7 +78,9 @@ func TestOpenAIImagesRejectedDriverDoesNotCoolImageModel(t *testing.T) {
 				require.Empty(t, repo.modelRateLimitCalls)
 				require.Zero(t, repo.tempCalls)
 			} else {
-				require.Len(t, repo.modelRateLimitCalls, 1, "actual image-model rejection still needs bounded failover")
+				// Fork 语义（自 dea4fd8b8 起）：Codex plan-gated 的图像模型拒绝走内存瞬时熔断，
+				// 不再立刻落持久化模型限流。
+				require.Empty(t, repo.modelRateLimitCalls, "plan-gated image-model rejection uses in-memory transient fuse")
 			}
 		})
 	}

@@ -280,7 +280,8 @@ func TestRateLimitService_RecoverAccountAfterSuccessfulTest_PreservesFutureOpenA
 		},
 	}
 	blocker := &runtimeBlockRecorder{}
-	svc := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	yield429Cfg := &config.Config{Gateway: config.GatewayConfig{OpenAIScheduler: config.GatewayOpenAISchedulerConfig{OAuthYield429Enabled: true}}}
+	svc := NewRateLimitService(repo, nil, yield429Cfg, nil, nil)
 	svc.SetAccountRuntimeBlocker(blocker)
 
 	result, err := svc.RecoverAccountAfterSuccessfulTest(context.Background(), 8)
