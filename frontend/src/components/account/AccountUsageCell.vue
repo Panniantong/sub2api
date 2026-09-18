@@ -125,6 +125,19 @@
           class="flex items-center gap-1 text-[10px] leading-4"
         >
           <span class="truncate font-medium text-gray-500 dark:text-gray-400" :title="ticket.model">{{ shortCodexTicketModel(ticket.model) }}</span>
+          <!-- 鈊:展示当前票据长度(332 干净 GPT6 / 356 次优 / 其他) -->
+          <span
+            v-if="ticket.ready && ticket.length"
+            :class="[
+              'inline-block rounded px-1 font-mono font-semibold',
+              ticket.length === 332
+                ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
+                : ticket.length === 356
+                  ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
+                  : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
+            ]"
+            :title="`turn-state 长度 ${ticket.length}`"
+          >{{ ticket.length }}</span>
           <span v-if="ticket.ready" class="text-emerald-600 dark:text-emerald-400">{{ formatCodexTicketRemaining(ticket.remaining_seconds) }}</span>
           <span v-else-if="ticket.blocked" class="text-amber-600 dark:text-amber-400">{{ t('admin.accounts.openai.codexTurnTicketPaused') }}</span>
           <span v-else class="text-gray-500">{{ t('admin.accounts.openai.codexTurnTicketMissing') }}</span>
