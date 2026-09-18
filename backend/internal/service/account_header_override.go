@@ -56,7 +56,10 @@ var headerOverrideBlockedNames = map[string]struct{}{
 	"sec-websocket-accept":     {},
 	"session_id":               {},
 	"conversation_id":          {},
-	"x-codex-turn-state":       {},
+	// x-codex-turn-state 移出禁止名单：羊毛GPT 方案需要给全池 OAuth 号强制注入
+	// 一个「健康号」的 turn-state 来规避降智标记。会话串扰风险由运维用监控承担
+	// (失效即换)，网关不再拦。注意:guardOpenAICodexTurnStateEcho 仍会剥离
+	// 属于其他号的回带值,account 级覆写在那之后才应用,不受其影响。
 	"x-codex-turn-metadata":    {},
 	"chatgpt-account-id":       {},
 	"x-claude-code-session-id": {},
@@ -78,7 +81,10 @@ func (a *Account) IsHeaderOverrideEligible() bool {
 		return false
 	}
 	switch a.Platform {
-	case PlatformAnthropic, PlatformOpenAI, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo:
+	case PlatformOpenAI:
+		// 羊毛GPT 方案：OpenAI OAuth 号也要能覆写 x-codex-turn-state 规避降智。
+		return a.Type == AccountTypeAPIKey || a.Type == AccountTypeOAuth
+	case PlatformAnthropic, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo:
 		return a.Type == AccountTypeAPIKey
 	case PlatformGrok:
 		return a.Type == AccountTypeAPIKey || a.Type == AccountTypeOAuth

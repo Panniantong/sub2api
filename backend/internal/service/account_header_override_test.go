@@ -32,7 +32,7 @@ func TestIsHeaderOverrideEligible(t *testing.T) {
 		{"deepseek apikey", PlatformDeepseek, AccountTypeAPIKey, true},
 		{"opencode go apikey", PlatformOpenCodeGo, AccountTypeAPIKey, true},
 		{"anthropic oauth", PlatformAnthropic, AccountTypeOAuth, false},
-		{"openai oauth", PlatformOpenAI, AccountTypeOAuth, false},
+		{"openai oauth", PlatformOpenAI, AccountTypeOAuth, true},
 		{"kimi oauth", PlatformKimi, AccountTypeOAuth, false},
 		{"zhipu oauth", PlatformZhipu, AccountTypeOAuth, false},
 		{"deepseek oauth", PlatformDeepseek, AccountTypeOAuth, false},
@@ -288,7 +288,7 @@ func TestNormalizeHeaderOverrideCredentials(t *testing.T) {
 		for _, name := range []string{
 			"Authorization", "x-api-key", "Host", "content-length", "Transfer-Encoding",
 			"connection", "accept-encoding", "Sec-WebSocket-Key", "session_id",
-			"conversation_id", "x-codex-turn-state", "chatgpt-account-id",
+			"conversation_id", "x-codex-turn-metadata", "chatgpt-account-id",
 			"Content-Type", "Cookie", "x-goog-api-key",
 			"X-Claude-Code-Session-Id", "x-client-request-id",
 		} {
