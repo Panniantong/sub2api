@@ -66,6 +66,8 @@ func TestApplyOpenAICodexTicket_ReplacesHeader(t *testing.T) {
 	require.Equal(t, 292, len(h.Get(openAICodexTurnStateHeader)))
 }
 
+// 共享语义(鈊方案):门票按账号共享,不再按模型隔离。a 有 GPT6 票 → a 的
+// 任意模型(含 5.5)都能用这张票;b 没票 → 门控模型 fail_closed 拦。
 func TestApplyOpenAICodexTicket_DoesNotReuseOtherModelOrAccount(t *testing.T) {
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{
 		Enabled:         true,
@@ -86,15 +88,17 @@ func TestApplyOpenAICodexTicket_DoesNotReuseOtherModelOrAccount(t *testing.T) {
 		ExpiresAt:  time.Now().Add(time.Hour),
 	})
 
+	// a 的 5.5 请求:共享 GPT6 票 → 注入,不再保留 client 值。
 	h := http.Header{}
 	h.Set(openAICodexTurnStateHeader, "keep-ungated")
 	err := svc.applyOpenAICodexTicket(context.Background(), a, "gpt-5.5", h)
 	require.NoError(t, err)
-	require.Equal(t, "keep-ungated", h.Get(openAICodexTurnStateHeader))
+	require.Equal(t, astra, h.Get(openAICodexTurnStateHeader), "shared GPT6 ticket must inject on any model")
 	require.False(t, svc.openAICodexTicketBlocksAccount(a, "gpt-5.5"))
 	require.True(t, svc.openAICodexTicketBlocksAccount(b, "gpt-6-astra"))
 	require.False(t, svc.openAICodexTicketBlocksAccount(a, "gpt-6-astra"))
 
+	// b 无票:门控模型 fail_closed 仍拦。
 	h = http.Header{}
 	err = svc.applyOpenAICodexTicket(context.Background(), b, "gpt-6-astra", h)
 	require.ErrorIs(t, err, ErrOpenAICodexTicketUnavailable)
@@ -428,6 +432,8 @@ func TestOpenAICodexTicket_RequiresActualLengthAndExpiry(t *testing.T) {
 // /responses/compact 的出站模型被 Forward 改写为 gateway.openai_compact_model
 // （默认非空），门票门控必须按该出站模型判定。否则对门控模型发 compact 请求时，
 // 所有无票账号都会被 fail_closed 误判为不可调度，而这些请求实际不需要票。
+// 共享语义下:门票按账号,不再按出站模型门控。无票账号的任意请求(含 compact)
+// 在 fail_closed 下都拦;有票账号任意请求都放行。模型门控已随共享化移除。
 func TestOpenAICodexTicketGate_CompactRequestUsesForwardOutboundModel(t *testing.T) {
 	svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{
 		OpenAICompactModel: "gpt-5.5",
@@ -445,12 +451,8 @@ func TestOpenAICodexTicketGate_CompactRequestUsesForwardOutboundModel(t *testing
 	require.Equal(t, "gpt-6-astra", svc.openAICodexTicketOutboundModel(account, "gpt-6-astra", false))
 	require.Equal(t, "gpt-5.5", svc.openAICodexTicketOutboundModel(account, "gpt-6-astra", true))
 
-	// 普通请求：出站仍是门控模型且无票 → fail_closed 必须拦号。
+	// 无票账号:普通与 compact 请求在 fail_closed 下都拦(共享语义,与模型无关)。
 	require.True(t, svc.isOpenAIAccountRequestRuntimeBlocked(account, "gpt-6-astra", false))
-
-	// compact 请求：出站已被改写成非门控的 gpt-5.5 → 不得拦号。
-	require.False(t, svc.isOpenAIAccountRequestRuntimeBlocked(account, "gpt-6-astra", true))
-
-	// 回归锚点：按客户端原始模型判定（旧实现的口径）在 compact 下必然误拦。
+	require.True(t, svc.isOpenAIAccountRequestRuntimeBlocked(account, "gpt-6-astra", true))
 	require.True(t, svc.openAICodexTicketBlocksAccount(account, canonicalOpenAIAccountSchedulingModel(account, "gpt-6-astra")))
 }

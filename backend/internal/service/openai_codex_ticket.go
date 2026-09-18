@@ -304,19 +304,49 @@ func (s *OpenAIGatewayService) storeOpenAICodexTicket(ctx context.Context, accou
 	}
 }
 
+// lookupOpenAICodexTicketForAccount 按账号共享取票:优先该号的 GPT6 票
+// (openAICodexTicketDefaultModel),没有再退回该号任意有效票。鈊方案:turn-state
+// 按号生成、与模型无关,一个号拿 GPT6 的票,所有模型共用即可,不必逐模型打票。
+func (s *OpenAIGatewayService) lookupOpenAICodexTicketForAccount(account *Account, targetLen int) *openAICodexTicket {
+	if s == nil || account == nil || account.ID <= 0 {
+		return nil
+	}
+	now := time.Now()
+	// 1) 优先 GPT6 票
+	if t := s.lookupOpenAICodexTicket(account, openAICodexTicketDefaultModel); t.valid(now, targetLen) {
+		return t
+	}
+	// 2) 退回该号内存里任意有效票
+	var best *openAICodexTicket
+	s.openaiCodexTickets.Range(func(_, v any) bool {
+		t, ok := v.(*openAICodexTicket)
+		if !ok || t.AccountID != account.ID || !t.valid(now, targetLen) {
+			return true
+		}
+		if best == nil || t.CapturedAt.After(best.CapturedAt) {
+			best = t
+		}
+		return true
+	})
+	return best
+}
+
 // applyOpenAICodexTicket 在出站请求上覆盖 x-codex-turn-state。
 // 请求路径只注入已捕获的有效门票，不现场打票；无票则返回
 // ErrOpenAICodexTicketUnavailable。打票由后台 harvester 完成。
+// 门票按账号共享(见 lookupOpenAICodexTicketForAccount),不再按模型分别要求。
 func (s *OpenAIGatewayService) applyOpenAICodexTicket(ctx context.Context, account *Account, model string, h http.Header) error {
 	if s == nil || h == nil || !isOpenAICodexTicketAccount(account) || !s.openAICodexTicketEnabledContext(ctx) {
 		return nil
 	}
 	model = normalizeOpenAICodexTicketModel(model)
-	if model == "" || !s.openAICodexTicketGatedModel(model) {
+	if model == "" {
 		return nil
 	}
+	// 鈊方案:不再按模型门控。功能开启 + 该号有票就注入(共享 GPT6 票),
+	// 所有模型共用同一 turn-state 头,避免 5.5/5.6 因没单独打票而被风控。
 	cfg := s.openAICodexTicketConfig()
-	ticket := s.lookupOpenAICodexTicket(account, model)
+	ticket := s.lookupOpenAICodexTicketForAccount(account, cfg.TargetLength)
 	if ticket.valid(time.Now(), cfg.TargetLength) {
 		h.Set(openAICodexTurnStateHeader, ticket.State)
 		return nil
@@ -368,10 +398,11 @@ func (s *OpenAIGatewayService) openAICodexTicketBlocksAccount(account *Account, 
 		return false
 	}
 	model := normalizeOpenAICodexTicketModel(outboundModel)
-	if !s.openAICodexTicketGatedModel(model) {
+	if model == "" {
 		return false
 	}
-	ticket := s.lookupOpenAICodexTicket(account, model)
+	// 按账号共享判定:该号有没有任意有效票,不再按模型区分。
+	ticket := s.lookupOpenAICodexTicketForAccount(account, cfg.TargetLength)
 	return !ticket.valid(time.Now(), cfg.TargetLength)
 }
 
