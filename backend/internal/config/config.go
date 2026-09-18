@@ -2431,7 +2431,10 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_codex_ticket.harvest_proxy_url", "")
 	viper.SetDefault("gateway.openai_codex_ticket.harvest_probe_interval_seconds", 6)
 	viper.SetDefault("gateway.openai_codex_ticket.harvest_attempt_timeout_seconds", 25)
-	viper.SetDefault("gateway.openai_codex_ticket.fail_closed", true)
+	// fail_closed 默认关(我们 fork 改):默认 true 时没打到 292 票就「该模型已暂停」
+	// 自锁,team 号 target_length 对不上必全挂(鈊实测 5.6/6 全灭)。默认关 = 没票
+	// 时放行裸打业务请求,只有成功打到票才注入。要强制 fail-closed 可显式配置。
+	viper.SetDefault("gateway.openai_codex_ticket.fail_closed", false)
 	viper.SetDefault("gateway.openai_codex_ticket.models", []string{"gpt-6-astra", "gpt-5.6-sol"})
 	viper.SetDefault("gateway.live.max_session_duration_seconds", 3600)
 	// OpenAI Responses WebSocket（默认开启；可通过 force_http 紧急回滚）

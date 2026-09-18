@@ -28,7 +28,25 @@ const (
 	openAICodexTicketStatePrefix     = "gAAAAA"
 	openAICodexTicketDefaultModel    = "gpt-6-astra"
 	openAICodexTicketDefaultSolModel = "gpt-5.6-sol"
+	// openAICodexTicketMaxStateLen: team 号的 turn-state blob 比 plus 的 292 长
+	// (payload 字段更多),Fernet token 上限给 512。长度判定从「精确等于」放宽为
+	// 「gAAAAA 前缀 + 长度在 [targetLen, max] 区间」,team 号不再被误杀。
+	openAICodexTicketMaxStateLen = 512
 )
+
+// openAICodexTicketStatePlausible 判定一个 blob 是否是合法可用的 turn-state。
+// 官方原版要求 len == 292(plus),team 号 blob 更长会被判 miss 导致全挂。
+// 放宽为:前缀正确 + 长度落在 [targetLen, 512]。targetLen 仍可配置(默认 292 作下限)。
+func openAICodexTicketStatePlausible(state string, targetLen int) bool {
+	state = strings.TrimSpace(state)
+	if !strings.HasPrefix(state, openAICodexTicketStatePrefix) {
+		return false
+	}
+	if targetLen <= 0 {
+		targetLen = 292
+	}
+	return len(state) >= targetLen && len(state) <= openAICodexTicketMaxStateLen
+}
 
 // ErrOpenAICodexTicketUnavailable 表示该号该模型没有可用的 292 门票，
 // 且 fail_closed 禁止裸打业务请求。
@@ -181,7 +199,7 @@ func (t *openAICodexTicket) valid(now time.Time, targetLen int) bool {
 		return false
 	}
 	state := strings.TrimSpace(t.State)
-	if len(state) != targetLen || t.Length != targetLen || !strings.HasPrefix(state, openAICodexTicketStatePrefix) {
+	if !openAICodexTicketStatePlausible(state, targetLen) {
 		return false
 	}
 	if t.ExpiresAt.IsZero() || !now.Before(t.ExpiresAt) {
@@ -553,7 +571,7 @@ func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, a
 				zap.String("reason", "error"), zap.Error(perr))
 			return nil, nil
 		}
-		if status != http.StatusOK || state == "" || len(state) != cfg.TargetLength || !strings.HasPrefix(state, openAICodexTicketStatePrefix) {
+		if status != http.StatusOK || !openAICodexTicketStatePlausible(state, cfg.TargetLength) {
 			logger.L().Info("openai_codex_ticket probe miss",
 				zap.Int64("account_id", account.ID), zap.String("model", model),
 				zap.Int("http", status), zap.Int("len", len(state)))
