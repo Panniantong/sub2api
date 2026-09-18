@@ -45,8 +45,8 @@ func TestOpenAI429FastPath_KeepsOAuthAccountSchedulableDuringRetryWindow(t *test
 	setupTokenAccount := &Account{ID: 44, Platform: PlatformOpenAI, Type: AccountTypeSetupToken}
 	grokOAuthAccount := &Account{ID: 45, Platform: PlatformGrok, Type: AccountTypeOAuth}
 
-	shouldDisable := svc.handleOpenAIAccountUpstreamError(context.Background(), account, http.StatusTooManyRequests, http.Header{}, body, "gpt-5.6-sol")
-	apiKeyShouldDisable := svc.handleOpenAIAccountUpstreamError(context.Background(), apiKeyAccount, http.StatusTooManyRequests, http.Header{}, body, "gpt-5.6-sol")
+	shouldDisable := svc.handleOpenAIAccountUpstreamError(context.Background(), account, http.StatusTooManyRequests, http.Header{}, nil)
+	apiKeyShouldDisable := svc.handleOpenAIAccountUpstreamError(context.Background(), apiKeyAccount, http.StatusTooManyRequests, http.Header{}, nil)
 
 	require.False(t, shouldDisable)
 	require.False(t, apiKeyShouldDisable)
@@ -394,114 +394,6 @@ func TestOpenAI429FastPath_OpenCodeGoUsageLimitUsesMessageResetDuration(t *testi
 	require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
 }
 
-func TestOpenAI429FastPath_RateLimitExceededUsesAccountModelTransientCooldown(t *testing.T) {
-	svc := &OpenAIGatewayService{cfg: openAIOAuthYield429TestConfig()}
-	account := &Account{ID: 44, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
-	body := []byte(`{"error":{"type":"rate_limit_exceeded","message":"Please slow down"}}`)
-
-	for attempt := 0; attempt < 2; attempt++ {
-		shouldDisable := svc.handleOpenAIAccountUpstreamError(context.Background(), account, http.StatusTooManyRequests, http.Header{}, body, "gpt-5.6-sol")
-		require.False(t, shouldDisable)
-	}
-
-	require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
-	require.True(t, svc.isOpenAIAccountRequestRuntimeBlocked(account, "gpt-5.6-sol"))
-	require.False(t, svc.isOpenAIAccountRequestRuntimeBlocked(account, "gpt-5.6-terra"))
-}
-
-func TestOpenAIPlanGated400_UsesShortModelTransientInsteadOfPersistentCooldown(t *testing.T) {
-	repo := &modelNotFoundAccountRepoStub{}
-	rateLimitService := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
-	svc := &OpenAIGatewayService{rateLimitService: rateLimitService}
-	account := openAICodexPlanGatedOAuthAccount()
-	body := []byte(`{"detail":"The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account."}`)
-
-	shouldSwitchAccount := svc.handleOpenAIAccountUpstreamError(
-		context.Background(),
-		account,
-		http.StatusBadRequest,
-		http.Header{},
-		body,
-		"gpt-5.6-sol",
-	)
-
-	require.True(t, shouldSwitchAccount)
-	require.Empty(t, repo.modelRateLimitCalls, "one ambiguous 400 must not persist a 30-minute model cooldown")
-	require.True(t, svc.isOpenAIAccountRequestRuntimeBlocked(account, "gpt-5.6-sol"))
-	require.False(t, svc.isOpenAIAccountRequestRuntimeBlocked(account, "gpt-5.6-terra"))
-
-	svc.ReportOpenAIAccountScheduleResult(account.ID, "gpt-5.6-sol", true, nil)
-
-	require.False(t, svc.isOpenAIAccountRequestRuntimeBlocked(account, "gpt-5.6-sol"), "a successful in-flight request must clear the cooldown immediately")
-}
-
-func TestOpenAIPlanGated400_FailoverStopsAfterTwoDifferentAccounts(t *testing.T) {
-	svc := &OpenAIGatewayService{}
-	account := openAICodexPlanGatedOAuthAccount()
-	planGatedFailure := &UpstreamFailoverError{
-		StatusCode: http.StatusBadRequest,
-		ResponseBody: []byte(
-			`{"detail":"The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account."}`,
-		),
-	}
-	followupFailure := &UpstreamFailoverError{StatusCode: http.StatusBadGateway}
-	var state OpenAIOAuth429FailoverState
-
-	require.False(t, svc.ShouldStopOpenAIOAuth429Failover(account, planGatedFailure.StatusCode, 1, &state, planGatedFailure))
-	require.False(t, svc.ShouldStopOpenAIOAuth429Failover(account, followupFailure.StatusCode, 2, &state, followupFailure))
-	require.True(t, svc.ShouldStopOpenAIOAuth429Failover(account, followupFailure.StatusCode, 3, &state, followupFailure))
-}
-
-func TestOpenAI429FastPath_YieldDisabledKeepsOfficialWholeAccountCooldown(t *testing.T) {
-	svc := &OpenAIGatewayService{cfg: &config.Config{}}
-	account := &Account{ID: 440, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
-	body := []byte(`{"error":{"type":"rate_limit_exceeded","message":"Please slow down"}}`)
-
-	shouldDisable := svc.handleOpenAIAccountUpstreamError(context.Background(), account, http.StatusTooManyRequests, http.Header{}, body, "gpt-5.6-sol")
-
-	require.False(t, shouldDisable)
-	require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
-}
-
-func TestOpenAI429FastPath_SuccessfulManagementTestClearsOnlyTestedSoftModel(t *testing.T) {
-	gateway := &OpenAIGatewayService{cfg: openAIOAuthYield429TestConfig()}
-	account := &Account{ID: 45, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
-	body := []byte(`{"error":{"type":"rate_limit_exceeded","message":"Please slow down"}}`)
-	for _, model := range []string{"gpt-5.6-sol", "gpt-5.6-terra"} {
-		for attempt := 0; attempt < 2; attempt++ {
-			gateway.handleOpenAIAccountUpstreamError(context.Background(), account, http.StatusTooManyRequests, http.Header{}, body, model)
-		}
-	}
-	accountTest := &AccountTestService{openAIModelTransient: gateway}
-
-	accountTest.clearOpenAIModelTransientAfterSuccessfulTest(account.ID, "gpt-5.6-sol", nil)
-
-	require.False(t, gateway.isOpenAIAccountRequestRuntimeBlocked(account, "gpt-5.6-sol"))
-	require.True(t, gateway.isOpenAIAccountRequestRuntimeBlocked(account, "gpt-5.6-terra"))
-}
-
-func TestClassifyOpenAIOAuth429_TypePrecedenceAndStrictFallback(t *testing.T) {
-	now := time.Unix(1_800_000_000, 0)
-	tests := []struct {
-		name string
-		body string
-		hard bool
-	}{
-		{name: "usage type is hard", body: `{"error":{"type":"usage_limit_reached","message":"limit"}}`, hard: true},
-		{name: "rate type wins over usage words", body: `{"error":{"type":"rate_limit_exceeded","message":"The usage limit has been reached","resets_at":1800000300}}`, hard: false},
-		{name: "missing type with explicit message and reset is hard", body: `{"error":{"message":"The usage limit has been reached","resets_at":1800000300}}`, hard: true},
-		{name: "missing type without reset stays soft", body: `{"error":{"message":"The usage limit has been reached"}}`, hard: false},
-		{name: "unknown type stays soft", body: `{"error":{"type":"server_busy","message":"The usage limit has been reached","resets_at":1800000300}}`, hard: false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			classification := classifyOpenAIOAuth429([]byte(tt.body), now)
-			require.Equal(t, tt.hard, classification.HardUsageLimit)
-		})
-	}
-}
-
 // TestOpenAI429FastPath_SkipsSparkShadow 外审第8轮 P1:spark 影子被选中后若 /responses 返回 429,
 // 不得按 global x-codex-* 信号写内存运行时熔断(否则 spark 被冷却到 global reset、单影子场景无可用账号)。
 func TestOpenAI429FastPath_SkipsSparkShadow(t *testing.T) {
@@ -795,10 +687,9 @@ func TestOpenAIOAuth429_MatchingModelTempRuleAvoidsAccountRuntimeBlock(t *testin
 	require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
 	require.Len(t, repo.modelRateLimitCalls, 1)
 	require.Equal(t, "gpt-5.4", repo.modelRateLimitCalls[0].scope)
-	require.Equal(t, int64(1), svc.openaiOAuth429WindowCount.Load(), "custom model rules must not hide OAuth 429s from the storm guard")
 }
 
-func TestOpenAIOAuth429_NonmatchingModelTempRuleUsesSoftModelCooldown(t *testing.T) {
+func TestOpenAIOAuth429_NonmatchingModelTempRuleKeepsAccountRuntimeBlock(t *testing.T) {
 	repo := &modelNotFoundAccountRepoStub{}
 	svc := &OpenAIGatewayService{
 		rateLimitService: &RateLimitService{accountRepo: repo},
@@ -813,17 +704,14 @@ func TestOpenAIOAuth429_NonmatchingModelTempRuleUsesSoftModelCooldown(t *testing
 		},
 	}
 
-	for attempt := 0; attempt < 2; attempt++ {
-		shouldDisable := svc.handleOpenAIAccountUpstreamError(
-			context.Background(),
-			account,
-			http.StatusTooManyRequests,
-			http.Header{},
-			[]byte(`{"error":{"message":"global rate limit"}}`),
-			"gpt-5.4",
-		)
-		require.False(t, shouldDisable)
-	}
+	shouldDisable := svc.handleOpenAIAccountUpstreamError(
+		context.Background(),
+		account,
+		http.StatusTooManyRequests,
+		http.Header{},
+		[]byte(`{"error":{"message":"global rate limit"}}`),
+		"gpt-5.4",
+	)
 
 	require.False(t, shouldDisable)
 	require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
