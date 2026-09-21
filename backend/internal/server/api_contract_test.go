@@ -1932,6 +1932,9 @@ func (s *stubAccountRepo) ListOAuthRefreshCandidates(ctx context.Context) ([]ser
 	return nil, errors.New("not implemented")
 }
 
+func (s *stubAccountRepo) ListAllByPlatform(ctx context.Context, platform string) ([]service.Account, error) {
+	return s.ListByPlatform(ctx, platform)
+}
 func (s *stubAccountRepo) ListByPlatform(ctx context.Context, platform string) ([]service.Account, error) {
 	return nil, errors.New("not implemented")
 }

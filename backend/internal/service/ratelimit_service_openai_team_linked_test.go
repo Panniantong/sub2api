@@ -25,6 +25,9 @@ type teamLinkedAccountRepoStub struct {
 }
 
 // ListByPlatform 镜像真实仓库语义：仅返回该平台的 active 账户。
+func (r *teamLinkedAccountRepoStub) ListAllByPlatform(ctx context.Context, platform string) ([]Account, error) {
+	return r.ListByPlatform(ctx, platform)
+}
 func (r *teamLinkedAccountRepoStub) ListByPlatform(ctx context.Context, platform string) ([]Account, error) {
 	r.listCalls++
 	if r.listErr != nil {

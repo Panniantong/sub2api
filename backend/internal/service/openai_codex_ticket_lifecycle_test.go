@@ -75,6 +75,9 @@ type codexTicketLifecycleRepo struct {
 	persist func(context.Context) error
 }
 
+func (r *codexTicketLifecycleRepo) ListAllByPlatform(ctx context.Context, platform string) ([]Account, error) {
+	return r.ListByPlatform(ctx, platform)
+}
 func (r *codexTicketLifecycleRepo) ListByPlatform(ctx context.Context, _ string) ([]Account, error) {
 	if r.list != nil {
 		return r.list(ctx)

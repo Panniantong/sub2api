@@ -99,6 +99,9 @@ func (m *sessionWindowMockRepo) ListActive(context.Context) ([]Account, error) {
 func (m *sessionWindowMockRepo) ListOAuthRefreshCandidates(context.Context) ([]Account, error) {
 	panic("unexpected")
 }
+func (m *sessionWindowMockRepo) ListAllByPlatform(ctx context.Context, platform string) ([]Account, error) {
+	return m.ListByPlatform(ctx, platform)
+}
 func (m *sessionWindowMockRepo) ListByPlatform(context.Context, string) ([]Account, error) {
 	panic("unexpected")
 }

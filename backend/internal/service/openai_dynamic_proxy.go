@@ -416,7 +416,7 @@ func (s *OpenAIGatewayService) dynamicProxyKeepaliveTick(ctx context.Context) {
 	if s == nil || s.accountRepo == nil || !s.dynamicProxyEnabled(ctx) {
 		return
 	}
-	accounts, err := s.accountRepo.ListByPlatform(ctx, PlatformOpenAI)
+	accounts, err := s.accountRepo.ListAllByPlatform(ctx, PlatformOpenAI)
 	if err != nil {
 		return
 	}
@@ -502,7 +502,7 @@ func (s *OpenAIGatewayService) DynamicProxyStatus(ctx context.Context) (*Dynamic
 	if s.accountRepo == nil {
 		return view, nil
 	}
-	accounts, err := s.accountRepo.ListByPlatform(ctx, PlatformOpenAI)
+	accounts, err := s.accountRepo.ListAllByPlatform(ctx, PlatformOpenAI)
 	if err != nil {
 		return view, err
 	}

@@ -164,8 +164,8 @@ func TestApplyOpenAICodexTicket_WrongLengthNotInjected(t *testing.T) {
 	}, nil)
 	account := ticketTestAccount(41)
 	svc.storeOpenAICodexTicket(context.Background(), account, &openAICodexTicket{
-		AccountID:  41,
-		Model:      "gpt-6-astra",
+		AccountID: 41,
+		Model:     "gpt-6-astra",
 		// 超出 512 上限仍算无效(team 356/332 已合法,见 codex_ticket_team_test.go)
 		State:      fakeCodexTicketState(600),
 		Length:     600,
@@ -340,6 +340,9 @@ type codexTicketRefreshRepo struct {
 	updates  map[string]any
 }
 
+func (r *codexTicketRefreshRepo) ListAllByPlatform(ctx context.Context, platform string) ([]Account, error) {
+	return r.ListByPlatform(ctx, platform)
+}
 func (r *codexTicketRefreshRepo) ListByPlatform(context.Context, string) ([]Account, error) {
 	return r.accounts, nil
 }

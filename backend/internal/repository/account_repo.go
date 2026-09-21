@@ -1339,6 +1339,22 @@ func (r *accountRepository) ListByPlatform(ctx context.Context, platform string)
 	return r.accountsToService(ctx, accounts)
 }
 
+// ListAllByPlatform 返回该平台全部未删账号(不过滤 status/schedulable)。
+// 动态代理保活与展示需要覆盖 error 账号的活绑定:限流恢复后同出口 IP 重试是核心承诺。
+func (r *accountRepository) ListAllByPlatform(ctx context.Context, platform string) ([]service.Account, error) {
+	accounts, err := r.client.Account.Query().
+		Where(
+			dbaccount.PlatformEQ(platform),
+			dbaccount.DeletedAtIsNil(),
+		).
+		Order(dbent.Asc(dbaccount.FieldPriority)).
+		All(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return r.accountsToService(ctx, accounts)
+}
+
 func (r *accountRepository) UpdateLastUsed(ctx context.Context, id int64) error {
 	now := time.Now()
 	_, err := r.client.Account.Update().

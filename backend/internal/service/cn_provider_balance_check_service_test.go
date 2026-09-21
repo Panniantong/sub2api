@@ -34,6 +34,9 @@ type fakeCNCheckRepo struct {
 	byPlatform map[string][]Account
 }
 
+func (r *fakeCNCheckRepo) ListAllByPlatform(ctx context.Context, platform string) ([]Account, error) {
+	return r.ListByPlatform(ctx, platform)
+}
 func (r *fakeCNCheckRepo) ListByPlatform(ctx context.Context, platform string) ([]Account, error) {
 	return r.byPlatform[platform], nil
 }
