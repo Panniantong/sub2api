@@ -423,9 +423,6 @@ func (s *OpenAIGatewayService) dynamicProxyKeepaliveTick(ctx context.Context) {
 	now := time.Now()
 	for i := range accounts {
 		account := accounts[i]
-		if account.Status != StatusActive {
-			continue
-		}
 		b := ParseDynamicProxyBinding(account.Extra, now)
 		if b == nil {
 			continue
