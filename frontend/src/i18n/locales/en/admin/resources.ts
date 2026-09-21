@@ -64,7 +64,7 @@ export default {
         unbind: 'Unbind',
         rebindDone: 'Rebound',
         unbindDone: 'Unbound',
-        noBindings: 'No bindings yet (created automatically after a 332 harvest hit)',
+        noBindings: 'No bindings yet (once enabled, harvesting binds accounts automatically and keeps ports alive)',
         loadFailed: 'Load failed'
       },
       title: 'Proxy Management',

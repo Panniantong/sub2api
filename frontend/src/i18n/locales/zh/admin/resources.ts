@@ -64,7 +64,7 @@ export default {
         unbind: '解绑',
         rebindDone: '重绑成功',
         unbindDone: '解绑成功',
-        noBindings: '暂无绑定（打票命中 332 后自动创建）',
+        noBindings: '暂无绑定（开启后账号打票自动创建绑定并保活）',
         loadFailed: '加载失败'
       },
       title: 'IP管理',
