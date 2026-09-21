@@ -332,6 +332,20 @@ func (s *SettingService) InvalidateOpenAICodexTicketEnabledCache() {
 	s.openAICodexTicketEnabledCache.Store(&cachedOpenAICodexTicketEnabled{expiresAt: 0})
 }
 
+// GetSettingValue 通用设置读取:键缺失返回 ("", ErrSettingNotFound),供
+// 不需要独立缓存的低频设置(如动态代理打票配置)直接读取。
+func (s *SettingService) GetSettingValue(ctx context.Context, key string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if s == nil || s.settingRepo == nil {
+		return "", ErrSettingNotFound
+	}
+	dbCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	return s.settingRepo.GetValue(dbCtx, key)
+}
+
 type cachedOpenAICodexTicketHarvestProxy struct {
 	value     string
 	expiresAt int64

@@ -8,6 +8,7 @@ import usersAPI from './users'
 import groupsAPI from './groups'
 import accountsAPI from './accounts'
 import proxiesAPI from './proxies'
+import dynamicProxyAPI from './dynamicProxy'
 import redeemAPI from './redeem'
 import promoAPI from './promo'
 import announcementsAPI from './announcements'
@@ -46,6 +47,7 @@ export const adminAPI = {
   groups: groupsAPI,
   accounts: accountsAPI,
   proxies: proxiesAPI,
+  dynamicProxy: dynamicProxyAPI,
   redeem: redeemAPI,
   promo: promoAPI,
   announcements: announcementsAPI,
@@ -82,6 +84,7 @@ export {
   groupsAPI,
   accountsAPI,
   proxiesAPI,
+  dynamicProxyAPI,
   redeemAPI,
   promoAPI,
   announcementsAPI,

@@ -582,7 +582,35 @@ func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, a
 		return
 	}
 	cfg := s.openAICodexTicketConfig()
-	proxyURL := s.openAICodexTicketHarvestProxyURLContext(ctx)
+	// 动态代理打票:开 → 绑定端口优先(重打票保持同出口 IP),无绑定先提取+绑定;
+	// 关 → 静态采集代理(现状行为)。
+	dynCfg, dynOn := s.dynamicProxyConfig(ctx)
+	var proxyURL string
+	usingDynBind := false
+	if dynOn {
+		if b := ParseDynamicProxyBinding(account.Extra, time.Now()); b != nil {
+			proxyURL = b.URL()
+			usingDynBind = true
+		} else {
+			ep, aerr := s.acquireDynamicProxy(ctx, dynCfg)
+			if aerr != nil {
+				logger.L().Info("openai_codex_ticket probe miss",
+					zap.Int64("account_id", account.ID), zap.String("model", model),
+					zap.String("reason", "dyn_acquire"), zap.Error(aerr))
+				return
+			}
+			if berr := s.bindDynamicProxy(ctx, account, ep, dynCfg); berr != nil {
+				logger.L().Info("openai_codex_ticket probe miss",
+					zap.Int64("account_id", account.ID), zap.String("model", model),
+					zap.String("reason", "dyn_bind"), zap.Error(berr))
+				return
+			}
+			proxyURL = ParseDynamicProxyBinding(account.Extra, time.Now()).URL()
+			usingDynBind = true
+		}
+	} else {
+		proxyURL = s.openAICodexTicketHarvestProxyURLContext(ctx)
+	}
 	if proxyURL == "" || s.httpUpstream == nil || ctx.Err() != nil {
 		return
 	}
@@ -597,6 +625,11 @@ func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, a
 		}
 		state, status, perr := s.fireOpenAICodexTicketProbe(ctx, account, token, model, proxyURL, time.Duration(cfg.HarvestAttemptTimeoutSeconds)*time.Second)
 		if perr != nil {
+			// 传输层失败(端口死/握手失败):动态绑定下清绑定,下周期换新端口重绑;
+			// 业务型 miss(356/403 等)保留绑定——同出口 IP 连续重试正是诉求。
+			if usingDynBind {
+				_ = s.unbindDynamicProxy(ctx, account.ID)
+			}
 			logger.L().Info("openai_codex_ticket probe miss",
 				zap.Int64("account_id", account.ID), zap.String("model", model),
 				zap.String("reason", "error"), zap.Error(perr))

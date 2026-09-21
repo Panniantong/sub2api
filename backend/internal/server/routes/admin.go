@@ -67,6 +67,9 @@ func RegisterAdminRoutes(
 		// 代理管理
 		registerProxyRoutes(admin, h, stepUpAuth)
 
+		// 动态代理打票管理
+		registerDynamicProxyRoutes(admin, h)
+
 		// 卡密管理
 		registerRedeemCodeRoutes(admin, h)
 
@@ -525,6 +528,17 @@ func registerProxyRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAuth
 		proxies.GET("/:id/accounts", h.Admin.Proxy.GetProxyAccounts)
 		proxies.POST("/batch-delete", h.Admin.Proxy.BatchDelete)
 		proxies.POST("/batch", h.Admin.Proxy.BatchCreate)
+	}
+}
+
+// registerDynamicProxyRoutes 动态代理打票(uDeal)管理端点。
+func registerDynamicProxyRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	dyn := admin.Group("/dynamic-proxy")
+	{
+		dyn.GET("/status", h.Admin.DynamicProxy.Status)
+		dyn.PUT("/config", h.Admin.DynamicProxy.UpdateConfig)
+		dyn.POST("/accounts/:id/rebind", h.Admin.DynamicProxy.Rebind)
+		dyn.DELETE("/accounts/:id/binding", h.Admin.DynamicProxy.Unbind)
 	}
 }
 

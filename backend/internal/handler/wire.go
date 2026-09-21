@@ -50,10 +50,12 @@ func ProvideAdminHandlers(
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
 	ollamaCloudUsage *service.OllamaCloudUsageService,
 	settingService *service.SettingService,
+	openAIGatewayService *service.OpenAIGatewayService,
 ) *AdminHandlers {
 	accountHandler.SetUpstreamBillingProbeService(upstreamBillingProbe)
 	accountHandler.SetOllamaCloudUsageService(ollamaCloudUsage)
 	accountHandler.SetCodexTicketSettings(settingService)
+	dynamicProxyHandler := admin.NewDynamicProxyHandler(openAIGatewayService)
 	return &AdminHandlers{
 		Dashboard:              dashboardHandler,
 		User:                   userHandler,
@@ -69,6 +71,7 @@ func ProvideAdminHandlers(
 		GrokOAuth:              grokOAuthHandler,
 		CNProvider:             cnProviderHandler,
 		Proxy:                  proxyHandler,
+		DynamicProxy:           dynamicProxyHandler,
 		Redeem:                 redeemHandler,
 		Promo:                  promoHandler,
 		Setting:                settingHandler,

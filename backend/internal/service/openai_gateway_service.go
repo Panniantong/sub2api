@@ -491,6 +491,8 @@ type OpenAIGatewayService struct {
 	openaiPlanGatedTransient       *openAIAccountModelTransientState
 	openaiProxyStreamCircuit       *openAIProxyStreamCircuit
 	openaiProxyStreamFailOpenLogAt atomic.Int64
+	dynProxyKeepaliveOnce          sync.Once
+	dynProxyKeepaliveCancel        context.CancelFunc
 
 	openaiWSFallbackUntil               sync.Map // key: int64(accountID), value: time.Time
 	openaiAccountRuntimeBlockUntil      sync.Map // key: int64(accountID), value: time.Time
@@ -602,6 +604,7 @@ func NewOpenAIGatewayService(
 	}
 	svc.logOpenAIWSModeBootstrap()
 	svc.StartOpenAICodexTicketHarvester()
+	svc.StartDynamicProxyKeepalive()
 	return svc
 }
 

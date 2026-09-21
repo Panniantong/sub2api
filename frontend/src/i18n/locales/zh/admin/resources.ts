@@ -42,6 +42,31 @@ export default {
 
     // Proxies Management
     proxies: {
+      dynamic: {
+        title: '动态代理打票',
+        description: 'uDeal 动态代理：打票命中后把端口绑到账号，业务出口 IP 与打票一致；端口空闲约 60 秒即失效，系统自动保活续命',
+        enabled: '启用',
+        iplistUrl: 'iplist 提取接口',
+        user: 'socks5h 用户名',
+        pass: 'socks5h 密码（留空=不改）',
+        save: '保存配置',
+        saved: '配置已保存',
+        bindingsTitle: '当前绑定',
+        account: '账号',
+        endpoint: '端口',
+        originIp: '出口 IP',
+        boundAt: '绑定时间',
+        expiresAt: '到期',
+        lastKeepalive: '最近保活',
+        alive: '存活',
+        stale: '疑似失效',
+        rebind: '重绑',
+        unbind: '解绑',
+        rebindDone: '重绑成功',
+        unbindDone: '解绑成功',
+        noBindings: '暂无绑定（打票命中 332 后自动创建）',
+        loadFailed: '加载失败'
+      },
       title: 'IP管理',
       description: '管理代理服务器配置',
       createProxy: '添加代理',

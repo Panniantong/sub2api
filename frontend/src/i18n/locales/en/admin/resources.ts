@@ -42,6 +42,31 @@ export default {
 
     // Proxies
     proxies: {
+      dynamic: {
+        title: 'Dynamic proxy harvesting',
+        description: 'uDeal dynamic proxies: after a harvest hit the port is bound to the account so business egress IP matches harvesting; idle ports die in ~60s and the system keeps them alive',
+        enabled: 'Enabled',
+        iplistUrl: 'iplist extract URL',
+        user: 'socks5h username',
+        pass: 'socks5h password (blank = keep)',
+        save: 'Save config',
+        saved: 'Config saved',
+        bindingsTitle: 'Current bindings',
+        account: 'Account',
+        endpoint: 'Port',
+        originIp: 'Egress IP',
+        boundAt: 'Bound at',
+        expiresAt: 'Expires',
+        lastKeepalive: 'Last keepalive',
+        alive: 'Alive',
+        stale: 'Possibly dead',
+        rebind: 'Rebind',
+        unbind: 'Unbind',
+        rebindDone: 'Rebound',
+        unbindDone: 'Unbound',
+        noBindings: 'No bindings yet (created automatically after a 332 harvest hit)',
+        loadFailed: 'Load failed'
+      },
       title: 'Proxy Management',
       description: 'Manage proxy servers for accounts',
       createProxy: 'Create Proxy',

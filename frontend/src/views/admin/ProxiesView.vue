@@ -79,6 +79,10 @@
             <button @click="showExportDataDialog = true" class="btn btn-secondary">
               {{ selectedCount > 0 ? t('admin.proxies.dataExportSelected') : t('admin.proxies.dataExport') }}
             </button>
+            <button @click="openDynamicProxyPanel" class="btn btn-secondary">
+              <Icon name="shield" size="md" class="mr-2" />
+              {{ t('admin.proxies.dynamic.title') }}
+            </button>
             <button @click="showCreateModal = true" class="btn btn-primary">
               <Icon name="plus" size="md" class="mr-2" />
               {{ t('admin.proxies.createProxy') }}
@@ -960,6 +964,116 @@
         </div>
       </template>
     </BaseDialog>
+
+    <!-- Dynamic Proxy (uDeal harvest) Panel -->
+    <BaseDialog
+      :show="showDynamicProxyPanel"
+      :title="t('admin.proxies.dynamic.title')"
+      width="normal"
+      @close="showDynamicProxyPanel = false"
+    >
+      <div v-if="dynLoading" class="flex items-center justify-center py-8 text-sm text-gray-500">
+        <Icon name="refresh" size="md" class="mr-2 animate-spin" />
+        {{ t('common.loading') }}
+      </div>
+      <div v-else-if="dynStatus">
+        <p class="mb-3 text-xs text-gray-500 dark:text-gray-400">
+          {{ t('admin.proxies.dynamic.description') }}
+        </p>
+        <div class="mb-4 space-y-2">
+          <label class="flex items-center gap-2 text-sm">
+            <input v-model="dynForm.enabled" type="checkbox" class="checkbox" />
+            {{ t('admin.proxies.dynamic.enabled') }}
+          </label>
+          <input
+            v-model="dynForm.iplist_url"
+            type="text"
+            :placeholder="t('admin.proxies.dynamic.iplistUrl')"
+            class="input w-full"
+          />
+          <div class="flex gap-2">
+            <input
+              v-model="dynForm.user"
+              type="text"
+              :placeholder="t('admin.proxies.dynamic.user')"
+              class="input w-1/2"
+            />
+            <input
+              v-model="dynForm.pass"
+              type="password"
+              :placeholder="t('admin.proxies.dynamic.pass')"
+              class="input w-1/2"
+            />
+          </div>
+          <div class="flex justify-end">
+            <button @click="saveDynamicProxyConfig" :disabled="dynSaving" class="btn btn-primary">
+              {{ t('admin.proxies.dynamic.save') }}
+            </button>
+          </div>
+        </div>
+
+        <div class="mb-2 flex items-center justify-between">
+          <h4 class="text-sm font-semibold text-gray-700 dark:text-gray-200">
+            {{ t('admin.proxies.dynamic.bindingsTitle') }}
+          </h4>
+          <button @click="loadDynamicProxyStatus" class="btn btn-sm btn-secondary">
+            <Icon name="refresh" size="sm" class="mr-1" />
+            {{ t('common.refresh') }}
+          </button>
+        </div>
+        <div v-if="!dynStatus.bindings || dynStatus.bindings.length === 0" class="py-4 text-center text-sm text-gray-500">
+          {{ t('admin.proxies.dynamic.noBindings') }}
+        </div>
+        <div v-else class="max-h-72 overflow-auto">
+          <table class="min-w-full divide-y divide-gray-200 text-sm dark:divide-dark-700">
+            <thead class="bg-gray-50 text-xs uppercase text-gray-500 dark:bg-dark-800 dark:text-dark-400">
+              <tr>
+                <th class="px-3 py-2 text-left">{{ t('admin.proxies.dynamic.account') }}</th>
+                <th class="px-3 py-2 text-left">{{ t('admin.proxies.dynamic.endpoint') }}</th>
+                <th class="px-3 py-2 text-left">{{ t('admin.proxies.dynamic.originIp') }}</th>
+                <th class="px-3 py-2 text-left">{{ t('admin.proxies.dynamic.expiresAt') }}</th>
+                <th class="px-3 py-2 text-left">{{ t('admin.proxies.dynamic.lastKeepalive') }}</th>
+                <th class="px-3 py-2 text-left">{{ t('admin.proxies.columns.actions') }}</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200 bg-white dark:divide-dark-700 dark:bg-dark-900">
+              <tr v-for="b in dynStatus.bindings" :key="b.account_id">
+                <td class="px-3 py-2 font-medium text-gray-900 dark:text-white">{{ b.account_name }}</td>
+                <td class="px-3 py-2 text-gray-600 dark:text-gray-300">{{ b.ip }}:{{ b.port }}</td>
+                <td class="px-3 py-2 text-gray-600 dark:text-gray-300">{{ b.origin_ip || '-' }}</td>
+                <td class="px-3 py-2 text-gray-600 dark:text-gray-300">{{ formatDateTime(b.expires_at) }}</td>
+                <td class="px-3 py-2">
+                  <span
+                    :class="dynAlive(b) ? 'text-green-600 dark:text-green-400' : 'text-red-500'"
+                    class="text-xs"
+                  >
+                    {{ dynAlive(b) ? t('admin.proxies.dynamic.alive') : t('admin.proxies.dynamic.stale') }}
+                    {{ formatDateTime(b.last_keepalive) }}
+                  </span>
+                </td>
+                <td class="px-3 py-2">
+                  <div class="flex gap-1">
+                    <button @click="rebindDynamicProxy(b.account_id)" class="btn btn-sm btn-secondary">
+                      {{ t('admin.proxies.dynamic.rebind') }}
+                    </button>
+                    <button @click="unbindDynamicProxy(b.account_id)" class="btn btn-sm btn-danger">
+                      {{ t('admin.proxies.dynamic.unbind') }}
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <template #footer>
+        <div class="flex justify-end">
+          <button @click="showDynamicProxyPanel = false" class="btn btn-secondary">
+            {{ t('common.close') }}
+          </button>
+        </div>
+      </template>
+    </BaseDialog>
   </AppLayout>
 </template>
 
@@ -968,6 +1082,7 @@ import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
+import type { DynamicProxyStatus, DynamicProxyBindingView } from '@/api/admin/dynamicProxy'
 import type { Proxy, ProxyAccountSummary, ProxyProtocol, ProxyQualityCheckResult } from '@/types'
 import type { Column } from '@/components/common/types'
 import AppLayout from '@/components/layout/AppLayout.vue'
@@ -2073,6 +2188,78 @@ function copyFormat(value: string) {
 
 function closeCopyMenu() {
   copyMenuProxyId.value = null
+}
+
+// ─── 动态代理打票面板 ───────────────────────────────────────────
+const showDynamicProxyPanel = ref(false)
+const dynLoading = ref(false)
+const dynSaving = ref(false)
+const dynStatus = ref<DynamicProxyStatus | null>(null)
+const dynForm = reactive({ enabled: false, iplist_url: '', user: '', pass: '' })
+
+function dynAlive(b: DynamicProxyBindingView): boolean {
+  if (!b.last_keepalive) return false
+  const ts = Date.parse(b.last_keepalive)
+  if (Number.isNaN(ts)) return false
+  return Date.now() - ts < 150_000
+}
+
+async function loadDynamicProxyStatus() {
+  dynLoading.value = true
+  try {
+    dynStatus.value = await adminAPI.dynamicProxy.getStatus()
+    dynForm.enabled = dynStatus.value.enabled
+    dynForm.iplist_url = dynStatus.value.iplist_url
+    dynForm.user = dynStatus.value.user
+    dynForm.pass = ''
+  } catch (error: any) {
+    appStore.showError(error?.message || t('admin.proxies.dynamic.loadFailed'))
+  } finally {
+    dynLoading.value = false
+  }
+}
+
+function openDynamicProxyPanel() {
+  showDynamicProxyPanel.value = true
+  loadDynamicProxyStatus()
+}
+
+async function saveDynamicProxyConfig() {
+  dynSaving.value = true
+  try {
+    dynStatus.value = await adminAPI.dynamicProxy.updateConfig({
+      enabled: dynForm.enabled,
+      iplist_url: dynForm.iplist_url.trim(),
+      user: dynForm.user.trim(),
+      pass: dynForm.pass
+    })
+    dynForm.pass = ''
+    appStore.showSuccess(t('admin.proxies.dynamic.saved'))
+  } catch (error: any) {
+    appStore.showError(error?.message || t('admin.proxies.dynamic.loadFailed'))
+  } finally {
+    dynSaving.value = false
+  }
+}
+
+async function rebindDynamicProxy(accountId: number) {
+  try {
+    await adminAPI.dynamicProxy.rebind(accountId)
+    appStore.showSuccess(t('admin.proxies.dynamic.rebindDone'))
+    await loadDynamicProxyStatus()
+  } catch (error: any) {
+    appStore.showError(error?.message || t('admin.proxies.dynamic.loadFailed'))
+  }
+}
+
+async function unbindDynamicProxy(accountId: number) {
+  try {
+    await adminAPI.dynamicProxy.unbind(accountId)
+    appStore.showSuccess(t('admin.proxies.dynamic.unbindDone'))
+    await loadDynamicProxyStatus()
+  } catch (error: any) {
+    appStore.showError(error?.message || t('admin.proxies.dynamic.loadFailed'))
+  }
 }
 
 onMounted(() => {

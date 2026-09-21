@@ -339,6 +339,9 @@ func (r *accountRepository) GetByIDs(ctx context.Context, ids []int64) ([]*servi
 			out.Proxy = proxyEntityToService(entAcc.Edges.Proxy)
 		}
 
+		// 动态代理打票绑定:开关开启且绑定有效时,业务出站代理换成合成绑定代理。
+		service.ApplyDynamicProxyOverride(out, time.Now())
+
 		if groups, ok := groupsByAccount[entAcc.ID]; ok {
 			out.Groups = groups
 		}

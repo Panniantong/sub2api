@@ -650,7 +650,7 @@ func (s *UpstreamBillingProbeService) probeLoadedAccount(ctx context.Context, ac
 		if account.Proxy == nil {
 			return s.persistProbeFailure(ctx, account, intervalMinutes, now, 0, "proxy_unavailable", 0)
 		}
-		if account.Proxy.ID != *account.ProxyID {
+		if account.Proxy.ID > 0 && account.Proxy.ID != *account.ProxyID {
 			return nil, ErrUpstreamBillingProbeIdentityChanged
 		}
 		proxyURL = account.Proxy.URL()
