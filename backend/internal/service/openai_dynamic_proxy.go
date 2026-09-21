@@ -252,7 +252,11 @@ func ExtractDynamicProxyEndpoints(ctx context.Context, httpClient *http.Client, 
 		Data []DynamicProxyEndpoint `json:"data"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, fmt.Errorf("iplist parse: %w", err)
+		snippet := strings.TrimSpace(string(body))
+		if len(snippet) > 120 {
+			snippet = snippet[:120]
+		}
+		return nil, fmt.Errorf("iplist parse: %w (body: %s)", err, snippet)
 	}
 	if payload.Code != 200 || len(payload.Data) == 0 {
 		return nil, fmt.Errorf("iplist empty: code=%d msg=%s", payload.Code, payload.Msg)
