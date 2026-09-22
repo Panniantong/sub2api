@@ -391,6 +391,7 @@ func TestForwardResponsesClampsOllamaCloudMaxOutputTokens(t *testing.T) {
 
 	t.Run("openai platform force_responses is clamped", func(t *testing.T) {
 		account := ollamaUpstreamTestAccount(PlatformOpenAI, 332)
+		account.Status, account.Schedulable = StatusActive, true
 		account.Extra[openai_compat.ExtraKeyResponsesMode] = string(openai_compat.ResponsesSupportModeForceResponses)
 		upstream, err := run(account, responsesBody)
 		require.Error(t, err)

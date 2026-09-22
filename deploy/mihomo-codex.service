@@ -1,0 +1,19 @@
+[Unit]
+Description=Mihomo dynamic proxy pool for Codex ticket harvesting
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mihomo-codex
+Group=mihomo-codex
+WorkingDirectory=/var/lib/mihomo-codex
+ExecStart=/usr/local/bin/mihomo -d /var/lib/mihomo-codex -f /etc/mihomo-codex/config.yaml
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/mihomo-codex
+
+[Install]
+WantedBy=multi-user.target

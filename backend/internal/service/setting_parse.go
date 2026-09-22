@@ -897,7 +897,32 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	} else if s != nil && s.cfg != nil {
 		result.OpenAICodexTicketEnabled = s.cfg.Gateway.OpenAICodexTicket.Enabled
 	}
+	// Missing values intentionally stay false. Ticket harvesting remains active,
+	// while scheduling is fail-open unless an administrator explicitly opts in.
+	result.OpenAICodexTicketFailClosed = settings[SettingKeyOpenAICodexTicketFailClosed] == "true"
 	result.OpenAICodexTicketHarvestProxyURL = strings.TrimSpace(settings[SettingKeyOpenAICodexTicketHarvestProxyURL])
+	harvestScope, harvestScopeErr := parseCodexTicketHarvestScope(settings[SettingKeyOpenAICodexTicketHarvestScope])
+	result.OpenAICodexTicketHarvestScope = harvestScope
+	if harvestScopeErr != nil {
+		result.OpenAICodexTicketHarvestScope = CodexTicketHarvestScope{Mode: "selected", GroupIDs: []int64{}}
+	}
+	result.OpenAICodexTicketStrategy = NormalizeCodexTicketStrategy(settings[SettingKeyOpenAICodexTicketStrategy])
+	result.OpenAICodexTicketStrictResponse = settings[SettingKeyOpenAICodexTicketStrict] == "true"
+	result.OpenAICodexTicketStaticProxyURL = strings.TrimSpace(settings[SettingKeyOpenAICodexTicketStaticProxyURL])
+	if raw, ok := settings[SettingKeyOpenAICodexTicketModels]; ok && strings.TrimSpace(raw) != "" {
+		var models []string
+		if err := json.Unmarshal([]byte(raw), &models); err == nil {
+			result.OpenAICodexTicketModels = NormalizeOpenAICodexTicketModels(models)
+		}
+	}
+	if result.OpenAICodexTicketModels == nil && s != nil && s.cfg != nil {
+		if len(s.cfg.Gateway.OpenAICodexTicket.Models) > 0 {
+			result.OpenAICodexTicketModels = NormalizeOpenAICodexTicketModels(s.cfg.Gateway.OpenAICodexTicket.Models)
+		}
+	}
+	if result.OpenAICodexTicketModels == nil {
+		result.OpenAICodexTicketModels = []string{openAICodexTicketDefaultModel, openAICodexTicketDefaultSolModel}
+	}
 	// codex_cli_only 加固
 	result.MinCodexVersion = settings[SettingKeyMinCodexVersion]
 	result.MaxCodexVersion = settings[SettingKeyMaxCodexVersion]

@@ -30,7 +30,10 @@ var (
 const (
 	updateCacheKey = "update_check_cache"
 	updateCacheTTL = 1200 // 20 minutes
-	githubRepo     = "Wei-Shaw/sub2api"
+	// Releases are maintained on the owner-controlled production fork. Keep the
+	// updater independent from the upstream repository so production installs
+	// see our release stream and can update to our fork's assets.
+	githubRepo = "ranxi2001/sub2api"
 
 	// Security: allowed download domains for updates
 	allowedDownloadHost = "github.com"

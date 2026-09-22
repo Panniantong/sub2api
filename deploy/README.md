@@ -27,6 +27,9 @@ This directory contains files for deploying Sub2API on Linux servers and Apple-s
 | `sub2api-datamanagementd.service` | datamanagementd systemd service unit file |
 | `DATAMANAGEMENTD_CN.md` | datamanagementd 部署与联动说明（中文） |
 | `config.example.yaml` | Example configuration file |
+| `install-mihomo-codex.sh` | Optional Mihomo sidecar for rotating Codex ticket harvest exits |
+| `mihomo-codex.service` | Systemd unit for the Mihomo ticket proxy |
+| `mihomo-codex.config.example.yaml` | Sanitized Mihomo subscription configuration example |
 | `EDGE_SECURITY.md` | Reverse proxy, CDN/WAF, trusted proxy, and ingress hardening guide |
 
 ---
@@ -56,10 +59,10 @@ Use the automated preparation script for the easiest setup:
 
 ```bash
 # Download and run the preparation script
-curl -sSL https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/docker-deploy.sh | bash
+curl -sSL https://raw.githubusercontent.com/ranxi2001/sub2api/production/deploy/docker-deploy.sh | bash
 
 # Or download first, then run
-curl -sSL https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/docker-deploy.sh -o docker-deploy.sh
+curl -sSL https://raw.githubusercontent.com/ranxi2001/sub2api/production/deploy/docker-deploy.sh -o docker-deploy.sh
 chmod +x docker-deploy.sh
 ./docker-deploy.sh
 ```
@@ -92,7 +95,7 @@ If you prefer manual control:
 
 ```bash
 # Clone repository
-git clone https://github.com/Wei-Shaw/sub2api.git
+git clone --branch production https://github.com/ranxi2001/sub2api.git
 cd sub2api/deploy
 
 # Configure environment
@@ -398,12 +401,12 @@ For production servers using systemd.
 ### One-Line Installation
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/install.sh | sudo bash
+curl -sSL https://raw.githubusercontent.com/ranxi2001/sub2api/production/deploy/install.sh | sudo bash
 ```
 
 ### Manual Installation
 
-1. Download the latest release from [GitHub Releases](https://github.com/Wei-Shaw/sub2api/releases)
+1. Download the latest release from [GitHub Releases](https://github.com/ranxi2001/sub2api/releases)
 2. Extract and copy the binary to `/opt/sub2api/`
 3. Copy `sub2api.service` to `/etc/systemd/system/`
 4. Run:
@@ -448,6 +451,40 @@ sudo journalctl -u sub2api -f
 # Enable auto-start on boot
 sudo systemctl enable sub2api
 ```
+
+### Codex 292 ticket proxy
+
+The Codex ticket harvester can use a local Mihomo sidecar backed by an airport
+subscription. This keeps subscription credentials outside the application
+database and limits the proxy listener to localhost. Run the optional installer
+as root on the same server as Sub2API:
+
+```bash
+sudo MIHOMO_CODEX_SUBSCRIPTION_URL='https://provider.example/subscription' \
+  bash deploy/install-mihomo-codex.sh
+```
+
+For a fresh or versioned binary install, the same environment variable makes
+`install.sh` configure the sidecar automatically after downloading the
+release:
+
+```bash
+sudo MIHOMO_CODEX_SUBSCRIPTION_URL='https://provider.example/subscription' \
+  bash deploy/install.sh install -v v2.7.2
+```
+
+Without the variable, the installer detects an already active sidecar and
+leaves it untouched. It cannot provision an airport subscription on your
+behalf; the subscription URL remains the only required provider input.
+
+The installer downloads the pinned compatible Mihomo release, configures the
+`airport` provider with health checks and a `CODEX-ROTATE` round-robin group,
+and listens on `http://127.0.0.1:3101`. Set the admin setting **292 harvest
+proxy** to that local URL. Mihomo rotates only the ticket-harvest traffic;
+normal account requests continue to use their configured residential proxy.
+
+The subscription URL is written only to `/etc/mihomo-codex/config.yaml`
+(`0640`, `root:mihomo-codex`) and must not be committed or printed in logs.
 
 ### Configuration
 

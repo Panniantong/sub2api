@@ -546,6 +546,24 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		if buildErr != nil {
 			return nil, buildErr
 		}
+		latest, admissionErr := s.admitOpenAITurn(ctx, c, account, actualModel)
+		if admissionErr == nil {
+			admissionErr = s.applyOpenAICodexTicket(ctx, latest, actualModel, upstreamReq.Header)
+		}
+		if admissionErr != nil {
+			// The bridge can reach this point on continuation turns after the
+			// ingress loop has already persisted response/session affinity. Do
+			// not leave that state pointing at an account which just failed the
+			// authoritative pre-send check.
+			s.invalidateOpenAIWSTurnStateAfterAdmissionFailureForRequest(
+				ctx,
+				c,
+				payload,
+				account.ID,
+				admissionErr,
+			)
+			return nil, admissionErr
+		}
 		resp, err = s.doOpenAIUpstream(upstreamReq, proxyURL, account)
 		if err != nil {
 			if turn == 1 {

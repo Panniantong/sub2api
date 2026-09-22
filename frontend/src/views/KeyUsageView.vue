@@ -537,6 +537,18 @@ const RING_GRADIENTS = [
 
 const ringAnimated = ref(false)
 const displayPcts = ref<number[]>([])
+let ringFrame: number | undefined
+let ringTimer: ReturnType<typeof setTimeout> | undefined
+let ringGeneration = 0
+let viewDisposed = false
+
+function cancelRingAnimation() {
+  ringGeneration++
+  if (ringFrame !== undefined) cancelAnimationFrame(ringFrame)
+  if (ringTimer !== undefined) clearTimeout(ringTimer)
+  ringFrame = undefined
+  ringTimer = undefined
+}
 
 const ringTrackColor = computed(() => isDark.value ? '#222222' : '#F0F0EE')
 
@@ -556,12 +568,20 @@ function getRingOffset(ring: RingItem): number {
 }
 
 function triggerRingAnimation(items: RingItem[]) {
+  if (viewDisposed) return
+  cancelRingAnimation()
+  const generation = ringGeneration
   ringAnimated.value = false
   displayPcts.value = items.map(() => 0)
 
   nextTick(() => {
-    requestAnimationFrame(() => {
-      setTimeout(() => {
+    if (generation !== ringGeneration) return
+    ringFrame = requestAnimationFrame(() => {
+      ringFrame = undefined
+      if (generation !== ringGeneration) return
+      ringTimer = setTimeout(() => {
+        ringTimer = undefined
+        if (generation !== ringGeneration) return
         ringAnimated.value = true
 
         // Animate percentage numbers
@@ -570,13 +590,15 @@ function triggerRingAnimation(items: RingItem[]) {
         const targets = items.map(item => item.isBalance ? 0 : item.pct)
 
         function tick() {
+          ringFrame = undefined
+          if (generation !== ringGeneration) return
           const elapsed = performance.now() - startTime
           const p = Math.min(elapsed / duration, 1)
           const ease = 1 - Math.pow(1 - p, 3)
           displayPcts.value = targets.map(target => Math.round(ease * target))
-          if (p < 1) requestAnimationFrame(tick)
+          if (p < 1) ringFrame = requestAnimationFrame(tick)
         }
-        requestAnimationFrame(tick)
+        ringFrame = requestAnimationFrame(tick)
       }, 50)
     })
   })
@@ -939,6 +961,8 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  viewDisposed = true
+  cancelRingAnimation()
   if (resetTimer) clearInterval(resetTimer)
 })
 </script>

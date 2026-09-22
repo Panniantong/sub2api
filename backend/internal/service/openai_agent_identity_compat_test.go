@@ -540,6 +540,10 @@ func (r *agentIdentityForwardRepo) GetByID(_ context.Context, _ int64) (*Account
 	return r.account, nil
 }
 
+func (r *agentIdentityForwardRepo) GetOpenAITurnAdmission(context.Context, int64) (*Account, *Account, error) {
+	return r.account, nil, nil
+}
+
 func (r *agentIdentityForwardRepo) UpdateCredentials(_ context.Context, _ int64, credentials map[string]any) error {
 	r.account.Credentials = credentials
 	return nil

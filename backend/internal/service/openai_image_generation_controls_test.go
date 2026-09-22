@@ -739,6 +739,8 @@ func newOpenAIImageGenerationControlTestContext(allowImages bool, userAgent stri
 
 func newOpenAIImageGenerationControlTestAccount() *Account {
 	return &Account{
+		GroupIDs: []int64{4242},
+
 		ID:          5151,
 		Name:        "openai-image-controls",
 		Platform:    PlatformOpenAI,

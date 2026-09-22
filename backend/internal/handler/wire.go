@@ -50,12 +50,15 @@ func ProvideAdminHandlers(
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
 	ollamaCloudUsage *service.OllamaCloudUsageService,
 	settingService *service.SettingService,
+	codexHarvest *service.CodexHarvestService,
 	openAIGatewayService *service.OpenAIGatewayService,
 ) *AdminHandlers {
 	accountHandler.SetUpstreamBillingProbeService(upstreamBillingProbe)
 	accountHandler.SetOllamaCloudUsageService(ollamaCloudUsage)
 	accountHandler.SetCodexTicketSettings(settingService)
 	dynamicProxyHandler := admin.NewDynamicProxyHandler(openAIGatewayService)
+	accountHandler.SetCodexHarvestService(codexHarvest)
+	accountHandler.SetOpenAIGatewayService(openAIGatewayService)
 	return &AdminHandlers{
 		Dashboard:              dashboardHandler,
 		User:                   userHandler,

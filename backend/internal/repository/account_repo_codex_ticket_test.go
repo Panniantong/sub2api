@@ -64,3 +64,13 @@ func TestCodexTicketExtraIsSchedulerNeutral(t *testing.T) {
 		"openai_passthrough":            true,
 	}))
 }
+
+func TestCodexSkipHarvestExtraStaysOnSchedulerProjection(t *testing.T) {
+	got := filterSchedulerExtra(map[string]any{
+		service.OpenAICodexSkipHarvestExtraKey: true,
+		"unrelated_admin_flag":                 true,
+	})
+	require.Equal(t, true, got[service.OpenAICodexSkipHarvestExtraKey])
+	require.NotContains(t, got, "unrelated_admin_flag")
+	require.False(t, isSchedulerNeutralExtraKey(service.OpenAICodexSkipHarvestExtraKey))
+}

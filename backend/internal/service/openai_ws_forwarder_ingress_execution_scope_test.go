@@ -88,6 +88,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_StateBoundToExec
 	groupID := int64(9)
 	account := &Account{
 		ID:          454,
+		GroupIDs:    []int64{groupID},
 		Name:        "openai-ingress-exec-scope",
 		Platform:    PlatformOpenAI,
 		Type:        AccountTypeAPIKey,
@@ -254,6 +255,7 @@ func runOpenAIWSCodexThreadPair(t *testing.T, threadA, threadB string) (serverEr
 	groupID := int64(9)
 	account := &Account{
 		ID:          455,
+		GroupIDs:    []int64{groupID},
 		Name:        "openai-ingress-thread-pair",
 		Platform:    PlatformOpenAI,
 		Type:        AccountTypeOAuth,

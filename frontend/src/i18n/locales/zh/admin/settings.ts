@@ -83,7 +83,7 @@ export default {
           enabled: '启用风控中心',
           enabledHint: '关闭后管理员侧边栏入口隐藏，网关内容审计不会执行。',
           cyberSessionBlock: 'cyber 会话自动屏蔽',
-          cyberSessionBlockHint: '开启后,被上游网络安全策略(cyber_policy)拦截的会话将在 TTL 内被本地屏蔽,不再发往上游。仅屏蔽该会话,不影响同 Key 其他会话。',
+          cyberSessionBlockHint: '开启后，仅对携带明确会话 ID 且被上游网络安全策略(cyber_policy)拦截的会话，在 TTL 内执行本地屏蔽。同 Key 的不同会话互不影响。缺少会话 ID 时仍由上游审核，不根据 IP、客户端类型、缓存 key 或历史长度推断封锁。',
           cyberSessionBlockTTL: '屏蔽时长(秒)',
         },
         affiliate: {
@@ -539,11 +539,24 @@ export default {
         codexTicketEnabled: '292 打票',
         codexTicketEnabledDesc:
           '关闭后不打票、不注入 x-codex-turn-state，按原链路转发。开启后后台打票，并在业务请求中覆盖该头。',
+        codexTicketFailClosed: '无票时暂停账号',
+        codexTicketFailClosedDesc:
+          '默认关闭。关闭时，票据缺失、过期或形态不匹配只影响注入，账号仍可正常调度；开启后，无有效票据的目标模型账号会暂停调度。',
+        codexTicketModels: '打票模型',
+        codexTicketModelsDesc: '只对勾选的模型打票和注入；取消勾选后该模型按原链路转发。',
+        codexTicketShapeNotice: '292/312 仅表示观测到的 state 形态，不代表模型质量。系统只注入符合当前校验规则的票据；关闭「无票时暂停账号」后，形态不匹配不会阻断请求。',
         codexTicketHarvestProxy: '292 打票代理',
         codexTicketHarvestProxyDesc:
           '仅在门票功能开启时用于打票，保存后后续探测会使用新代理，无需重启。日常业务仍走账号自己的住宅代理。填写完整代理 URL（http 或 socks5h，含用户名和密码）。代理服务商需自行负责出口 IP 轮换。留空并保存表示不改已保存的值。',
         codexTicketHarvestProxyPlaceholder: "http://user:pass{'@'}proxy.example.com:1080",
         codexTicketHarvestProxyConfigured: '已配置（密码已隐藏）。要更换请整段粘贴新的代理 URL。',
+        codexTicketProxyMode: '打票出口类型',
+        codexTicketProxyModeMihomo: 'Mihomo/VPN 内核',
+        codexTicketProxyModeStatic: '静态住宅代理',
+        codexTicketProxyMihomoEndpoint: '内核本地出口',
+        codexTicketProxyMihomoSelected: '已选择 Mihomo 打票代理，请点击“保存设置”后生效。',
+        codexTicketProxyMihomoHint:
+          '使用服务器上的 Mihomo 机场订阅轮换出口。请先运行发布包中的 install-mihomo-codex.sh，日常业务代理不受影响。',
         codexClientRestrictionTitle: 'Codex 客户端限制',
         codexHardeningDesc:
           '仅对已开启「仅允许 Codex 官方客户端」的 OpenAI OAuth 账号生效（全局）。在 User-Agent/Originator 之外，用版本区间、引擎指纹门与黑/白名单巩固判定。',

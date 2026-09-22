@@ -266,6 +266,61 @@ func TestPassthroughLifecycle_LaterTurnPreOutputRateLimitRequestsReconnect(t *te
 	}
 }
 
+func TestPassthroughLifecycle_AdmissionFailureClearsResponseAffinity(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	controlCtx, cancelControl := context.WithCancelCause(context.Background())
+	defer cancelControl(context.Canceled)
+
+	upstream := newStagedPassthroughConn()
+	account := passthroughLifecycleAccount()
+	repo := &turnAdmissionRepo{account: account}
+	svc := newPassthroughLifecycleService(passthroughLifecycleConfig(), upstream)
+	svc.accountRepo = repo
+	svc.requireLatestTurnAdmission = true
+	stateStore := NewOpenAIWSStateStore(nil)
+	svc.openaiWSStateStore = stateStore
+	const responseID = "resp_passthrough_admission_rejected"
+	require.NoError(t, stateStore.BindResponseAccount(context.Background(), 0, responseID, account.ID, time.Hour))
+	stateStore.BindResponseConn(responseID, "conn-passthrough-admission", time.Hour)
+
+	server, serverErr := startPassthroughLifecycleServer(t, controlCtx, svc, account)
+	defer server.Close()
+	clientConn := dialPassthroughLifecycleClient(t, server)
+	defer func() { _ = clientConn.CloseNow() }()
+
+	require.Equal(t, "response.create", gjson.GetBytes(requirePassthroughUpstreamWrite(t, upstream, time.Second), "type").String())
+	upstream.Send(fmt.Sprintf(`{"type":"response.completed","response":{"id":%q,"model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`, responseID))
+	completed, err := readPassthroughLifecycleFrame(t, clientConn, time.Second)
+	require.NoError(t, err)
+	require.Equal(t, "response.completed", gjson.GetBytes(completed, "type").String())
+
+	account.Schedulable = false
+	writeCtx, cancelWrite := context.WithTimeout(context.Background(), time.Second)
+	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(
+		fmt.Sprintf(`{"type":"response.create","model":"gpt-5.1","previous_response_id":%q,"stream":false}`, responseID),
+	))
+	cancelWrite()
+	require.NoError(t, err)
+
+	select {
+	case err := <-serverErr:
+		require.True(t, IsOpenAITurnAdmissionError(err), "%v", err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("passthrough admission failure did not terminate")
+	}
+	select {
+	case payload := <-upstream.writes:
+		t.Fatalf("ineligible later turn reached upstream: %s", payload)
+	default:
+	}
+
+	accountID, err := stateStore.GetResponseAccount(context.Background(), 0, responseID)
+	require.NoError(t, err)
+	require.Zero(t, accountID)
+	_, responseConnExists := stateStore.GetResponseConn(responseID)
+	require.False(t, responseConnExists)
+}
+
 func TestPassthroughLifecycle_CyberTerminalEventsMarkBeforeAfterTurn(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

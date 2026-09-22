@@ -26,7 +26,7 @@ func (u *codexTicketFuncUpstream) Do(req *http.Request, _ string, _ int64, _ int
 func codexTicketResponse() *http.Response {
 	h := http.Header{}
 	h.Set(openAICodexTurnStateHeader, fakeCodexTicketState(292))
-	return &http.Response{StatusCode: http.StatusOK, Header: h, Body: io.NopCloser(strings.NewReader("data: {}\n\n"))}
+	return &http.Response{StatusCode: http.StatusOK, Header: h, Body: io.NopCloser(strings.NewReader(`{"status":"completed"}`))}
 }
 
 func TestCodexTicketProbeBypassesPluginDuringWiring(t *testing.T) {
@@ -171,7 +171,7 @@ type codexTicketHeaderOnlyBody struct{ reads, closes int }
 
 func (b *codexTicketHeaderOnlyBody) Read([]byte) (int, error) { b.reads++; return 0, io.EOF }
 func (b *codexTicketHeaderOnlyBody) Close() error             { b.closes++; return nil }
-func TestCodexTicketProbeClosesStreamWithoutDraining(t *testing.T) {
+func TestCodexTicketProbeRejectsEmptyStreamAndCloses(t *testing.T) {
 	body := &codexTicketHeaderOnlyBody{}
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{}, &codexTicketFuncUpstream{do: func(*http.Request) (*http.Response, error) {
 		response := codexTicketResponse()
@@ -179,8 +179,8 @@ func TestCodexTicketProbeClosesStreamWithoutDraining(t *testing.T) {
 		return response, nil
 	}})
 	_, _, err := svc.fireOpenAICodexTicketProbe(context.Background(), ticketTestAccount(41), "test-token", "gpt-6-astra", "", time.Second)
-	require.NoError(t, err)
-	require.Zero(t, body.reads)
+	require.Error(t, err)
+	require.Equal(t, 1, body.reads)
 	require.Equal(t, 1, body.closes)
 }
 

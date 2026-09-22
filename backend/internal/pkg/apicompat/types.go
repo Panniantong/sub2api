@@ -248,7 +248,7 @@ type ResponsesRequest struct {
 // ResponsesReasoning configures reasoning effort in the Responses API.
 type ResponsesReasoning struct {
 	Effort  string `json:"effort"`            // "low" | "medium" | "high" | "xhigh"
-	Summary string `json:"summary,omitempty"` // "auto" | "concise" | "detailed"
+	Summary string `json:"summary,omitempty"` // "none" | "auto" | "concise" | "detailed"
 }
 
 // ResponsesText configures text output options in the Responses API.
@@ -419,10 +419,20 @@ type ResponsesOutput struct {
 
 // MarshalJSON 处理 tool_search_call 项的线上形态（复用 CallID/Arguments 字段）：
 // execution 固定为 "client"（codex 的必填字段，非 client 的调用会被静默忽略），
-// arguments 是 JSON 对象而非 function_call 语义下的字符串。其余类型走默认结构体
-// 序列化，输出逐字节不变。
+// arguments 是 JSON 对象而非 function_call 语义下的字符串。reasoning 项始终提供
+// summary 数组（关闭摘要时为空），其余类型走默认结构体序列化。
 func (o ResponsesOutput) MarshalJSON() ([]byte, error) {
 	type responsesOutputAlias ResponsesOutput
+	if o.Type == "reasoning" {
+		summary := o.Summary
+		if summary == nil {
+			summary = []ResponsesSummary{}
+		}
+		return json.Marshal(struct {
+			responsesOutputAlias
+			Summary []ResponsesSummary `json:"summary"`
+		}{responsesOutputAlias: responsesOutputAlias(o), Summary: summary})
+	}
 	if o.Type != "tool_search_call" {
 		return json.Marshal(responsesOutputAlias(o))
 	}
@@ -584,7 +594,10 @@ func (u *ResponsesUsage) UnmarshalJSON(data []byte) error {
 
 // ResponsesInputTokensDetails breaks down input token usage.
 type ResponsesInputTokensDetails struct {
-	CachedTokens        int `json:"cached_tokens,omitempty"`
+	// cached_tokens 不带 omitempty：Codex 的 ResponseCompletedInputTokensDetails
+	// 把该字段反序列化为必填（无 serde default），缺字段会让整条
+	// response.completed 解析失败。零值必须显式输出。
+	CachedTokens        int `json:"cached_tokens"`
 	AudioTokens         int `json:"audio_tokens,omitempty"`
 	CacheCreationTokens int `json:"cache_creation_tokens,omitempty"`
 	CacheWriteTokens    int `json:"cache_write_tokens,omitempty"`
@@ -592,7 +605,10 @@ type ResponsesInputTokensDetails struct {
 
 // ResponsesOutputTokensDetails breaks down output token usage.
 type ResponsesOutputTokensDetails struct {
-	ReasoningTokens          int `json:"reasoning_tokens,omitempty"`
+	// reasoning_tokens 同样不带 omitempty：Codex 的
+	// ResponseCompletedOutputTokensDetails 要求该字段必填，只输出空对象
+	// `output_tokens_details:{}` 会被严格客户端拒绝。
+	ReasoningTokens          int `json:"reasoning_tokens"`
 	AudioTokens              int `json:"audio_tokens,omitempty"`
 	AcceptedPredictionTokens int `json:"accepted_prediction_tokens,omitempty"`
 	RejectedPredictionTokens int `json:"rejected_prediction_tokens,omitempty"`

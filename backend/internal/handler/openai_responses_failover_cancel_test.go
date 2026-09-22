@@ -75,10 +75,15 @@ func newOpenAIResponsesFailoverTestHandler(t *testing.T, upstream service.HTTPUp
 			Credentials: map[string]any{"access_token": "token-2"},
 		},
 	}
+	// This fixture is shared by the regular and Astra Pro failover handlers.
+	for i := range accounts {
+		accounts[i].GroupIDs = []int64{3131, 3132}
+	}
 	accountRepo := openAIImagesFailoverAccountRepo{accounts: accounts}
 	cfg := &config.Config{RunMode: config.RunModeSimple}
 	gatewayService := service.NewOpenAIGatewayService(
 		accountRepo,
+		nil,
 		nil,
 		nil,
 		nil,

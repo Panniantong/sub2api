@@ -20,20 +20,40 @@ func TestFilterSchedulerCredentialsKeepsSubscriptionPlanType(t *testing.T) {
 	require.NotContains(t, filtered, "refresh_token")
 }
 
+func TestFilterSchedulerCredentialsOmitsCodexTicketIdentity(t *testing.T) {
+	filtered := filterSchedulerCredentials(map[string]any{
+		"plan_type":          "plus",
+		"chatgpt_account_id": "acc-1",
+		"email":              "user@example.com",
+		"access_token":       "secret-access-token",
+		"refresh_token":      "secret-refresh-token",
+	})
+
+	require.Equal(t, "plus", filtered["plan_type"])
+	require.NotContains(t, filtered, "chatgpt_account_id")
+	require.NotContains(t, filtered, "email")
+	require.NotContains(t, filtered, "access_token")
+	require.NotContains(t, filtered, "refresh_token")
+}
+
 func TestSchedulerMetadataAccountKeepsOpenAISubscriptionIdentity(t *testing.T) {
 	account := service.Account{
 		ID:       24,
 		Platform: service.PlatformOpenAI,
 		Type:     service.AccountTypeOAuth,
 		Credentials: map[string]any{
-			"plan_type":    "plus",
-			"access_token": "secret-access-token",
+			"plan_type":          "plus",
+			"chatgpt_account_id": "acc-1",
+			"email":              "user@example.com",
+			"access_token":       "secret-access-token",
 		},
 	}
 
 	metadata := buildSchedulerMetadataAccount(account)
 
 	require.True(t, metadata.IsOpenAIChatGPTSubscription())
+	require.Empty(t, metadata.GetCredential("chatgpt_account_id"))
+	require.Empty(t, metadata.GetCredential("email"))
 	require.Empty(t, metadata.GetCredential("access_token"))
 }
 

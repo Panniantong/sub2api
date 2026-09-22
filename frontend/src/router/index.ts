@@ -526,6 +526,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/harvest-flow',
+    name: 'AdminHarvestFlow',
+    component: () => import('@/views/admin/HarvestFlowView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Ticket Harvest Flow',
+      titleKey: 'admin.harvestFlow.title',
+      descriptionKey: 'admin.harvestFlow.description'
+    }
+  },
+  {
     path: '/admin/plugins',
     name: 'AdminPlugins',
     component: () => import('@/views/admin/PluginsView.vue'),

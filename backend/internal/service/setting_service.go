@@ -132,8 +132,14 @@ type SettingService struct {
 	openAICodexVersionSF               singleflight.Group
 	openAICodexTicketEnabledCache      atomic.Value // *cachedOpenAICodexTicketEnabled
 	openAICodexTicketEnabledSF         singleflight.Group
+	openAICodexTicketFailClosedCache   atomic.Value // *cachedOpenAICodexTicketFailClosed
+	openAICodexTicketFailClosedSF      singleflight.Group
+	openAICodexTicketModelsCache       atomic.Value // *cachedOpenAICodexTicketModels
+	openAICodexTicketModelsSF          singleflight.Group
 	openAICodexTicketHarvestProxyCache atomic.Value // *cachedOpenAICodexTicketHarvestProxy
 	openAICodexTicketHarvestProxySF    singleflight.Group
+	openAICodexTicketHarvestScopeCache atomic.Value // *cachedOpenAICodexTicketHarvestScope
+	openAICodexTicketHarvestScopeSF    singleflight.Group
 	codexRestrictionPolicyCache        atomic.Value // *cachedCodexRestrictionPolicy
 	codexRestrictionPolicySF           singleflight.Group
 
@@ -157,6 +163,8 @@ type SettingService struct {
 
 	channelMonitorRuntimeListenersMu sync.Mutex
 	channelMonitorRuntimeListeners   []func()
+	codexHarvestWakeOnce             sync.Once
+	codexHarvestWake                 chan struct{}
 }
 
 // DefaultPlatformQuotaSetting 单 platform 三档限额（nil = 沿用上层；0 = 显式禁用；>0 = 上限）

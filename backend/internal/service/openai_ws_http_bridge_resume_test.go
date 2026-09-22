@@ -31,6 +31,27 @@ func TestBuildOpenAIWSCurrentTurnRetryPayloadRejectsOrphanToolOutput(t *testing.
 	require.Nil(t, retryPayload)
 }
 
+func TestBuildOpenAIWSCurrentTurnRetryPayloadRejectsNonPortableContext(t *testing.T) {
+	payload := []byte(`{"type":"response.create","model":"mapped-model","previous_response_id":"resp_old"}`)
+	for _, item := range []string{
+		`{"type":"reasoning","encrypted_content":"ciphertext"}`,
+		`{"type":"item_reference","id":"item_1"}`,
+		`{"type":"message","content":[{"type":"reasoning","encrypted_content":"ciphertext"}]}`,
+	} {
+		t.Run(gjson.Get(item, "type").String(), func(t *testing.T) {
+			retryPayload, retrySafe, err := buildOpenAIWSCurrentTurnRetryPayload(
+				payload,
+				[]json.RawMessage{json.RawMessage(item)},
+				true,
+				"gpt-5.6-sol",
+			)
+			require.NoError(t, err)
+			require.False(t, retrySafe)
+			require.Nil(t, retryPayload)
+		})
+	}
+}
+
 func TestProxyOpenAIWSHTTPBridgeTurnLaterTurn429FailsOverBeforeClientWrite(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -40,7 +61,10 @@ func TestProxyOpenAIWSHTTPBridgeTurnLaterTurn429FailsOverBeforeClientWrite(t *te
 		Body:       io.NopCloser(strings.NewReader(`{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached"}}`)),
 	}}
 	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
-	account := &Account{ID: 129, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1}
+	account := &Account{
+		Status:      StatusActive,
+		Schedulable: true,
+		ID:          129, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1}
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
@@ -75,7 +99,10 @@ func TestProxyOpenAIWSHTTPBridgeTurnLaterTurnDoesNotFailOverAfterDownstreamOutpu
 		)),
 	}}
 	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
-	account := &Account{ID: 10, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Concurrency: 1}
+	account := &Account{
+		Status:      StatusActive,
+		Schedulable: true,
+		ID:          10, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Concurrency: 1}
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)

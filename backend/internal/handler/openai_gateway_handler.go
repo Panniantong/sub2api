@@ -640,6 +640,12 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// 该判断已排除 Codex 被动 image_gen namespace，避免 CC-only 账号被误过滤（#4476）。
 	needsResponses := nativeV2 || legacyCompact
 	requiredCapability := openAIResponsesRequiredCapabilityForRequest(imageIntent, needsResponses, requestPlatform)
+	// Codex native remote compaction v2 允许由 chat 桥承接：这类账号没有原生
+	// Responses 能力，但压缩回合会被改写并在回程合成 compaction item。仅放宽
+	// native v2，legacy /responses/compact 与生图意图维持原有 Responses 判定。
+	if nativeV2 && !legacyCompact && !imageIntent && requestPlatform == service.PlatformOpenAI {
+		requiredCapability = service.OpenAIEndpointCapabilityResponsesCompact
+	}
 
 	// 分组利润控制：请求级装配定价上下文——pricingAt 固定本请求的
 	// D 与计费高峰因子，选号、槽位终检与全部 failover 重入共用同一门与阈值。
@@ -862,6 +868,10 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			})
 		}
 		if err != nil {
+			if service.IsOpenAITurnAdmissionError(err) {
+				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "admission_unavailable", "Account eligibility changed; please retry with complete context", streamStarted)
+				return
+			}
 			if result != nil && result.ClientDisconnect {
 				reqLog.Info("openai.client_disconnected",
 					zap.Int64("account_id", account.ID),
@@ -967,7 +977,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					reqLog.Warn("openai.upstream_failover_switching", failoverSwitchFields...)
 					continue
 				}
-				h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, forwardModel, requireCompact, result), false, nil, err)
+				if !service.IsOpenAITurnAdmissionError(err) {
+					h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, forwardModel, requireCompact, result), false, nil, err)
+				}
 				upstreamErrorAlreadyCommunicated := openAIForwardErrorAlreadyCommunicated(c, writerSizeBeforeForward, err)
 				wroteFallback := false
 				if !upstreamErrorAlreadyCommunicated {
@@ -1539,7 +1551,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 					submitMessagesUsage(result)
 					return
 				}
-				h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, currentRoutingModel, false, result), false, nil, err)
+				if !service.IsOpenAITurnAdmissionError(err) {
+					h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, currentRoutingModel, false, result), false, nil, err)
+				}
 				wroteFallback := h.ensureAnthropicErrorResponse(c, streamStarted)
 				reqLog.Warn("openai_messages.forward_failed",
 					zap.Int64("account_id", account.ID),
@@ -2937,6 +2951,33 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				if cyberBlockedThisConn {
 					return service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, cyberSessionBlockedClientMsg, nil)
 				}
+				// MapRequestModel 已在当前 turn 的 payload 解析阶段完成。这里
+				// 再用最终出站模型做一次权威资格终检，确保账号被禁用、移组、
+				// 到期或该模型票据失效后，不会先抢槽再把请求交给旧账号。
+				// 底层 WS/bridge 发送前仍保留同一检查，防止检查与网络写入之间
+				// 出现竞态；本处只是把失败尽量提前到 turn 边界。
+				if turn > 1 {
+					outboundModel := ""
+					if snapshot := turnChannelMapping.Load(); snapshot != nil && snapshot.turn == turn {
+						outboundModel = strings.TrimSpace(snapshot.mapping.MappedModel)
+					}
+					if outboundModel == "" {
+						outboundModel = strings.TrimSpace(wsForwardModel)
+					}
+					if _, admissionErr := h.gatewayService.AdmitOpenAITurn(ctx, c, account, outboundModel); admissionErr != nil {
+						reqLog.Info("openai.websocket_turn_admission_rejected",
+							zap.Int("turn", turn),
+							zap.Int64("account_id", account.ID),
+							zap.String("outbound_model", outboundModel),
+							zap.Error(admissionErr),
+						)
+						return service.NewOpenAIWSClientCloseError(
+							coderws.StatusTryAgainLater,
+							"account eligibility changed; reconnect with complete context",
+							admissionErr,
+						)
+					}
+				}
 				// 长连接跨峰谷/倍率刷新防护：每个 turn 按当前时刻重装门并复核
 				// 当前账号，越线即要求客户端重连重选（连接绑定单一上游账号，
 				// 无法中途换号）。本 turn 的准入与计费共用同一 pricingAt。
@@ -3115,6 +3156,11 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			if service.IsOpenAIWSSessionPreemptedError(err) {
 				// 关闭帧已由抢占登记在取消前发给本连接，这里只记录并释放。
 				reqLog.Info("openai.websocket_ingress_preempted", zap.Int64("account_id", account.ID))
+				return
+			}
+			if service.IsOpenAITurnAdmissionError(err) {
+				releaseTurnSlots()
+				closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "account eligibility changed; reconnect with complete context")
 				return
 			}
 			var failoverErr *service.UpstreamFailoverError
@@ -4129,23 +4175,13 @@ func (h *OpenAIGatewayHandler) rejectIfCyberSessionBlocked(c *gin.Context, apiKe
 }
 
 type cyberSessionBlockWritePlan struct {
-	scopeKey string
-	keys     []string
+	keys []string
 }
 
 func buildCyberSessionBlockWritePlan(apiKeyID int64, c *gin.Context, body []byte) cyberSessionBlockWritePlan {
 	plan := cyberSessionBlockWritePlan{}
 	if key := service.CyberSessionExplicitBlockKey(apiKeyID, c, body); key != "" {
 		plan.keys = append(plan.keys, key)
-	}
-	transcriptKeys := service.CyberSessionTranscriptBlockKeys(apiKeyID, body)
-	for _, key := range transcriptKeys {
-		if len(plan.keys) == 0 || key != plan.keys[0] {
-			plan.keys = append(plan.keys, key)
-		}
-	}
-	if len(transcriptKeys) > 0 {
-		plan.scopeKey = cyberSessionScopeKey(apiKeyID, c)
 	}
 	return plan
 }
@@ -4160,13 +4196,6 @@ func findBlockedCyberSessionKey(ctx context.Context, gatewayService *service.Ope
 		userAgent = c.GetHeader("User-Agent")
 	}
 	return gatewayService.FindCyberSessionBlockedForRequest(ctx, apiKeyID, c, body, clientIP, userAgent)
-}
-
-func cyberSessionScopeKey(apiKeyID int64, c *gin.Context) string {
-	if c == nil {
-		return ""
-	}
-	return service.CyberSessionScopeKey(apiKeyID, strings.TrimSpace(ip.GetClientIP(c)), c.GetHeader("User-Agent"))
 }
 
 // enqueueCyberSessionBlockedOpsEntry captures request meta and enqueues the
@@ -4298,7 +4327,7 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey 
 		plan := buildCyberSessionBlockWritePlan(apiKey.ID, c, cyberBlockBody)
 		if len(plan.keys) > 0 {
 			blockCtx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-			gwSvc.MarkCyberSessionBlocked(blockCtx, plan.scopeKey, plan.keys)
+			gwSvc.MarkCyberSessionBlocked(blockCtx, "", plan.keys)
 			cancel()
 		}
 	}

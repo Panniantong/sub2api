@@ -335,9 +335,12 @@ gateway:
     # 后台「系统设置 → 网关 → Codex 设置」可覆盖此值，无需重启。
     # 后台值的读取缓存为 5 秒，下个探测周期使用新代理；代理服务商自行负责轮换 IP。
     harvest_proxy_url: ""
-    harvest_probe_interval_seconds: 6
+    harvest_probe_interval_seconds: 180
+    harvest_cooldown_seconds: 180
+    max_probes_per_round: 6
     harvest_attempt_timeout_seconds: 25
-    fail_closed: true
+    # 默认仅把票据作为可选增强；开启后，无有效票据的目标模型账号会暂停调度。
+    fail_closed: false
     models:
       - gpt-6-astra
       - gpt-5.6-sol

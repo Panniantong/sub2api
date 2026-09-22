@@ -1,0 +1,36 @@
+mixed-port: 3101
+allow-lan: false
+bind-address: 127.0.0.1
+mode: rule
+log-level: warning
+ipv6: false
+external-controller: 127.0.0.1:9098
+secret: change-this-local-secret
+
+proxy-providers:
+  airport:
+    type: http
+    url: "REPLACE_WITH_SUBSCRIPTION_URL"
+    interval: 3600
+    path: ./providers/airport.yaml
+    header:
+      User-Agent:
+        - clash.meta
+    health-check:
+      enable: true
+      url: https://www.gstatic.com/generate_204
+      interval: 300
+      timeout: 5000
+
+proxy-groups:
+  - name: CODEX-ROTATE
+    type: load-balance
+    strategy: round-robin
+    use:
+      - airport
+    url: https://www.gstatic.com/generate_204
+    interval: 180
+    timeout: 5000
+
+rules:
+  - MATCH,CODEX-ROTATE

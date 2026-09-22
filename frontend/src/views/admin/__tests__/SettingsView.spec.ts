@@ -7,6 +7,7 @@ import enSettings from "@/i18n/locales/en/admin/settings";
 import zhCommon from "@/i18n/locales/zh/common";
 import zhSettings from "@/i18n/locales/zh/admin/settings";
 import SettingsView from "../SettingsView.vue";
+import { apiClient } from "@/api/client";
 
 const {
   getSettings,
@@ -735,6 +736,107 @@ describe("admin SettingsView payment visible method controls", () => {
     wrapper.unmount();
   });
 
+  it("loads and saves independent Codex ticket model toggles", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      openai_codex_ticket_models: ["gpt-6-astra", "gpt-5.6-sol"],
+    });
+    const wrapper = mountView();
+    await flushPromises();
+    await wrapper.get("#codex-ticket-model-sol").setValue(false);
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings.mock.calls[0]?.[0].openai_codex_ticket_models).toEqual([
+      "gpt-6-astra",
+    ]);
+    wrapper.unmount();
+  });
+
+  it("keeps missing-ticket account pausing off by default and saves explicit opt-in", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      openai_codex_ticket_fail_closed: false,
+    });
+    const wrapper = mountView();
+    await flushPromises();
+    const toggle = wrapper.get<HTMLInputElement>("#codex-ticket-fail-closed");
+    expect(toggle.element.checked).toBe(false);
+    await toggle.setValue(true);
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings.mock.calls[0]?.[0].openai_codex_ticket_fail_closed).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("loads and changes the ticket refresh strategy", async () => {
+    getSettings.mockResolvedValueOnce({...baseSettingsResponse,openai_codex_ticket_strategy:'standby'});
+    const wrapper=mountView();await flushPromises();
+    await wrapper.get('#codex-ticket-strategy').setValue('fixed');
+    await wrapper.find('form').trigger('submit.prevent');await flushPromises();
+    expect(updateSettings.mock.calls[0]?.[0].openai_codex_ticket_strategy).toBe('fixed');
+    wrapper.unmount();
+  });
+
+  it("loads and saves selected harvest groups, preserving an explicitly empty selection", async () => {
+    getSettings.mockResolvedValueOnce({ ...baseSettingsResponse,
+      openai_codex_ticket_harvest_scope: { mode: 'selected', group_ids: [2], account_policy: 'schedulable_only' },
+    });
+    getGroups.mockResolvedValueOnce([
+      { id: 2, name: 'PLUS', platform: 'openai', status: 'active' },
+      { id: 24, name: 'PRO', platform: 'openai', status: 'active' },
+      { id: 32, name: 'Grok', platform: 'grok', status: 'active' },
+    ]);
+    const wrapper = mountView(); await flushPromises();
+    expect(wrapper.find('#codex-ticket-group-32').exists()).toBe(false);
+    expect(wrapper.get<HTMLInputElement>('#codex-ticket-group-2').element.checked).toBe(true);
+    await wrapper.get('#codex-ticket-group-24').setValue(true);
+    await wrapper.find('form').trigger('submit.prevent'); await flushPromises();
+    expect(updateSettings.mock.calls[0]?.[0].openai_codex_ticket_harvest_scope).toEqual({mode:'selected',group_ids:[2,24],account_policy:'schedulable_only'});
+    await wrapper.get('#codex-ticket-group-2').setValue(false);
+    await wrapper.get('#codex-ticket-group-24').setValue(false);
+    await wrapper.find('form').trigger('submit.prevent'); await flushPromises();
+    expect(updateSettings.mock.calls[1]?.[0].openai_codex_ticket_harvest_scope).toEqual({mode:'selected',group_ids:[],account_policy:'schedulable_only'});
+    wrapper.unmount();
+  });
+
+  it("preserves selected harvest IDs when group loading fails", async () => {
+    getSettings.mockResolvedValueOnce({ ...baseSettingsResponse,
+      openai_codex_ticket_harvest_scope: { mode: 'selected', group_ids: [24], account_policy: 'schedulable_only' },
+    });
+    getGroups.mockRejectedValueOnce(new Error('offline'));
+    const wrapper = mountView(); await flushPromises();
+    expect(wrapper.get<HTMLInputElement>('#codex-ticket-group-24').element.checked).toBe(true);
+    await wrapper.find('form').trigger('submit.prevent'); await flushPromises();
+    expect(updateSettings.mock.calls[0]?.[0].openai_codex_ticket_harvest_scope).toEqual({mode:'selected',group_ids:[24],account_policy:'schedulable_only'});
+    wrapper.unmount();
+  });
+
+  it("defaults legacy harvest scopes to schedulable only and saves compatibility policy", async () => {
+    getSettings.mockResolvedValueOnce({ ...baseSettingsResponse,
+      openai_codex_ticket_harvest_scope: { mode: 'selected', group_ids: [24] },
+    });
+    const wrapper = mountView();
+    await flushPromises();
+    const policy = wrapper.get<HTMLSelectElement>('#codex-ticket-account-policy');
+    expect(policy.element.value).toBe('schedulable_only');
+    await policy.setValue('prioritize_schedulable');
+    await wrapper.find('form').trigger('submit.prevent');
+    await flushPromises();
+    expect(updateSettings.mock.calls[0]?.[0].openai_codex_ticket_harvest_scope).toEqual({
+      mode: 'selected', group_ids: [24], account_policy: 'prioritize_schedulable',
+    });
+    wrapper.unmount();
+  });
+
+  it("keeps strict ticket response rejection opt-in", async () => {
+    const wrapper=mountView();await flushPromises();
+    expect(wrapper.get<HTMLInputElement>('#codex-ticket-strict').element.checked).toBe(false);
+    await wrapper.get('#codex-ticket-strict').setValue(true);
+    await wrapper.find('form').trigger('submit.prevent');await flushPromises();
+    expect(updateSettings.mock.calls[0]?.[0].openai_codex_ticket_strict_response).toBe(true);
+    wrapper.unmount();
+  });
+
   it("loads the masked Codex harvest proxy and submits a replacement URL", async () => {
     getSettings.mockResolvedValueOnce({
       ...baseSettingsResponse,
@@ -751,6 +853,53 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(updateSettings.mock.calls[0]?.[0].openai_codex_ticket_harvest_proxy_url)
       .toBe("socks5h://user:new-secret@new.example.com:1080");
     expect(updateSettings.mock.calls[0]?.[0]).not.toHaveProperty("openai_codex_ticket_harvest_proxy_configured");
+    wrapper.unmount();
+  });
+
+  it("confirms Mihomo proxy selection and applies it only when settings are saved", async () => {
+    const endpoint = "http://127.0.0.1:3101";
+    const getStatus = vi.spyOn(apiClient, "get").mockResolvedValue({ data: {
+      installed: true, supported: true, running: true, busy: false,
+      nodes: 1, subscriptions: 1, phase: "running", endpoint,
+    } });
+    const wrapper = mountView();
+    try {
+      await flushPromises();
+      await wrapper.get('input[name="codex-ticket-proxy-mode"][value="mihomo"]').setValue(true);
+      await flushPromises();
+      const button = wrapper.findAll("button").find(node => node.text() === "设为打票代理");
+      expect(button).toBeDefined();
+      await button!.trigger("click");
+      expect(showSuccess).toHaveBeenCalledWith("admin.settings.gatewayForwarding.codexTicketProxyMihomoSelected");
+      expect(updateSettings).not.toHaveBeenCalled();
+      await wrapper.find("form").trigger("submit.prevent");
+      await flushPromises();
+      expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+        openai_codex_ticket_harvest_proxy_url: endpoint,
+      }));
+    } finally {
+      wrapper.unmount();
+      getStatus.mockRestore();
+    }
+  });
+
+  it("does not activate an unverified Mihomo endpoint just by selecting the mode", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      openai_codex_ticket_harvest_proxy_url: "",
+      openai_codex_ticket_harvest_proxy_configured: false,
+    });
+    const wrapper = mountView();
+    await flushPromises();
+
+    await wrapper
+      .get<HTMLInputElement>('input[name="codex-ticket-proxy-mode"][value="mihomo"]')
+      .setValue(true);
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings.mock.calls[0]?.[0].openai_codex_ticket_harvest_proxy_url)
+      .toBe("");
     wrapper.unmount();
   });
 

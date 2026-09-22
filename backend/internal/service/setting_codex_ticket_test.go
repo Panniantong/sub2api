@@ -16,6 +16,84 @@ type codexTicketSettingRepo struct {
 	err error
 }
 
+func TestCodexTicketFixedStrategyPreservesPrimaryAndCooldown(t *testing.T) {
+	repo := &codexTicketSettingRepo{codexPolicyMigrationRepoStub: &codexPolicyMigrationRepoStub{values: map[string]string{SettingKeyOpenAICodexTicketStrategy: "fixed"}}}
+	upstream := &httpUpstreamRecorder{}
+	svc := ticketTestService(t, config.OpenAICodexTicketConfig{Enabled: true, Models: []string{"gpt-6-astra"}, HarvestProxyURL: "http://example.org:1234"}, upstream)
+	svc.settingService = NewSettingService(repo, &config.Config{})
+	account := ticketTestAccount(41)
+	account.Status = StatusActive
+	require.NoError(t, svc.storeOpenAICodexTicket(context.Background(), account, &openAICodexTicket{Model: "gpt-6-astra", State: fakeCodexTicketState(292), Length: 292, ExpiresAt: time.Now().Add(time.Minute)}))
+	svc.accountRepo = &codexTicketRefreshRepo{accounts: []Account{*account}}
+	svc.refreshOpenAICodexTickets(context.Background())
+	require.Empty(t, upstream.requests)
+	repo.values[SettingKeyOpenAICodexTicketStrategy] = "standby"
+	svc.refreshOpenAICodexTickets(context.Background())
+	require.Len(t, upstream.requests, 1)
+	key := openAICodexTicketKey(account.ID, "gpt-6-astra")
+	cooldown, exists := svc.openaiCodexTicketProbeCooldown.Load(key)
+	require.True(t, exists)
+	repo.values[SettingKeyOpenAICodexTicketStrategy] = "fixed"
+	svc.refreshOpenAICodexTickets(context.Background())
+	unchanged, _ := svc.openaiCodexTicketProbeCooldown.Load(key)
+	require.Equal(t, cooldown, unchanged)
+	require.True(t, svc.lookupOpenAICodexTicket(account, "gpt-6-astra").valid(time.Now(), 292))
+}
+
+func TestCodexTicketModelsRuntimeDisableAndEmpty(t *testing.T) {
+	repo := &codexTicketSettingRepo{codexPolicyMigrationRepoStub: &codexPolicyMigrationRepoStub{values: map[string]string{SettingKeyOpenAICodexTicketFailClosed: "true"}}}
+	settings := NewSettingService(repo, &config.Config{})
+	svc := ticketTestService(t, config.OpenAICodexTicketConfig{Enabled: true, FailClosed: true}, nil)
+	svc.settingService = settings
+	account := ticketTestAccount(41)
+	ctx := context.Background()
+	require.True(t, svc.openAICodexTicketBlocksAccount(account, "gpt-5.6-sol"))
+	repo.values[SettingKeyOpenAICodexTicketModels] = `["gpt-6-astra"]`
+	settings.InvalidateOpenAICodexTicketModelsCache()
+	require.False(t, svc.openAICodexTicketBlocksAccount(account, "gpt-5.6-sol"))
+	require.True(t, svc.openAICodexTicketBlocksAccount(account, "gpt-6-astra"))
+	h := http.Header{}
+	h.Set(openAICodexTurnStateHeader, "client-state")
+	require.NoError(t, svc.applyOpenAICodexTicket(ctx, account, "gpt-5.6-sol", h))
+	require.Equal(t, "client-state", h.Get(openAICodexTurnStateHeader))
+	repo.values[SettingKeyOpenAICodexTicketModels] = `[]`
+	settings.InvalidateOpenAICodexTicketModelsCache()
+	for range 2 { // Both the initial read and cached read preserve the empty list.
+		cfg := svc.openAICodexTicketConfig()
+		require.NotNil(t, cfg.Models)
+		require.Empty(t, cfg.Models)
+		require.Empty(t, OpenAICodexTicketStatuses(account, cfg, time.Now()))
+		require.False(t, svc.openAICodexTicketBlocksAccount(account, "gpt-6-astra"))
+	}
+	upstream := &httpUpstreamRecorder{}
+	svc.httpUpstream = upstream
+	svc.accountRepo = &codexTicketRefreshRepo{accounts: []Account{*account}}
+	svc.refreshOpenAICodexTickets(ctx)
+	require.Empty(t, upstream.requests)
+}
+
+func TestCodexTicketFailClosedRuntimeSettingDefaultsOffAndHotReloads(t *testing.T) {
+	repo := &codexTicketSettingRepo{codexPolicyMigrationRepoStub: &codexPolicyMigrationRepoStub{values: map[string]string{}}}
+	settings := NewSettingService(repo, &config.Config{})
+	svc := ticketTestService(t, config.OpenAICodexTicketConfig{Enabled: true, FailClosed: true}, nil)
+	svc.settingService = settings
+	account := ticketTestAccount(41)
+
+	require.False(t, settings.GetOpenAICodexTicketFailClosed(context.Background()))
+	require.False(t, svc.openAICodexTicketBlocksAccount(account, "gpt-6-astra"))
+	require.NoError(t, svc.applyOpenAICodexTicket(context.Background(), account, "gpt-6-astra", http.Header{}))
+
+	repo.values[SettingKeyOpenAICodexTicketFailClosed] = "true"
+	settings.InvalidateOpenAICodexTicketFailClosedCache()
+	require.True(t, settings.GetOpenAICodexTicketFailClosed(context.Background()))
+	require.True(t, svc.openAICodexTicketBlocksAccount(account, "gpt-6-astra"))
+	require.ErrorIs(t, svc.applyOpenAICodexTicket(context.Background(), account, "gpt-6-astra", http.Header{}), ErrOpenAICodexTicketUnavailable)
+
+	repo.values[SettingKeyOpenAICodexTicketFailClosed] = "false"
+	settings.InvalidateOpenAICodexTicketFailClosedCache()
+	require.False(t, svc.openAICodexTicketBlocksAccount(account, "gpt-6-astra"))
+}
+
 func (r *codexTicketSettingRepo) GetValue(ctx context.Context, key string) (string, error) {
 	if r.err != nil {
 		return "", r.err
@@ -29,14 +107,14 @@ func TestCodexTicketEnabledRuntimeSettingOverridesYaml(t *testing.T) {
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{Enabled: false, FailClosed: true}, nil)
 	svc.settingService = settings
 	account := ticketTestAccount(41)
-	svc.storeOpenAICodexTicket(context.Background(), account, &openAICodexTicket{
+	require.NoError(t, svc.storeOpenAICodexTicket(context.Background(), account, &openAICodexTicket{
 		AccountID:  41,
 		Model:      "gpt-6-astra",
 		State:      fakeCodexTicketState(292),
 		Length:     292,
 		CapturedAt: time.Now(),
 		ExpiresAt:  time.Now().Add(time.Hour),
-	})
+	}))
 
 	h := http.Header{}
 	h.Set(openAICodexTurnStateHeader, "client-state")

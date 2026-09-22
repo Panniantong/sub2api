@@ -190,6 +190,9 @@ func passthroughArgsTestConfig() *config.Config {
 
 func passthroughArgsFallbackAccount() *Account {
 	return &Account{
+		Status:      StatusActive,
+		Schedulable: true,
+
 		ID:          102,
 		Name:        "passthrough-args-openai-apikey",
 		Platform:    PlatformOpenAI,

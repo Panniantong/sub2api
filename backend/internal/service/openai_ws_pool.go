@@ -75,6 +75,8 @@ type openAIWSAcquireRequest struct {
 	// whose authorization is per-dial (Agent Identity) are never cached in
 	// lastAcquire or delayed prewarm state.
 	HeadersFactory  func(context.Context, http.Header) (http.Header, error)
+	BindHandshake   func(http.Header) *openAIWSTurnBinding
+	CheckBinding    func(context.Context, *openAIWSTurnBinding) error
 	ProxyURL        string
 	PreferredConnID string
 	// ForceNewConn: 强制本次获取新连接（避免复用导致连接内续链状态互相污染）。
@@ -91,6 +93,7 @@ type openAIWSHandshakeCompatibilityKey struct {
 	threadID            string
 	clientRequestID     string
 	codexWindowID       string
+	proxyURL            string
 }
 
 type openAIWSConnLease struct {
@@ -283,6 +286,7 @@ type openAIWSConn struct {
 	ws openAIWSClientConn
 
 	handshakeHeaders       http.Header
+	turnBinding            *openAIWSTurnBinding
 	handshakeCompatibility openAIWSHandshakeCompatibilityKey
 	routingAffinity        string
 
@@ -1125,6 +1129,13 @@ func (p *openAIWSConnPool) Acquire(ctx context.Context, req openAIWSAcquireReque
 		p.metrics.acquireQueueWaitMs.Add(queueWait.total.Milliseconds())
 	}
 	if lease != nil && lease.conn != nil {
+		if req.CheckBinding != nil {
+			if checkErr := req.CheckBinding(ctx, lease.conn.turnBinding); checkErr != nil {
+				lease.MarkBroken()
+				lease.Release()
+				return nil, checkErr
+			}
+		}
 		now := time.Now()
 		lease.idleBefore = lease.conn.idleDuration(now)
 		lease.ageBefore = lease.conn.age(now)
@@ -1145,7 +1156,7 @@ func (p *openAIWSConnPool) acquire(ctx context.Context, req openAIWSAcquireReque
 
 retryAcquire:
 	accountID := req.Account.ID
-	compatibility := normalizeOpenAIWSHandshakeCompatibility(req.Account, req.Headers)
+	compatibility := openAIWSAcquireCompatibility(req)
 	routingAffinity := normalizeOpenAIWSRoutingAffinity(req.Headers)
 	effectiveMaxConns := p.effectiveMaxConnsByAccount(req.Account)
 	if effectiveMaxConns <= 0 {
@@ -2152,8 +2163,13 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 	accountID := req.Account.ID
 	evict := func() { p.evictConn(accountID, id) }
 	pooledConn.onPeerClosed.Store(&evict)
-	pooledConn.handshakeCompatibility = normalizeOpenAIWSHandshakeCompatibility(req.Account, req.Headers)
-	pooledConn.routingAffinity = normalizeOpenAIWSRoutingAffinity(req.Headers)
+	compatibilityRequest := req
+	compatibilityRequest.Headers = headers
+	pooledConn.handshakeCompatibility = openAIWSAcquireCompatibility(compatibilityRequest)
+	pooledConn.routingAffinity = normalizeOpenAIWSRoutingAffinity(headers)
+	if req.BindHandshake != nil {
+		pooledConn.turnBinding = req.BindHandshake(headers)
+	}
 	return pooledConn, nil
 }
 
@@ -2311,6 +2327,12 @@ func (p *openAIWSConnPool) dialTimeout() time.Duration {
 		return time.Duration(p.cfg.Gateway.OpenAIWS.DialTimeoutSeconds) * time.Second
 	}
 	return 10 * time.Second
+}
+
+func openAIWSAcquireCompatibility(req openAIWSAcquireRequest) openAIWSHandshakeCompatibilityKey {
+	key := normalizeOpenAIWSHandshakeCompatibility(req.Account, req.Headers)
+	key.proxyURL = stringsTrim(req.ProxyURL)
+	return key
 }
 
 func cloneOpenAIWSAcquireRequest(req openAIWSAcquireRequest) openAIWSAcquireRequest {

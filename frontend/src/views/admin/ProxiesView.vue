@@ -526,6 +526,7 @@
             { label: t('admin.proxies.fallbackProxy'), value: 'proxy' },
             { label: t('admin.proxies.fallbackDirect'), value: 'direct' },
           ]" />
+          <p class="input-hint mt-2">{{ t('admin.proxies.fallbackModeHint') }}</p>
         </div>
         <div v-if="createForm.fallback_mode === 'proxy'">
           <label class="input-label">{{ t('admin.proxies.backupProxy') }}</label>
@@ -759,6 +760,7 @@
             { label: t('admin.proxies.fallbackProxy'), value: 'proxy' },
             { label: t('admin.proxies.fallbackDirect'), value: 'direct' },
           ]" />
+          <p class="input-hint mt-2">{{ t('admin.proxies.fallbackModeHint') }}</p>
         </div>
         <div v-if="editForm.fallback_mode === 'proxy'">
           <label class="input-label">{{ t('admin.proxies.backupProxy') }}</label>

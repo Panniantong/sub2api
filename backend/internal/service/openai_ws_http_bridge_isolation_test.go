@@ -151,6 +151,7 @@ func TestOpenAIWSHTTPBridgeSessionIsolationAcrossSameSessionHash(t *testing.T) {
 		Extra:       map[string]any{"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModeHTTPBridge},
 		Concurrency: 2, Status: StatusActive, Schedulable: true}
 	groupID := int64(7)
+	account.GroupIDs = []int64{groupID}
 	newContext := func(r *http.Request) *gin.Context {
 		c, _ := gin.CreateTestContext(httptest.NewRecorder())
 		c.Request = r.Clone(ctx)

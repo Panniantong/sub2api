@@ -238,6 +238,27 @@ describe('KeyUsageView daily detail', () => {
 
     wrapper.unmount()
   })
+
+  it('cancels the pending ring animation when leaving the page', async () => {
+    vi.useFakeTimers()
+    const requestFrame = vi.fn((cb: FrameRequestCallback) => window.setTimeout(() => cb(0), 0))
+    vi.stubGlobal('requestAnimationFrame', requestFrame)
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => window.clearTimeout(id))
+    const wrapper = mount(KeyUsageView, {
+      global: { stubs: { RouterLink: { template: '<a><slot /></a>' }, LocaleSwitcher: true, Icon: true } },
+    })
+    await wrapper.find('input').setValue('sk-test-key')
+    await wrapper.find('input').trigger('keydown.enter')
+    await flushPromises()
+    await nextTick()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(requestFrame).toHaveBeenCalled()
+    wrapper.unmount()
+    const scheduledFrames = requestFrame.mock.calls.length
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(requestFrame).toHaveBeenCalledTimes(scheduledFrames)
+    expect(vi.getTimerCount()).toBe(0)
+  })
 })
 
 describe('KeyUsageView subscription feature flag', () => {

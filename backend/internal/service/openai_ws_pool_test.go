@@ -741,6 +741,47 @@ func TestOpenAIWSConnPool_ForceNewConnSkipsReuse(t *testing.T) {
 	require.Equal(t, 2, dialer.DialCount(), "ForceNewConn=true 时应跳过空闲连接复用并新建连接")
 }
 
+func TestOpenAIWSConnPool_AcquireDoesNotReuseDifferentProxy(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 2
+	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 2
+
+	pool := newOpenAIWSConnPool(cfg)
+	dialer := &openAIWSCountingDialer{}
+	pool.setClientDialerForTest(dialer)
+
+	account := &Account{ID: 124, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+	accountProxy := "http://account.example:8080"
+	harvestProxy := "http://127.0.0.1:3102"
+
+	lease1, err := pool.Acquire(context.Background(), openAIWSAcquireRequest{
+		Account:  account,
+		WSURL:    "wss://example.com/v1/responses",
+		ProxyURL: accountProxy,
+	})
+	require.NoError(t, err)
+	lease1.Release()
+
+	lease2, err := pool.Acquire(context.Background(), openAIWSAcquireRequest{
+		Account:  account,
+		WSURL:    "wss://example.com/v1/responses",
+		ProxyURL: harvestProxy,
+	})
+	require.NoError(t, err)
+	lease2.Release()
+	require.Equal(t, 2, dialer.DialCount(), "harvest proxy must not reuse an account-proxy connection")
+
+	lease3, err := pool.Acquire(context.Background(), openAIWSAcquireRequest{
+		Account:  account,
+		WSURL:    "wss://example.com/v1/responses",
+		ProxyURL: harvestProxy,
+	})
+	require.NoError(t, err)
+	lease3.Release()
+	require.Equal(t, 2, dialer.DialCount(), "same harvest proxy should reuse")
+}
+
 func TestOpenAIWSConnPool_AcquireReusesOnlyMatchingBetaFeatures(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 2

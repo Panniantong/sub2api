@@ -83,7 +83,7 @@ export default {
           enabled: 'Enable Risk Control',
           enabledHint: 'When off, the admin sidebar entry is hidden and gateway moderation is skipped.',
           cyberSessionBlock: 'Cyber session auto-block',
-          cyberSessionBlockHint: 'When enabled, sessions hit by upstream cyber_policy are blocked locally for the TTL and no longer forwarded. Only the offending session is blocked; other sessions on the same key are unaffected.',
+          cyberSessionBlockHint: 'When enabled, locally block an upstream cyber_policy hit for the TTL only when an explicit session ID is available. Different sessions on the same API key remain isolated. Requests without a session ID are still evaluated upstream; IP, client type, cache keys and history length never identify a blocked session.',
           cyberSessionBlockTTL: 'Block TTL (seconds)',
         },
         affiliate: {
@@ -546,11 +546,24 @@ export default {
         codexTicketEnabled: "292 ticket harvest",
         codexTicketEnabledDesc:
           "When off, the gateway neither harvests nor injects x-codex-turn-state and forwards traffic as usual. When on, it harvests tickets in the background and overwrites that header on production requests.",
+        codexTicketFailClosed: "Pause accounts without a ticket",
+        codexTicketFailClosedDesc:
+          "Off by default. When off, a missing, expired, or mismatched ticket only disables injection and the account remains schedulable. When on, target-model accounts without a valid ticket are paused.",
+        codexTicketModels: "Ticket models",
+        codexTicketModelsDesc: "Harvest and inject tickets only for selected models. Unselected models use the normal forwarding path.",
+        codexTicketShapeNotice: "292/312 only describe the observed state shape and do not measure model quality. Only tickets matching the current validation rules are injected; with account pausing off, a shape mismatch does not block requests.",
         codexTicketHarvestProxy: "292 harvest proxy",
         codexTicketHarvestProxyDesc:
           "Used only for minting 292 tickets when the ticket feature is enabled. Changes apply to subsequent probes without a restart. Production traffic still uses each account's residential proxy. Paste a full HTTP or SOCKS5h proxy URL including username and password. The proxy provider must handle IP rotation. Leave blank when saving to keep the stored value.",
         codexTicketHarvestProxyPlaceholder: "http://user:pass{'@'}proxy.example.com:1080",
         codexTicketHarvestProxyConfigured: "Configured (password hidden). Paste a full new proxy URL to replace it.",
+        codexTicketProxyMode: "Ticket exit type",
+        codexTicketProxyModeMihomo: "Mihomo/VPN kernel",
+        codexTicketProxyModeStatic: "Static residential proxy",
+        codexTicketProxyMihomoEndpoint: "Kernel local endpoint",
+        codexTicketProxyMihomoSelected: 'Mihomo selected for ticket harvesting. Click "Save Settings" to apply.',
+        codexTicketProxyMihomoHint:
+          "Uses the Mihomo airport subscription running on this server. Run install-mihomo-codex.sh from the release package first; normal account proxies are unchanged.",
         codexClientRestrictionTitle: "Codex client restriction",
         codexHardeningDesc:
           "Only affects OpenAI OAuth accounts with 'Codex official clients only' enabled (global). Beyond User-Agent/Originator, harden the decision with a version range, an engine-fingerprint gate, and black/whitelists.",

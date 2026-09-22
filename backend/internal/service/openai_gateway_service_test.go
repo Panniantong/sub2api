@@ -59,6 +59,15 @@ func (r *snapshotUpdateAccountRepo) UpdateExtra(ctx context.Context, id int64, u
 	return nil
 }
 
+func (r stubOpenAIAccountRepo) GetOpenAITurnAdmission(ctx context.Context, id int64) (*Account, *Account, error) {
+	account, err := r.GetByID(ctx, id)
+	var parent *Account
+	if err == nil && account != nil && account.IsShadow() {
+		parent, err = r.GetByID(ctx, *account.ParentAccountID)
+	}
+	return account, parent, err
+}
+
 func (r stubOpenAIAccountRepo) GetByID(ctx context.Context, id int64) (*Account, error) {
 	for i := range r.accounts {
 		if r.accounts[i].ID == id {

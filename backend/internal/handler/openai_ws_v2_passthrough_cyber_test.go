@@ -68,11 +68,12 @@ func newOpenAIWSPassthroughHandlerHarness(t *testing.T, upstreamURL string) *ope
 	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 3
 	cfg.Gateway.OpenAIWS.IngressInterTurnIdleTimeoutSeconds = 3
 
+	account.GroupIDs = []int64{groupID}
 	accountRepo := &openAIWSUsageHandlerAccountRepoStub{account: account}
 	usageRepo := &openAIWSUsageHandlerUsageLogRepoStub{created: make(chan *service.UsageLog, 2)}
 	billingCacheSvc := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
 	gatewaySvc := service.NewOpenAIGatewayService(
-		accountRepo, usageRepo, nil, nil, nil, nil, gatewayCache, cfg, nil, nil,
+		accountRepo, nil, usageRepo, nil, nil, nil, nil, gatewayCache, cfg, nil, nil,
 		service.NewBillingService(cfg, nil), nil, billingCacheSvc, nil, &service.DeferredService{},
 		nil, nil, nil, nil, nil, settingSvc, nil,
 	)
@@ -110,7 +111,7 @@ func newOpenAIWSPassthroughHandlerHarness(t *testing.T, upstreamURL string) *ope
 	t.Cleanup(handlerServer.Close)
 
 	dialCtx, cancelDial := context.WithTimeout(context.Background(), 3*time.Second)
-	clientConn, _, err := coderws.Dial(dialCtx, "ws"+strings.TrimPrefix(handlerServer.URL, "http")+"/openai/v1/responses", nil)
+	clientConn, _, err := coderws.Dial(dialCtx, "ws"+strings.TrimPrefix(handlerServer.URL, "http")+"/openai/v1/responses", &coderws.DialOptions{HTTPHeader: http.Header{"Session_id": []string{"ws-test-session"}}})
 	cancelDial()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = clientConn.CloseNow() })
@@ -183,6 +184,7 @@ func TestOpenAIResponsesWebSocketV2PassthroughCyberMarkIsConsumedAfterTurn(t *te
 
 	keyCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	keyCtx.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(requestPayload))
+	keyCtx.Request.Header.Set("session_id", "ws-test-session")
 	blockKey := service.CyberSessionExplicitBlockKey(harness.apiKey.ID, keyCtx, []byte(requestPayload))
 	require.NotEmpty(t, blockKey)
 	store, ok := harness.gatewayCache.(service.CyberSessionBlockStore)
@@ -291,6 +293,7 @@ func TestOpenAIResponsesWebSocketV2PassthroughNonCyberTurnAllowsFollowup(t *test
 
 	keyCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	keyCtx.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(firstPayload))
+	keyCtx.Request.Header.Set("session_id", "ws-test-session")
 	blockKey := service.CyberSessionExplicitBlockKey(harness.apiKey.ID, keyCtx, []byte(firstPayload))
 	require.NotEmpty(t, blockKey)
 	store, ok := harness.gatewayCache.(service.CyberSessionBlockStore)

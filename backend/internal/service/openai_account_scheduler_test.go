@@ -3819,3 +3819,197 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SubscriptionPriorityWai
 	require.Equal(t, int64(38011), selection.WaitPlan.AccountID)
 	require.Equal(t, openAIAccountScheduleLayerLoadBalance, decision.Layer)
 }
+
+func TestOpenAIGatewayService_SelectAccountWithScheduler_YieldsStickyToHigherPriorityTicket(t *testing.T) {
+	ctx := context.Background()
+	groupID := int64(3)
+	sticky := Account{
+		ID:          5,
+		Name:        "5x",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Priority:    100,
+		GroupIDs:    []int64{groupID},
+		Credentials: map[string]any{"access_token": "tok", "chatgpt_account_id": "acc-5x"},
+	}
+	preferred := Account{
+		ID:          20,
+		Name:        "20x",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Priority:    1,
+		GroupIDs:    []int64{groupID},
+		Credentials: map[string]any{"access_token": "tok", "chatgpt_account_id": "acc-20x"},
+	}
+	attachReadyCodexTicket(&sticky, "gpt-6-astra")
+	attachReadyCodexTicket(&preferred, "gpt-6-astra")
+
+	cache := &schedulerTestGatewayCache{
+		sessionBindings: map[string]int64{
+			"openai:session_hash_ticket": sticky.ID,
+		},
+	}
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAICodexTicket = config.OpenAICodexTicketConfig{
+		Enabled:      true,
+		TargetLength: 292,
+		TTLSeconds:   3600,
+		FailClosed:   true,
+		Models:       []string{"gpt-6-astra", "gpt-5.6-sol"},
+	}
+	cfg.Gateway.OpenAIWS.SchedulerScoreWeights.Priority = 1
+	cfg.Gateway.OpenAIWS.SchedulerScoreWeights.Load = 1
+	cfg.Gateway.OpenAIWS.SchedulerScoreWeights.Queue = 1
+
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: []Account{sticky, preferred}},
+		cache:              cache,
+		cfg:                cfg,
+		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitService("true"),
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
+	}
+
+	selection, decision, err := svc.SelectAccountWithScheduler(
+		ctx,
+		&groupID,
+		"",
+		"session_hash_ticket",
+		"gpt-6-astra",
+		nil,
+		OpenAIUpstreamTransportAny,
+		false,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, preferred.ID, selection.Account.ID)
+	require.Equal(t, openAIAccountScheduleLayerLoadBalance, decision.Layer)
+	require.False(t, decision.StickySessionHit)
+	require.Equal(t, preferred.ID, cache.sessionBindings["openai:session_hash_ticket"])
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
+func TestOpenAIGatewayService_SelectAccountWithScheduler_SkipHarvestRemainsSchedulable(t *testing.T) {
+	ctx := context.Background()
+	groupID := int64(3)
+	skipped := Account{
+		ID:          5,
+		Name:        "5x",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Priority:    100,
+		GroupIDs:    []int64{groupID},
+		Credentials: map[string]any{"access_token": "tok", "chatgpt_account_id": "acc-5x"},
+		Extra:       map[string]any{OpenAICodexSkipHarvestExtraKey: true},
+	}
+	harvester := Account{
+		ID:          20,
+		Name:        "20x",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Priority:    1,
+		GroupIDs:    []int64{groupID},
+		Credentials: map[string]any{"access_token": "tok", "chatgpt_account_id": "acc-20x"},
+	}
+	attachReadyCodexTicket(&skipped, "gpt-6-astra")
+	attachReadyCodexTicket(&harvester, "gpt-6-astra")
+
+	cache := &schedulerTestGatewayCache{
+		sessionBindings: map[string]int64{
+			"openai:session_hash_ticket": skipped.ID,
+		},
+	}
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAICodexTicket = config.OpenAICodexTicketConfig{
+		Enabled:      true,
+		TargetLength: 292,
+		TTLSeconds:   3600,
+		FailClosed:   true,
+		Models:       []string{"gpt-6-astra", "gpt-5.6-sol"},
+	}
+	cfg.Gateway.OpenAIWS.SchedulerScoreWeights.Priority = 1
+	cfg.Gateway.OpenAIWS.SchedulerScoreWeights.Load = 1
+	cfg.Gateway.OpenAIWS.SchedulerScoreWeights.Queue = 1
+
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: []Account{skipped, harvester}},
+		cache:              cache,
+		cfg:                cfg,
+		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitService("true"),
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
+	}
+
+	selection, decision, err := svc.SelectAccountWithScheduler(
+		ctx,
+		&groupID,
+		"",
+		"session_hash_ticket",
+		"gpt-6-astra",
+		nil,
+		OpenAIUpstreamTransportAny,
+		false,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, harvester.ID, selection.Account.ID)
+	require.Equal(t, openAIAccountScheduleLayerLoadBalance, decision.Layer)
+	require.False(t, decision.StickySessionHit)
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+
+	svc.accountRepo = schedulerTestOpenAIAccountRepo{accounts: []Account{skipped}}
+	selection, _, err = svc.SelectAccountWithScheduler(
+		ctx,
+		&groupID,
+		"",
+		"",
+		"gpt-6-astra",
+		nil,
+		OpenAIUpstreamTransportAny,
+		false,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, skipped.ID, selection.Account.ID)
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+
+	bare := skipped
+	bare.Extra = map[string]any{OpenAICodexSkipHarvestExtraKey: true}
+	svc.accountRepo = schedulerTestOpenAIAccountRepo{accounts: []Account{bare}}
+	selection, _, err = svc.SelectAccountWithScheduler(
+		ctx,
+		&groupID,
+		"",
+		"",
+		"gpt-6-astra",
+		nil,
+		OpenAIUpstreamTransportAny,
+		false,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, bare.ID, selection.Account.ID)
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}

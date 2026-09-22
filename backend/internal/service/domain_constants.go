@@ -711,8 +711,15 @@ const (
 	// 关闭：不打票、不注入 x-codex-turn-state，按原链路转发。
 	// 开启：后台打票并在业务请求中覆盖该头。
 	SettingKeyOpenAICodexTicketEnabled = "openai_codex_ticket_enabled"
+	// SettingKeyOpenAICodexTicketFailClosed controls whether a missing/expired
+	// ticket makes an otherwise schedulable account ineligible. Missing defaults
+	// to false so ticket harvesting remains an optional enhancement.
+	SettingKeyOpenAICodexTicketFailClosed = "openai_codex_ticket_fail_closed"
 	// SettingKeyOpenAICodexTicketHarvestProxyURL Codex 292 打票出口（socks5h/http），后台可改、热更新。
 	SettingKeyOpenAICodexTicketHarvestProxyURL = "openai_codex_ticket_harvest_proxy_url"
+	SettingKeyOpenAICodexTicketStaticProxyURL  = "openai_codex_ticket_static_proxy_url"
+	// SettingKeyOpenAICodexTicketModels Codex 292 打票模型列表，JSON 数组格式；缺失时回退配置文件。
+	SettingKeyOpenAICodexTicketModels = "openai_codex_ticket_models"
 	// SettingKeyOpenAIAllowClaudeCodeCodexPlugin 已废弃：历史全局开关只作为升级迁移输入读取。
 	// 迁移后等价规则写入 SettingKeyCodexCLIOnlyWhitelist，不再参与运行时判定。
 	SettingKeyOpenAIAllowClaudeCodeCodexPlugin = "openai_allow_claude_code_codex_plugin"

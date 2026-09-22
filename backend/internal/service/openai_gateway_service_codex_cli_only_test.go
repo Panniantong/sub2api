@@ -51,7 +51,10 @@ func TestOpenAIGatewayService_GetCodexClientRestrictionDetector(t *testing.T) {
 		c, _ := gin.CreateTestContext(rec)
 		c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 		c.Request.Header.Set("User-Agent", "curl/8.0")
-		account := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Extra: map[string]any{"codex_cli_only": true}}
+		account := &Account{
+			Status:      StatusActive,
+			Schedulable: true,
+			Platform:    PlatformOpenAI, Type: AccountTypeOAuth, Extra: map[string]any{"codex_cli_only": true}}
 
 		result := got.Detect(c, account, CodexRestrictionPolicy{}, nil)
 		require.True(t, result.Enabled)
@@ -70,7 +73,10 @@ func TestOpenAIGatewayService_Forward_VersionGateMessage(t *testing.T) {
 		return rec, c
 	}
 	account := func() *Account {
-		return &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Extra: map[string]any{"codex_cli_only": true}}
+		return &Account{
+			Status:      StatusActive,
+			Schedulable: true,
+			Platform:    PlatformOpenAI, Type: AccountTypeOAuth, Extra: map[string]any{"codex_cli_only": true}}
 	}
 	body := []byte(`{"model":"gpt-5.1-codex"}`)
 

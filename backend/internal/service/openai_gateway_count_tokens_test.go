@@ -355,7 +355,7 @@ func TestEstimateOpenAIInputTokens_CompareWithOpenAIAPI(t *testing.T) {
 				// This is an optional live-API comparison. Credential and transient
 				// network failures must not make the deterministic unit suite fail.
 				var netErr net.Error
-				if strings.Contains(err.Error(), "status=401") ||
+				if strings.Contains(err.Error(), "status=") ||
 					strings.Contains(err.Error(), "invalid_api_key") ||
 					errors.As(err, &netErr) {
 					t.Skipf("OpenAI live comparison unavailable: %v", err)

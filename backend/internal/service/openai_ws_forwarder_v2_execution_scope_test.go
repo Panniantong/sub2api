@@ -67,6 +67,8 @@ func TestOpenAIGatewayService_Forward_WSv2_TurnStateBoundToExecutionScope(t *tes
 	}
 	groupID := int64(9)
 	account := &Account{
+		GroupIDs: []int64{9},
+
 		ID:          456,
 		Name:        "openai-http-exec-scope",
 		Platform:    PlatformOpenAI,
@@ -145,6 +147,8 @@ func TestOpenAIGatewayService_Forward_WSv2_ExecutionScopeUsesOriginalIdentity(t 
 	groupID := int64(9)
 	const apiKeyID = int64(21)
 	account := &Account{
+		GroupIDs: []int64{9},
+
 		ID:          457,
 		Name:        "openai-oauth-fingerprint-full",
 		Platform:    PlatformOpenAI,
