@@ -208,26 +208,110 @@ func TestCyberSessionBlock_RoundTrip(t *testing.T) {
 	require.Equal(t, explicitKey, svc.FindCyberSessionBlockedForRequest(ctx, 1, c, body, "203.0.113.1", "client/1.0"))
 }
 
-func TestCyberSessionExplicitBlockKeyUsesSessionHeadersOnly(t *testing.T) {
-	var expected string
-	for _, header := range []string{"session-id", "session_id", "conversation_id", "X-Session-Id", "X-OpenCode-Session", "X-Conversation-ID"} {
+func TestCyberSessionIdentityStrictEnabledDefaultsOffAndReadsSetting(t *testing.T) {
+	t.Run("missing setting", func(t *testing.T) {
+		svc := &OpenAIGatewayService{settingService: &SettingService{settingRepo: &fakeSettingRepo{vals: map[string]string{}}}}
+		require.False(t, svc.CyberSessionIdentityStrictEnabled(context.Background()))
+	})
+
+	t.Run("explicitly enabled", func(t *testing.T) {
+		svc := &OpenAIGatewayService{settingService: &SettingService{settingRepo: &fakeSettingRepo{vals: map[string]string{
+			SettingKeyCyberSessionBlockEnabled:          "true",
+			SettingKeyCyberSessionIdentityStrictEnabled: "true",
+		}}}}
+		require.True(t, svc.CyberSessionIdentityStrictEnabled(context.Background()))
+	})
+}
+
+func TestCyberSessionExplicitBlockKeyUsesTypedExplicitIdentity(t *testing.T) {
+	var threadKey string
+	for _, header := range []string{"conversation_id", "thread_id", "thread-id", "X-Conversation-ID"} {
 		c, body := newCyberBlockTestCtx(map[string]string{header: " conversation-a "}, `{"prompt_cache_key":"shared-cache"}`)
 		key := CyberSessionExplicitBlockKey(7, c, body)
 		require.NotEmpty(t, key, header)
-		if expected == "" {
-			expected = key
+		if threadKey == "" {
+			threadKey = key
 		}
-		require.Equal(t, expected, key, "header aliases must identify the same conversation")
+		require.Equal(t, threadKey, key, "thread header aliases must share one typed identity")
 		require.NotEqual(t, key, CyberSessionExplicitBlockKey(8, c, body))
 		require.Empty(t, CyberSessionExplicitBlockKey(0, c, body))
 		require.Empty(t, CyberSessionExplicitBlockKey(-1, c, body))
 	}
+
+	var sessionKey string
+	for _, header := range []string{"session-id", "session_id", "X-Session-Id", "X-OpenCode-Session"} {
+		c, body := newCyberBlockTestCtx(map[string]string{header: " conversation-a "}, `{"prompt_cache_key":"shared-cache"}`)
+		key := CyberSessionExplicitBlockKey(7, c, body)
+		require.NotEmpty(t, key, header)
+		if sessionKey == "" {
+			sessionKey = key
+		}
+		require.Equal(t, sessionKey, key, "session header aliases must share one typed identity")
+	}
+	require.NotEqual(t, threadKey, sessionKey, "thread and session namespaces must not collide")
+
+	c, body := newCyberBlockTestCtx(nil, `{"client_metadata":{"thread_id":"conversation-a"}}`)
+	require.Equal(t, threadKey, CyberSessionExplicitBlockKey(7, c, body))
+	c, body = newCyberBlockTestCtx(nil, `{"client_metadata":{"session_id":"conversation-a"}}`)
+	require.Equal(t, sessionKey, CyberSessionExplicitBlockKey(7, c, body))
+	c, body = newCyberBlockTestCtx(nil, `{"type":"response.create","response":{"client_metadata":{"thread_id":"conversation-a"}}}`)
+	require.Equal(t, threadKey, CyberSessionExplicitBlockKey(7, c, body))
+
+	c, body = newCyberBlockTestCtx(map[string]string{"thread_id": "thread-header"}, `{"client_metadata":{"thread_id":"thread-body"}}`)
+	require.Empty(t, CyberSessionExplicitBlockKey(7, c, body))
+
 	for _, body := range []string{`{}`, `{"prompt_cache_key":"conversation-a"}`, `{"type":"response.create","response":{"prompt_cache_key":"conversation-a","input":"hello"}}`} {
 		c, b := newCyberBlockTestCtx(map[string]string{"X-Session-Affinity": "conversation-a"}, body)
 		require.Empty(t, CyberSessionExplicitBlockKey(7, c, b))
 	}
 	require.Empty(t, CyberSessionExplicitBlockKey(7, nil, nil))
 	require.Empty(t, CyberSessionExplicitBlockKey(7, &gin.Context{}, nil))
+}
+
+func TestResolveCyberSessionIdentityExposesOnlyHashedIdentity(t *testing.T) {
+	c, body := newCyberBlockTestCtx(nil, `{"client_metadata":{"thread_id":"private-thread-value"}}`)
+	resolution := ResolveCyberSessionIdentity(7, c, body)
+
+	require.True(t, resolution.Resolved())
+	require.Equal(t, OpenAIClientSessionIdentityMetadata{
+		Status: OpenAIClientSessionIdentityResolved,
+		Kind:   openAIClientSessionKindThread,
+		Source: OpenAIClientSessionIdentitySourceBody,
+	}, resolution.Metadata)
+	require.NotEmpty(t, resolution.BlockKey)
+	require.NotContains(t, resolution.BlockKey, "private-thread-value")
+	require.Len(t, resolution.LookupKeys, 2)
+
+	inherited := InheritCyberSessionIdentity(resolution)
+	require.True(t, inherited.Resolved())
+	require.True(t, inherited.Inherited)
+	require.Equal(t, OpenAIClientSessionIdentitySourceConnection, inherited.Metadata.Source)
+	require.Equal(t, resolution.BlockKey, inherited.BlockKey)
+	require.Equal(t, resolution.LookupKeys, inherited.LookupKeys)
+
+	missingCtx, missingBody := newCyberBlockTestCtx(nil, `{}`)
+	missing := ResolveCyberSessionIdentity(7, missingCtx, missingBody)
+	require.False(t, missing.Resolved())
+	require.Equal(t, OpenAIClientSessionIdentityMissing, missing.Metadata.Status)
+	require.Empty(t, missing.BlockKey)
+	require.Empty(t, missing.LookupKeys)
+}
+
+func TestCyberSessionBlockReadsLegacyV2ExplicitKey(t *testing.T) {
+	ctx := context.Background()
+	combo := &comboCacheAndStore{}
+	svc := &OpenAIGatewayService{cache: combo, settingService: &SettingService{settingRepo: &fakeSettingRepo{vals: map[string]string{
+		SettingKeyCyberSessionBlockEnabled: "true",
+	}}}}
+
+	c, body := newCyberBlockTestCtx(map[string]string{"session_id": "legacy-session"}, `{}`)
+	legacyRaw := "cyber-explicit-session:v2|api_key=7|session=legacy-session"
+	legacySum := sha256.Sum256([]byte(legacyRaw))
+	legacyKey := hex.EncodeToString(legacySum[:])
+	combo.store.blocked = map[string]bool{legacyKey: true}
+
+	require.Equal(t, legacyKey, svc.FindCyberSessionBlockedForRequest(ctx, 7, c, body, "", ""))
+	require.NotEqual(t, legacyKey, CyberSessionExplicitBlockKey(7, c, body), "new writes must use typed v3")
 }
 
 func TestCyberSessionIsolationAcrossSharedKeyAndLongHistory(t *testing.T) {

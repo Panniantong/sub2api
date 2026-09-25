@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"golang.org/x/sync/singleflight"
 )
@@ -119,6 +120,19 @@ const openAICodexClientVersionDBTimeout = 5 * time.Second
 // openAICodexClientVersionSFKey singleflight 键。
 const openAICodexClientVersionSFKey = "openai_codex_client_version"
 
+// cachedClaudeCodeClientVersion 缓存出站 Claude Code 客户端版本号（进程内缓存，60s TTL）
+type cachedClaudeCodeClientVersion struct {
+	version   string
+	expiresAt int64 // unix nano
+}
+
+const claudeCodeClientVersionCacheTTL = 60 * time.Second
+const claudeCodeClientVersionErrorTTL = 5 * time.Second
+const claudeCodeClientVersionDBTimeout = 5 * time.Second
+
+// claudeCodeClientVersionSFKey singleflight 键。
+const claudeCodeClientVersionSFKey = "claude_code_client_version"
+
 type cachedOpenAIQuotaAutoPauseSettings struct {
 	settings  OpsOpenAIAccountQuotaAutoPauseSettings
 	expiresAt int64
@@ -142,6 +156,7 @@ type cachedCodexRestrictionPolicy struct {
 // GetCyberSessionBlockRuntime 在网关请求热路径上被调用，避免每次访问 DB。
 type cachedCyberSessionBlockRuntime struct {
 	enabled   bool
+	strict    bool
 	ttl       time.Duration
 	expiresAt int64 // unix nano
 }
@@ -158,7 +173,7 @@ const openAIQuotaAutoPauseSettingsRefreshKey = "openai_quota_auto_pause_settings
 
 // GetCyberSessionBlockRuntime 返回 (开关, TTL)，进程内缓存 ~60s，
 // 供网关热路径读取时避免 DB 往返。
-// 两个 setting key 在单次 singleflight 里一起读取，减少 DB 往返。
+// 三个 setting key 在单次 singleflight 里一起读取，减少 DB 往返。
 // 默认值：开关 false，TTL 1h（与粘性会话对齐）。
 func (s *SettingService) GetCyberSessionBlockRuntime(ctx context.Context) (bool, time.Duration) {
 	if cached, ok := s.cyberSessionBlockRuntimeCache.Load().(*cachedCyberSessionBlockRuntime); ok && cached != nil {
@@ -177,11 +192,13 @@ func (s *SettingService) GetCyberSessionBlockRuntime(ctx context.Context) (bool,
 
 		enabledVal, enabledErr := s.settingRepo.GetValue(dbCtx, SettingKeyCyberSessionBlockEnabled)
 		ttlVal, ttlErr := s.settingRepo.GetValue(dbCtx, SettingKeyCyberSessionBlockTTLSeconds)
+		strictVal, strictErr := s.settingRepo.GetValue(dbCtx, SettingKeyCyberSessionIdentityStrictEnabled)
 
 		if enabledErr != nil && !errors.Is(enabledErr, ErrSettingNotFound) {
 			slog.Warn("failed to get cyber_session_block_enabled setting", "error", enabledErr)
 			entry := &cachedCyberSessionBlockRuntime{
 				enabled:   false,
+				strict:    false,
 				ttl:       time.Hour,
 				expiresAt: time.Now().Add(cyberSessionBlockRuntimeErrorTTL).UnixNano(),
 			}
@@ -189,7 +206,15 @@ func (s *SettingService) GetCyberSessionBlockRuntime(ctx context.Context) (bool,
 			return entry, nil
 		}
 
+		cacheTTL := cyberSessionBlockRuntimeCacheTTL
+		if strictErr != nil && !errors.Is(strictErr, ErrSettingNotFound) {
+			slog.Warn("failed to get cyber_session_identity_strict_enabled setting", "error", strictErr)
+			strictVal = "false"
+			cacheTTL = cyberSessionBlockRuntimeErrorTTL
+		}
+
 		enabled := enabledErr == nil && strings.TrimSpace(enabledVal) == "true"
+		strict := strictErr == nil && strings.TrimSpace(strictVal) == "true"
 
 		ttl := time.Hour
 		if ttlErr == nil {
@@ -200,8 +225,9 @@ func (s *SettingService) GetCyberSessionBlockRuntime(ctx context.Context) (bool,
 
 		entry := &cachedCyberSessionBlockRuntime{
 			enabled:   enabled,
+			strict:    strict,
 			ttl:       ttl,
-			expiresAt: time.Now().Add(cyberSessionBlockRuntimeCacheTTL).UnixNano(),
+			expiresAt: time.Now().Add(cacheTTL).UnixNano(),
 		}
 		s.cyberSessionBlockRuntimeCache.Store(entry)
 		return entry, nil
@@ -210,6 +236,20 @@ func (s *SettingService) GetCyberSessionBlockRuntime(ctx context.Context) (bool,
 		return entry.enabled, entry.ttl
 	}
 	return false, time.Hour
+}
+
+// GetCyberSessionIdentityStrictEnabled returns the default-off strict identity
+// gate. It shares the cyber runtime cache so the hot path does not add another
+// database round trip.
+func (s *SettingService) GetCyberSessionIdentityStrictEnabled(ctx context.Context) bool {
+	if s == nil || s.settingRepo == nil {
+		return false
+	}
+	_, _ = s.GetCyberSessionBlockRuntime(ctx)
+	if cached, ok := s.cyberSessionBlockRuntimeCache.Load().(*cachedCyberSessionBlockRuntime); ok && cached != nil {
+		return cached.strict
+	}
+	return false
 }
 
 // GetAntigravityUserAgentVersion 返回 Antigravity 上游请求使用的版本号。
@@ -587,7 +627,8 @@ func (s *SettingService) GetOpenAICodexUserAgent(ctx context.Context) string {
 			})
 			return fallback, nil
 		}
-		ua := strings.TrimSpace(value)
+		// Preserve invalid header bytes for canonical identity validation.
+		ua := strings.Trim(value, " \t")
 		if ua == "" {
 			ua = fallback
 		}
@@ -670,6 +711,101 @@ func (s *SettingService) InvalidateOpenAICodexClientVersionCache() {
 	s.openAICodexVersionCache.Store((*cachedOpenAICodexClientVersion)(nil))
 }
 
+// NormalizeClaudeCodeClientVersion 校验并归一化 Claude Code 客户端版本号，非法值返回空串。
+// 容忍前导 "v" 与首尾空白；合法性复用 claude.IsSupportedCLIVersion（严格三段纯数字 semver、
+// 无预发布/构建后缀、且不低于内置基线）。
+func NormalizeClaudeCodeClientVersion(version string) string {
+	normalized := strings.TrimSpace(version)
+	normalized = strings.TrimPrefix(normalized, "v")
+	if normalized == "" {
+		return ""
+	}
+	if !claude.IsSupportedCLIVersion(normalized) {
+		return ""
+	}
+	return normalized
+}
+
+// GetClaudeCodeClientVersion 返回出站声明的 Claude Code CLI 客户端版本号。
+// 优先级：管理员在面板覆写的版本 → 自动同步到的官方最新版本 → claude.CLIVersion()
+// （环境变量 SUB2API_CLAUDE_CLI_VERSION 覆盖 + 内置基线）。
+// 版本太旧会被 Anthropic 拒绝（HTTP 400 claude_code_version_too_old），故该值需保持跟随官方发布。
+//
+// ⚠️ 一致性约束：同一次请求里，拼 User-Agent（claude-cli/<版本>）的版本号和用于
+// billing attribution 的版本号必须是同一个值，否则 Anthropic 侧对不上、判为非正版客户端。
+// 因此调用点必须在一次请求内只取一次本函数并复用；本缓存的唯一主动变更点是
+// 同步任务写入后调用 InvalidateClaudeCodeClientVersionCache，60s TTL 不会在极短时间内抖动。
+func (s *SettingService) GetClaudeCodeClientVersion(ctx context.Context) string {
+	fallback := claude.CLIVersion()
+	if s == nil || s.settingRepo == nil {
+		return fallback
+	}
+	if cached, ok := s.claudeCodeVersionCache.Load().(*cachedClaudeCodeClientVersion); ok && cached != nil {
+		if time.Now().UnixNano() < cached.expiresAt {
+			return cached.version
+		}
+	}
+
+	result, _, _ := s.claudeCodeVersionSF.Do(claudeCodeClientVersionSFKey, func() (any, error) {
+		if cached, ok := s.claudeCodeVersionCache.Load().(*cachedClaudeCodeClientVersion); ok && cached != nil {
+			if time.Now().UnixNano() < cached.expiresAt {
+				return cached.version, nil
+			}
+		}
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), claudeCodeClientVersionDBTimeout)
+		defer cancel()
+		values, err := s.settingRepo.GetMultiple(dbCtx, []string{
+			SettingKeyClaudeCodeClientVersion,
+			SettingKeyClaudeCodeClientVersionSynced,
+		})
+		if err != nil {
+			slog.Warn("failed to get claude code client version setting", "error", err)
+			s.claudeCodeVersionCache.Store(&cachedClaudeCodeClientVersion{
+				version:   fallback,
+				expiresAt: time.Now().Add(claudeCodeClientVersionErrorTTL).UnixNano(),
+			})
+			return fallback, nil
+		}
+		version := NormalizeClaudeCodeClientVersion(values[SettingKeyClaudeCodeClientVersion])
+		if version == "" {
+			if raw := values[SettingKeyClaudeCodeClientVersion]; strings.TrimSpace(raw) != "" {
+				slog.Warn("ignoring invalid claude_code_client_version setting; falling back to the next layer",
+					"value", raw)
+			}
+			version = NormalizeClaudeCodeClientVersion(values[SettingKeyClaudeCodeClientVersionSynced])
+			if version == "" && strings.TrimSpace(values[SettingKeyClaudeCodeClientVersionSynced]) != "" {
+				slog.Warn("ignoring invalid claude_code_client_version_synced setting; falling back to the built-in pin",
+					"value", values[SettingKeyClaudeCodeClientVersionSynced])
+			}
+		}
+		if version == "" {
+			version = fallback
+		}
+		s.claudeCodeVersionCache.Store(&cachedClaudeCodeClientVersion{
+			version:   version,
+			expiresAt: time.Now().Add(claudeCodeClientVersionCacheTTL).UnixNano(),
+		})
+		return version, nil
+	})
+	if version, ok := result.(string); ok && version != "" {
+		return version
+	}
+	return fallback
+}
+
+// InvalidateClaudeCodeClientVersionCache 丢弃版本号缓存，下次读取回源。
+// 面板保存与自动同步写入后调用。
+func (s *SettingService) InvalidateClaudeCodeClientVersionCache() {
+	if s == nil {
+		return
+	}
+	s.claudeCodeVersionSF.Forget(claudeCodeClientVersionSFKey)
+	s.claudeCodeVersionCache.Store((*cachedClaudeCodeClientVersion)(nil))
+}
+
 // GetOpenAICodexCanonicalUserAgent 返回出站规范 Codex User-Agent。
 // 未填面板 UA 时按当前生效的客户端版本号拼出标准 Codex TUI UA。
 //
@@ -682,16 +818,14 @@ func (s *SettingService) GetOpenAICodexCanonicalUserAgent(ctx context.Context) s
 		return codexCLIUserAgent
 	}
 	version := s.GetOpenAICodexClientVersion(ctx)
-	ua := strings.TrimSpace(s.GetOpenAICodexUserAgent(ctx))
-	if ua == "" {
-		return buildCodexCLIUserAgent(version)
+	ua := s.GetOpenAICodexUserAgent(ctx)
+	if _, pairedUA, ok := openai.PairCodexClientIdentity(ua); ok {
+		if rebuilt := openai.SetCodexUserAgentVersion(pairedUA, version); rebuilt != "" {
+			return rebuilt
+		}
 	}
-	if rebuilt := openai.SetCodexUserAgentVersion(ua, version); rebuilt != "" {
-		return rebuilt
-	}
-	// 非 `{client}/{version}` 形态：交给 PairCodexClientIdentity 判定，
-	// 推导不出官方身份时由收口整体回退规范身份。
-	return ua
+	// Invalid fingerprints must not discard the independently resolved version.
+	return buildCodexCLIUserAgent(version)
 }
 
 var legacyClaudeCodeCodexWhitelistEntry = openai.AllowedClientEntry{

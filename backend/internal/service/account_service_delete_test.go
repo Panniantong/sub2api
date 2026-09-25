@@ -130,6 +130,10 @@ func (s *accountRepoStub) BindGroups(ctx context.Context, accountID int64, group
 	panic("unexpected BindGroups call")
 }
 
+func (s *accountRepoStub) SetGroupAllowedModels(ctx context.Context, accountID int64, allowed map[int64][]string) error {
+	panic("unexpected SetGroupAllowedModels call")
+}
+
 func (s *accountRepoStub) ListSchedulable(ctx context.Context) ([]Account, error) {
 	panic("unexpected ListSchedulable call")
 }

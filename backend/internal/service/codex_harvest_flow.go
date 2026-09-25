@@ -309,6 +309,10 @@ func recordCodexHarvestProbe(account *Account, model, result, node, detail strin
 	if result != "success" {
 		message, _, _ := describeCodexHarvestOutcome(result, detail, httpStatus, length, blocks, expectedLength, expectedBlocks, model, node)
 		event.Detail = message
+		// Native mint errors contain only controlled diagnostic categories.
+		if (result == "invalid_route" || result == "model_mismatch" || strings.HasPrefix(detail, "mint transport:")) && detail != "" {
+			event.Detail += " · " + detail
+		}
 		event.Reason = result
 	} else if strings.TrimSpace(detail) == "" && length > 0 {
 		event.Detail = fmt.Sprintf("合格门票 %d 字节 / %d 块", length, blocks)
@@ -339,6 +343,10 @@ func recordCodexHarvestTicketStore(account *Account, ticket *openAICodexTicket, 
 		event.AccountName = account.Name
 		event.ExpectedLength = openAICodexTicketExpectedLength(account)
 		event.ExpectedBlocks = openAICodexTicketExpectedBlocks(account)
+	}
+	if ticket.Length == 780 {
+		event.ExpectedLength = 780
+		event.ExpectedBlocks = 33
 	}
 	recordCodexHarvestFlow(event)
 }
@@ -727,9 +735,11 @@ func BuildCodexHarvestFlow(ctx context.Context, cfg *config.Config, settings *Se
 			scope.GroupIDs = []int64{}
 		}
 	}
+	policy := CodexHarvestControls{Transport: "sse", TargetGateway: "unified-95"}
 	var runtime *CodexHarvestRuntime
 	if len(controls) > 0 && controls[0] != nil {
 		v, _, _ := controls[0].Controls(ctx)
+		policy = v
 		applyHarvestSpeed(&ticketCfg, v.Speed)
 		state := controls[0].Runtime()
 		runtime = &state
@@ -793,6 +803,13 @@ func BuildCodexHarvestFlow(ctx context.Context, cfg *config.Config, settings *Se
 		}
 		for i := range item.Tickets {
 			ticket := &item.Tickets[i]
+			if ticket.Length == 780 && (ticket.Transport != policy.Transport || !codex780GatewayAllowed(ticket.Gateway, policy.TargetGateway)) {
+				ticket.Ready = false
+				ticket.RemainingSeconds = 0
+				ticket.ExpiresAt = nil
+				ticket.StandbyExpiresAt = nil
+				ticket.Blocked = ticketCfg.FailClosed && !item.SkipHarvest
+			}
 			if ticketCfg.FailClosed && !item.SkipHarvest && !item.InScope {
 				ticket.Blocked = true
 			}
@@ -885,6 +902,12 @@ func buildCodexHarvestFlowStages(snapshot CodexHarvestFlowSnapshot) []CodexHarve
 			node.Detail = event.Node
 		}
 	}
+	// A directed probe uses its own listener, not CODEX-ROTATE's observed
+	// connection. Prefer the probe's confirmed attribution in the flow stage.
+	if event, ok := last["probe"]; ok && event.Node != "" {
+		at := event.At
+		node.At, node.Node, node.Detail = &at, event.Node, event.Node
+	}
 
 	probe := stageFromEvent("probe", last["probe"], "waiting for harvest probe")
 	if event, ok := last["probe"]; ok {
@@ -942,13 +965,21 @@ func buildCodexHarvestFlowStages(snapshot CodexHarvestFlowSnapshot) []CodexHarve
 }
 
 func shapeStageFromEvents(last map[string]CodexHarvestFlowEvent, ready int) CodexHarvestFlowStage {
-	shape := CodexHarvestFlowStage{ID: "shape", Status: "idle", Detail: "waiting for 292 check"}
+	shape := CodexHarvestFlowStage{ID: "shape", Status: "idle", Detail: "waiting for ticket validation"}
 	latest := last["probe"]
 	hit := last["probe:probe_hit"]
 	if flowEventEmpty(latest) && flowEventEmpty(hit) {
 		return shape
 	}
-	if latest.HTTPStatus == 200 && latest.Length > 0 && (latest.Kind != "probe_hit" || (latest.ExpectedLength > 0 && latest.Length != latest.ExpectedLength)) {
+	if latest.Result != "invalid_state" && latest.Kind != "probe_hit" && latest.Length == latest.ExpectedLength && latest.Blocks == latest.ExpectedBlocks && latest.Length > 0 {
+		at := latest.At
+		shape.At, shape.Model = &at, latest.Model
+		copyFlowMetrics(&shape, latest)
+		shape.Status = "warn"
+		shape.Detail = "ticket shape matches; validation incomplete"
+		return shape
+	}
+	if (latest.HTTPStatus == 200 || latest.HTTPStatus == 101) && latest.Length > 0 && (latest.Kind != "probe_hit" || (latest.ExpectedLength > 0 && latest.Length != latest.ExpectedLength)) {
 		at := latest.At
 		shape.At = &at
 		shape.Model = latest.Model
@@ -1026,6 +1057,14 @@ func copyFlowMetrics(stage *CodexHarvestFlowStage, event CodexHarvestFlowEvent) 
 }
 
 func describeCodexHarvestOutcome(kind, raw string, status, length, blocks, expectedLen, expectedBlk int, model, node string) (message, level, detail string) {
+	if kind == "model_mismatch" {
+		_, _, detail = describeCodexProbeFailure(raw, status, model, node)
+		return "上游模型声明与请求不一致，门票未入库", "WARN", detail
+	}
+	if kind == "invalid_route" {
+		_, _, detail = describeCodexProbeFailure(raw, status, model, node)
+		return fmt.Sprintf("已收到 %d 字节票体，但路由 Cookie 验收失败，未入库", length), "WARN", detail
+	}
 	if kind == "success" {
 		detailParts := []string{fmt.Sprintf("len=%d blk=%d", length, blocks)}
 		if node != "" {

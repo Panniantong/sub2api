@@ -5,6 +5,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 // maxPersistedSessionIDLength bounds the persisted client session identifier to the
@@ -19,6 +20,66 @@ var clientSessionIDHeaders = append(
 	append([]string(nil), explicitOpenAIHeaderSessionNames...),
 	claudeCodeSessionHeader,
 )
+
+const (
+	openAIClientSessionKindThread  = "thread"
+	openAIClientSessionKindSession = "session"
+)
+
+var openAIThreadIdentityHeaders = []string{
+	"conversation_id",
+	"thread_id",
+	"thread-id",
+	codeBuddyConversationHeader,
+}
+
+var openAISessionIdentityHeaders = []string{
+	"session_id",
+	"session-id",
+	openCodeSessionIDHeader,
+	openCodeNativeSessionHeader,
+}
+
+type openAIClientSessionIdentity struct {
+	kind  string
+	value string
+}
+
+type OpenAIClientSessionIdentityStatus string
+
+const (
+	OpenAIClientSessionIdentityResolved OpenAIClientSessionIdentityStatus = "resolved"
+	OpenAIClientSessionIdentityMissing  OpenAIClientSessionIdentityStatus = "missing"
+	OpenAIClientSessionIdentityConflict OpenAIClientSessionIdentityStatus = "conflict"
+	OpenAIClientSessionIdentityInvalid  OpenAIClientSessionIdentityStatus = "invalid"
+)
+
+const (
+	OpenAIClientSessionIdentitySourceNone       = "none"
+	OpenAIClientSessionIdentitySourceHeader     = "header"
+	OpenAIClientSessionIdentitySourceBody       = "body"
+	OpenAIClientSessionIdentitySourceHeaderBody = "header_body"
+	OpenAIClientSessionIdentitySourceConnection = "connection"
+)
+
+// OpenAIClientSessionIdentityMetadata contains only non-sensitive resolution
+// metadata. It is safe to use in structured logs and counters because it never
+// exposes the client-provided identity value.
+type OpenAIClientSessionIdentityMetadata struct {
+	Status OpenAIClientSessionIdentityStatus
+	Kind   string
+	Source string
+}
+
+type openAIClientSessionIdentityResolution struct {
+	metadata OpenAIClientSessionIdentityMetadata
+	identity openAIClientSessionIdentity
+}
+
+type openAIIdentityValue struct {
+	value  string
+	status OpenAIClientSessionIdentityStatus
+}
 
 // ClaudeCodeSessionIDFromHeader returns the stable Claude Code conversation
 // identifier carried by X-Claude-Code-Session-Id. It is intentionally exposed
@@ -55,6 +116,168 @@ func ExtractClientSessionID(c *gin.Context) string {
 		}
 	}
 	return ""
+}
+
+// ExtractOpenAIClientSessionID resolves the explicit OpenAI conversation
+// identity from request headers and client_metadata. Thread identities take
+// precedence over session identities. A conflicting header/body value of the
+// same kind is rejected instead of silently choosing one, so usage correlation
+// and Cyber blocking cannot disagree about which conversation was identified.
+// When no OpenAI identity is present, the legacy Claude Code session header is
+// retained for usage correlation. It is not used by Cyber block-key derivation.
+//
+// prompt_cache_key and X-Session-Affinity are intentionally excluded: they are
+// scheduling/cache hints, not reliable conversation identities.
+func ExtractOpenAIClientSessionID(c *gin.Context, body []byte) string {
+	resolution := resolveOpenAIClientSessionIdentity(c, body)
+	if resolution.metadata.Status != OpenAIClientSessionIdentityResolved {
+		if resolution.metadata.Status == OpenAIClientSessionIdentityMissing {
+			return ClaudeCodeSessionIDFromHeader(c)
+		}
+		return ""
+	}
+	return resolution.identity.value
+}
+
+// InspectOpenAIClientSessionIdentity resolves the request identity and returns
+// only its non-sensitive status, kind and source. Raw identity values are never
+// exposed through this API.
+func InspectOpenAIClientSessionIdentity(c *gin.Context, body []byte) OpenAIClientSessionIdentityMetadata {
+	return resolveOpenAIClientSessionIdentity(c, body).metadata
+}
+
+func resolveOpenAIClientSessionIdentity(c *gin.Context, body []byte) openAIClientSessionIdentityResolution {
+	if c == nil || c.Request == nil {
+		return missingOpenAIClientSessionIdentity()
+	}
+
+	view := openAIRequestPayloadView(body)
+	bodyThread, invalidBodyThread := openAIClientMetadataIdentity(view, "client_metadata.thread_id")
+	bodySession, invalidBodySession := openAIClientMetadataIdentity(view, "client_metadata.session_id")
+
+	headerThread := openAIIdentityHeader(c, openAIThreadIdentityHeaders)
+	if headerThread.status == OpenAIClientSessionIdentityInvalid || invalidBodyThread {
+		return rejectedOpenAIClientSessionIdentity(OpenAIClientSessionIdentityInvalid, openAIClientSessionKindThread, identityFailureSource(headerThread, invalidBodyThread))
+	}
+	if headerThread.status == OpenAIClientSessionIdentityConflict || openAIIdentityValuesConflict(headerThread.value, bodyThread) {
+		return rejectedOpenAIClientSessionIdentity(OpenAIClientSessionIdentityConflict, openAIClientSessionKindThread, identityConflictSource(headerThread, bodyThread))
+	}
+	if headerThread.value != "" {
+		source := OpenAIClientSessionIdentitySourceHeader
+		if bodyThread != "" {
+			source = OpenAIClientSessionIdentitySourceHeaderBody
+		}
+		return resolvedOpenAIClientSessionIdentity(openAIClientSessionKindThread, headerThread.value, source)
+	}
+	if bodyThread != "" {
+		return resolvedOpenAIClientSessionIdentity(openAIClientSessionKindThread, bodyThread, OpenAIClientSessionIdentitySourceBody)
+	}
+
+	headerSession := openAIIdentityHeader(c, openAISessionIdentityHeaders)
+	if headerSession.status == OpenAIClientSessionIdentityInvalid || invalidBodySession {
+		return rejectedOpenAIClientSessionIdentity(OpenAIClientSessionIdentityInvalid, openAIClientSessionKindSession, identityFailureSource(headerSession, invalidBodySession))
+	}
+	if headerSession.status == OpenAIClientSessionIdentityConflict || openAIIdentityValuesConflict(headerSession.value, bodySession) {
+		return rejectedOpenAIClientSessionIdentity(OpenAIClientSessionIdentityConflict, openAIClientSessionKindSession, identityConflictSource(headerSession, bodySession))
+	}
+	if headerSession.value != "" {
+		source := OpenAIClientSessionIdentitySourceHeader
+		if bodySession != "" {
+			source = OpenAIClientSessionIdentitySourceHeaderBody
+		}
+		return resolvedOpenAIClientSessionIdentity(openAIClientSessionKindSession, headerSession.value, source)
+	}
+	if bodySession != "" {
+		return resolvedOpenAIClientSessionIdentity(openAIClientSessionKindSession, bodySession, OpenAIClientSessionIdentitySourceBody)
+	}
+	return missingOpenAIClientSessionIdentity()
+}
+
+func missingOpenAIClientSessionIdentity() openAIClientSessionIdentityResolution {
+	return openAIClientSessionIdentityResolution{metadata: OpenAIClientSessionIdentityMetadata{
+		Status: OpenAIClientSessionIdentityMissing,
+		Source: OpenAIClientSessionIdentitySourceNone,
+	}}
+}
+
+func rejectedOpenAIClientSessionIdentity(status OpenAIClientSessionIdentityStatus, kind, source string) openAIClientSessionIdentityResolution {
+	return openAIClientSessionIdentityResolution{metadata: OpenAIClientSessionIdentityMetadata{
+		Status: status,
+		Kind:   kind,
+		Source: source,
+	}}
+}
+
+func resolvedOpenAIClientSessionIdentity(kind, value, source string) openAIClientSessionIdentityResolution {
+	return openAIClientSessionIdentityResolution{
+		metadata: OpenAIClientSessionIdentityMetadata{
+			Status: OpenAIClientSessionIdentityResolved,
+			Kind:   kind,
+			Source: source,
+		},
+		identity: openAIClientSessionIdentity{kind: kind, value: value},
+	}
+}
+
+func identityFailureSource(header openAIIdentityValue, invalidBody bool) string {
+	if header.status == OpenAIClientSessionIdentityInvalid && invalidBody {
+		return OpenAIClientSessionIdentitySourceHeaderBody
+	}
+	if header.status == OpenAIClientSessionIdentityInvalid {
+		return OpenAIClientSessionIdentitySourceHeader
+	}
+	return OpenAIClientSessionIdentitySourceBody
+}
+
+func identityConflictSource(header openAIIdentityValue, body string) string {
+	if header.status == OpenAIClientSessionIdentityConflict {
+		return OpenAIClientSessionIdentitySourceHeader
+	}
+	if header.value != "" && body != "" {
+		return OpenAIClientSessionIdentitySourceHeaderBody
+	}
+	return OpenAIClientSessionIdentitySourceNone
+}
+
+func openAIIdentityHeader(c *gin.Context, headers []string) openAIIdentityValue {
+	var resolved string
+	for _, header := range headers {
+		raw := c.GetHeader(header)
+		if strings.TrimSpace(raw) == "" {
+			continue
+		}
+		value := sanitizeSessionID(raw)
+		if value == "" {
+			return openAIIdentityValue{status: OpenAIClientSessionIdentityInvalid}
+		}
+		if resolved != "" && resolved != value {
+			return openAIIdentityValue{status: OpenAIClientSessionIdentityConflict}
+		}
+		resolved = value
+	}
+	if resolved == "" {
+		return openAIIdentityValue{status: OpenAIClientSessionIdentityMissing}
+	}
+	return openAIIdentityValue{value: resolved, status: OpenAIClientSessionIdentityResolved}
+}
+
+func openAIClientMetadataIdentity(view gjson.Result, path string) (string, bool) {
+	result := view.Get(path)
+	if !result.Exists() {
+		return "", false
+	}
+	if result.Type != gjson.String {
+		return "", true
+	}
+	if strings.TrimSpace(result.String()) == "" {
+		return "", false
+	}
+	value := sanitizeSessionID(result.String())
+	return value, value == ""
+}
+
+func openAIIdentityValuesConflict(headerValue, bodyValue string) bool {
+	return headerValue != "" && bodyValue != "" && headerValue != bodyValue
 }
 
 // sanitizeSessionID normalizes a raw client-supplied session identifier for safe

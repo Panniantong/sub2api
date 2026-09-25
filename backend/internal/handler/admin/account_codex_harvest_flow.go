@@ -88,6 +88,11 @@ func (h *AccountHandler) ManualCodexHarvest(c *gin.Context) {
 		return
 	}
 
+	ctx, err := service.WithCodexHarvestEdgeIP(c.Request.Context(), c.GetHeader("X-Edge-IP"))
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
@@ -98,7 +103,6 @@ func (h *AccountHandler) ManualCodexHarvest(c *gin.Context) {
 		return
 	}
 
-	ctx := c.Request.Context()
 	emit := func(p service.ManualHarvestProgress) {
 		if ctx.Err() != nil {
 			return

@@ -1205,6 +1205,7 @@ func (h *GatewayHandler) CodexModels(c *gin.Context) {
 	}
 	modelIDs := h.codexModelIDsForGroup(c.Request.Context(), apiKey.Group, forcedPlatform)
 	modelIDs = service.FilterCodexModelIDsForGroup(modelIDs, apiKey.Group)
+	modelIDs = service.FilterUserGroupDeniedModelIDs(modelIDs, apiKey.DeniedModelsInGroup())
 	body, err := h.gatewayService.BuildCodexModelsManifestForGroup(
 		c.Request.Context(),
 		apiKey.Group,
@@ -1375,7 +1376,7 @@ func writeGrokModelsList(c *gin.Context, modelIDs []string) {
 
 func grokModelSupportsConfigurableReasoning(modelID string) bool {
 	switch strings.ToLower(strings.TrimSpace(modelID)) {
-	case "grok-4.6", "grok-4.6-latest", "grok-4.5", "grok-4.5-latest", "grok", "grok-latest", "grok-build", "grok-build-latest", "grok-build-0.1":
+	case "grok-4.7", "grok-4.7-latest", "grok-4.6", "grok-4.6-latest", "grok-4.5", "grok-4.5-latest", "grok", "grok-latest", "grok-build", "grok-build-latest", "grok-build-0.1":
 		return true
 	default:
 		return false
@@ -1499,10 +1500,13 @@ func mergeModelIDs(primary, secondary []string) []string {
 // 分组级模型白名单开启时按白名单过滤。
 func (h *GatewayHandler) AntigravityModels(c *gin.Context) {
 	models := antigravity.DefaultModels()
-	if apiKey, ok := middleware2.GetAPIKeyFromContext(c); ok && apiKey != nil && apiKey.Group != nil && apiKey.Group.ModelAllowlistEnabled() {
+	if apiKey, ok := middleware2.GetAPIKeyFromContext(c); ok && apiKey != nil &&
+		((apiKey.Group != nil && apiKey.Group.ModelAllowlistEnabled()) || len(apiKey.DeniedModelsInGroup()) > 0) {
+		allowlistEnabled := apiKey.Group != nil && apiKey.Group.ModelAllowlistEnabled()
+		denied := apiKey.DeniedModelsInGroup()
 		filtered := make([]antigravity.ClaudeModel, 0, len(models))
 		for _, model := range models {
-			if apiKey.Group.ModelAllowlist.Allows(model.ID) {
+			if (!allowlistEnabled || apiKey.Group.ModelAllowlist.Allows(model.ID)) && !service.UserGroupDeniesModel(denied, model.ID) {
 				filtered = append(filtered, model)
 			}
 		}

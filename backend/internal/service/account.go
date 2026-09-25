@@ -35,15 +35,19 @@ type Account struct {
 	Priority                int
 	// RateMultiplier 账号计费倍率（>=0，允许 0 表示该账号计费为 0）。
 	// 使用指针用于兼容旧版本调度缓存（Redis）中缺字段的情况：nil 表示按 1.0 处理。
-	RateMultiplier     *float64
-	LoadFactor         *int // 调度负载因子；nil 表示使用 Concurrency
-	Status             string
-	ErrorMessage       string
-	LastUsedAt         *time.Time
-	ExpiresAt          *time.Time
-	AutoPauseOnExpired bool
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	RateMultiplier *float64
+	// GroupRateMultiplier is an account-level multiplier applied to the resolved
+	// user/group billing multiplier. It defaults to 1.0 and is independent from
+	// RateMultiplier, which only affects account-side cost statistics.
+	GroupRateMultiplier *float64
+	LoadFactor          *int // 调度负载因子；nil 表示使用 Concurrency
+	Status              string
+	ErrorMessage        string
+	LastUsedAt          *time.Time
+	ExpiresAt           *time.Time
+	AutoPauseOnExpired  bool
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 
 	Schedulable bool
 
@@ -176,6 +180,15 @@ func (a *Account) BillingRateMultiplier() float64 {
 		return 1.0
 	}
 	return *a.RateMultiplier
+}
+
+// UserGroupRateMultiplier returns the account-level multiplier used with the
+// resolved user/group rate. Nil and invalid values preserve the 1.0 default.
+func (a *Account) UserGroupRateMultiplier() float64 {
+	if a == nil || a.GroupRateMultiplier == nil || *a.GroupRateMultiplier < 0 {
+		return 1.0
+	}
+	return *a.GroupRateMultiplier
 }
 
 func (a *Account) EffectiveLoadFactor() int {
@@ -2043,6 +2056,8 @@ func (a *Account) SupportsOpenAIImageCapability(capability OpenAIImagesCapabilit
 		return false
 	}
 	switch capability {
+	case OpenAIImagesCapabilityAPIKey:
+		return a.Type == AccountTypeAPIKey
 	case OpenAIImagesCapabilityBasic, OpenAIImagesCapabilityNative:
 		return a.Type == AccountTypeOAuth || a.Type == AccountTypeSetupToken || a.Type == AccountTypeAPIKey
 	default:
@@ -2118,6 +2133,9 @@ func (a *Account) IsOveragesEnabled() bool {
 // 兼容字段：accounts.extra.openai_oauth_passthrough（历史 OAuth 开关）。
 // 字段缺失或类型不正确时，按 false（关闭）处理。
 func (a *Account) IsOpenAIPassthroughEnabled() bool {
+	if a.IsCopilotSDKEnabled() {
+		return true
+	}
 	if a == nil || !a.IsOpenAI() || a.Extra == nil {
 		return false
 	}
@@ -2128,6 +2146,16 @@ func (a *Account) IsOpenAIPassthroughEnabled() bool {
 		return enabled
 	}
 	return false
+}
+
+// IsCopilotSDKEnabled selects the stateful Responses sidecar contract. The
+// endpoint and bearer key belong to the sidecar, not GitHub or ChatGPT OAuth.
+func (a *Account) IsCopilotSDKEnabled() bool {
+	if a == nil || a.Platform != PlatformOpenAI || a.Type != AccountTypeAPIKey {
+		return false
+	}
+	enabled, _ := a.Extra["openai_copilot_sdk"].(bool)
+	return enabled
 }
 
 // IsOpenAIResponsesWebSocketV2Enabled 返回 OpenAI 账号是否开启 Responses WebSocket v2。
@@ -2144,6 +2172,9 @@ func (a *Account) IsOpenAIPassthroughEnabled() bool {
 // 1. 按账号类型读取分类型字段
 // 2. 分类型字段缺失时，回退兼容字段
 func (a *Account) IsOpenAIResponsesWebSocketV2Enabled() bool {
+	if a.IsCopilotSDKEnabled() {
+		return false
+	}
 	if a == nil || !a.IsOpenAI() || a.Extra == nil {
 		return false
 	}
@@ -2212,6 +2243,9 @@ func normalizeOpenAIWSIngressDefaultMode(mode string) string {
 // 3. 兼容 enabled 旧字段（bool）
 // 4. defaultMode（非法时回退 ctx_pool）
 func (a *Account) ResolveOpenAIResponsesWebSocketV2Mode(defaultMode string) string {
+	if a.IsCopilotSDKEnabled() {
+		return OpenAIWSIngressModeOff
+	}
 	resolvedDefault := normalizeOpenAIWSIngressDefaultMode(defaultMode)
 	if a == nil || !a.IsOpenAI() {
 		return OpenAIWSIngressModeOff
@@ -2282,6 +2316,9 @@ func (a *Account) ResolveOpenAIResponsesWebSocketV2Mode(defaultMode string) stri
 // IsOpenAIWSForceHTTPEnabled 返回账号级"强制 HTTP"开关。
 // 字段：accounts.extra.openai_ws_force_http。
 func (a *Account) IsOpenAIWSForceHTTPEnabled() bool {
+	if a.IsCopilotSDKEnabled() {
+		return true
+	}
 	if a == nil || !a.IsOpenAI() || a.Extra == nil {
 		return false
 	}

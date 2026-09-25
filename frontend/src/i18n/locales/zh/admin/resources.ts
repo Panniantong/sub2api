@@ -443,9 +443,18 @@ export default {
         conditionType: '条件类型',
         conditionSubscription: '订阅套餐',
         conditionBalance: '余额',
+        conditionUser: '指定用户',
         operator: '运算符',
         balanceValue: '余额阈值',
-        selectPackages: '选择套餐'
+        selectPackages: '选择套餐',
+        targetingUsers: '指定用户',
+        targetingUsersHint: '只有选中的用户能看到这条公告，适合单独提醒或警告某个用户。通知方式选「弹窗」时，对方登录或刷新页面后会弹出提醒，直到点「标记已读」为止。',
+        selectUsers: '选择用户',
+        selectUsersRequired: '请至少选择一个用户',
+        searchUsersPlaceholder: '输入邮箱或用户名搜索',
+        noUsersFound: '没有找到匹配的用户',
+        noUsersSelected: '还没有选择用户',
+        userUnavailable: '用户不存在'
       },
       operators: {
         gt: '>',
@@ -456,6 +465,7 @@ export default {
       },
       targetingSummaryAll: '全部用户',
       targetingSummaryCustom: '自定义（{groups} 组）',
+      targetingSummaryUsers: '指定用户（{count} 人）',
       timeImmediate: '立即',
       timeNever: '永久',
       readStatus: '已读情况',

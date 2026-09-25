@@ -914,6 +914,7 @@ func buildSchedulerMetadataAccount(account service.Account) service.Account {
 		LoadFactor:              account.LoadFactor,
 		Priority:                account.Priority,
 		RateMultiplier:          account.RateMultiplier,
+		GroupRateMultiplier:     account.GroupRateMultiplier,
 		Status:                  account.Status,
 		LastUsedAt:              account.LastUsedAt,
 		ExpiresAt:               account.ExpiresAt,
@@ -946,11 +947,13 @@ func filterSchedulerAccountGroups(accountGroups []service.AccountGroup) []servic
 		if ag.GroupID <= 0 {
 			continue
 		}
+		// 候选过滤读的是本投影：裁掉 AllowedModels，分组内的模型限制在选号阶段就会失效。
 		filtered = append(filtered, service.AccountGroup{
-			AccountID: ag.AccountID,
-			GroupID:   ag.GroupID,
-			Priority:  ag.Priority,
-			CreatedAt: ag.CreatedAt,
+			AccountID:     ag.AccountID,
+			GroupID:       ag.GroupID,
+			Priority:      ag.Priority,
+			AllowedModels: ag.AllowedModels,
+			CreatedAt:     ag.CreatedAt,
 		})
 	}
 	if len(filtered) == 0 {
@@ -1040,6 +1043,11 @@ func filterSchedulerExtra(extra map[string]any) map[string]any {
 		"mixed_scheduling",
 		"window_cost_limit",
 		"window_cost_sticky_reserve",
+		// RPM 门与窗口费用门一样跑在本投影上：isAccountSchedulableForRPM 读 base_rpm，
+		// 缺失时 GetBaseRPM() 返回 0 并直接放行，已配置限流的账号会被超额调度。
+		"base_rpm",
+		"rpm_strategy",
+		"rpm_sticky_buffer",
 		"max_sessions",
 		"session_idle_timeout_minutes",
 		"openai_oauth_responses_websockets_v2_enabled",

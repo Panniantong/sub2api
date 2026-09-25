@@ -505,6 +505,9 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		if account.Platform != PlatformGrok && isOpenAIResponsesLiteWebSocketPayload(payload) {
 			upstreamReq.Header.Set(responsesLiteHeader, "true")
 		}
+		if err := applyMappedGPT55LiteCompatibility(upstreamReq, account, requestBody); err != nil {
+			return nil, err
+		}
 		return upstreamReq, nil
 	}
 	if account.Platform == PlatformGrok {
@@ -853,7 +856,9 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 					s.handleGrokAccountUpstreamError(ctx, account, statusCode, resp.Header, upstreamMessage)
 				}
 			}
-			if !wroteDownstream && shouldFailover && (turn == 1 || statusCode == http.StatusTooManyRequests) {
+			// A disconnected client needs this attempt drained for usage, not replayed,
+			// even when only non-semantic heartbeats were delivered.
+			if !clientDisconnected && !wroteDownstream && shouldFailover && (turn == 1 || statusCode == http.StatusTooManyRequests) {
 				if account.Platform == PlatformGrok {
 					return nil, newOpenAIUpstreamFailoverError(statusCode, resp.Header, upstreamMessage, errMessage, false)
 				}
@@ -891,11 +896,12 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			}
 		}
 		if !clientDisconnected && !suppressClientMessage {
+			isKeepalive := eventType == "keepalive"
 			stageBeforeSemanticOutput := turn == 1 && account.Platform == PlatformOpenAI && !wroteDownstream
 			commitStagedMessages := !stageBeforeSemanticOutput ||
 				openAIStreamDataStartsClientOutput(string(clientMessage), eventType) ||
 				isOpenAIWSTerminalEvent(eventType)
-			if stageBeforeSemanticOutput && !commitStagedMessages {
+			if stageBeforeSemanticOutput && !commitStagedMessages && !isKeepalive {
 				if pendingClientMessageBytes+int64(len(clientMessage)) > openAIFirstOutputStageMaxBytes {
 					return nil, s.newOpenAIStreamFailoverError(
 						c,
@@ -910,9 +916,15 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 				pendingClientMessages = append(pendingClientMessages, append([]byte(nil), clientMessage...))
 				pendingClientMessageBytes += int64(len(clientMessage))
 			} else {
-				messages := append(pendingClientMessages, clientMessage)
-				pendingClientMessages = nil
-				pendingClientMessageBytes = 0
+				// Keep the client connection alive without committing this attempt
+				// or exposing its staged lifecycle metadata.
+				var messages [][]byte
+				if !isKeepalive {
+					messages = pendingClientMessages
+					pendingClientMessages = nil
+					pendingClientMessageBytes = 0
+				}
+				messages = append(messages, clientMessage)
 				for _, message := range messages {
 					if err := writeClientMessage(message); err != nil {
 						if isOpenAIWSClientDisconnectError(err) {
@@ -933,7 +945,9 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 							wroteDownstream,
 						)
 					}
-					wroteDownstream = true
+					if !isKeepalive {
+						wroteDownstream = true
+					}
 				}
 			}
 		}
@@ -984,7 +998,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	}
 	if err := scanner.Err(); err != nil {
 		streamErr := fmt.Errorf("read upstream http bridge stream: %w", err)
-		if turn == 1 && !wroteDownstream {
+		if turn == 1 && !clientDisconnected && !wroteDownstream {
 			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, streamErr, true)
 		}
 		return resultWithUsage(), streamErr
@@ -993,7 +1007,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	if sawDone {
 		terminalErr = errors.New("upstream http bridge stream sent [DONE] before terminal event")
 	}
-	if turn == 1 && !wroteDownstream {
+	if turn == 1 && !clientDisconnected && !wroteDownstream {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, terminalErr, true)
 	}
 	return resultWithUsage(), terminalErr

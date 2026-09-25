@@ -50,6 +50,12 @@ func (_c *AccountGroupCreate) SetNillablePriority(v *int) *AccountGroupCreate {
 	return _c
 }
 
+// SetAllowedModels sets the "allowed_models" field.
+func (_c *AccountGroupCreate) SetAllowedModels(v []string) *AccountGroupCreate {
+	_c.mutation.SetAllowedModels(v)
+	return _c
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (_c *AccountGroupCreate) SetCreatedAt(v time.Time) *AccountGroupCreate {
 	_c.mutation.SetCreatedAt(v)
@@ -165,6 +171,10 @@ func (_c *AccountGroupCreate) createSpec() (*AccountGroup, *sqlgraph.CreateSpec)
 	if value, ok := _c.mutation.Priority(); ok {
 		_spec.SetField(accountgroup.FieldPriority, field.TypeInt, value)
 		_node.Priority = value
+	}
+	if value, ok := _c.mutation.AllowedModels(); ok {
+		_spec.SetField(accountgroup.FieldAllowedModels, field.TypeJSON, value)
+		_node.AllowedModels = value
 	}
 	if value, ok := _c.mutation.CreatedAt(); ok {
 		_spec.SetField(accountgroup.FieldCreatedAt, field.TypeTime, value)
@@ -298,6 +308,24 @@ func (u *AccountGroupUpsert) AddPriority(v int) *AccountGroupUpsert {
 	return u
 }
 
+// SetAllowedModels sets the "allowed_models" field.
+func (u *AccountGroupUpsert) SetAllowedModels(v []string) *AccountGroupUpsert {
+	u.Set(accountgroup.FieldAllowedModels, v)
+	return u
+}
+
+// UpdateAllowedModels sets the "allowed_models" field to the value that was provided on create.
+func (u *AccountGroupUpsert) UpdateAllowedModels() *AccountGroupUpsert {
+	u.SetExcluded(accountgroup.FieldAllowedModels)
+	return u
+}
+
+// ClearAllowedModels clears the value of the "allowed_models" field.
+func (u *AccountGroupUpsert) ClearAllowedModels() *AccountGroupUpsert {
+	u.SetNull(accountgroup.FieldAllowedModels)
+	return u
+}
+
 // UpdateNewValues updates the mutable fields using the new values that were set on create.
 // Using this option is equivalent to using:
 //
@@ -389,6 +417,27 @@ func (u *AccountGroupUpsertOne) AddPriority(v int) *AccountGroupUpsertOne {
 func (u *AccountGroupUpsertOne) UpdatePriority() *AccountGroupUpsertOne {
 	return u.Update(func(s *AccountGroupUpsert) {
 		s.UpdatePriority()
+	})
+}
+
+// SetAllowedModels sets the "allowed_models" field.
+func (u *AccountGroupUpsertOne) SetAllowedModels(v []string) *AccountGroupUpsertOne {
+	return u.Update(func(s *AccountGroupUpsert) {
+		s.SetAllowedModels(v)
+	})
+}
+
+// UpdateAllowedModels sets the "allowed_models" field to the value that was provided on create.
+func (u *AccountGroupUpsertOne) UpdateAllowedModels() *AccountGroupUpsertOne {
+	return u.Update(func(s *AccountGroupUpsert) {
+		s.UpdateAllowedModels()
+	})
+}
+
+// ClearAllowedModels clears the value of the "allowed_models" field.
+func (u *AccountGroupUpsertOne) ClearAllowedModels() *AccountGroupUpsertOne {
+	return u.Update(func(s *AccountGroupUpsert) {
+		s.ClearAllowedModels()
 	})
 }
 
@@ -626,6 +675,27 @@ func (u *AccountGroupUpsertBulk) AddPriority(v int) *AccountGroupUpsertBulk {
 func (u *AccountGroupUpsertBulk) UpdatePriority() *AccountGroupUpsertBulk {
 	return u.Update(func(s *AccountGroupUpsert) {
 		s.UpdatePriority()
+	})
+}
+
+// SetAllowedModels sets the "allowed_models" field.
+func (u *AccountGroupUpsertBulk) SetAllowedModels(v []string) *AccountGroupUpsertBulk {
+	return u.Update(func(s *AccountGroupUpsert) {
+		s.SetAllowedModels(v)
+	})
+}
+
+// UpdateAllowedModels sets the "allowed_models" field to the value that was provided on create.
+func (u *AccountGroupUpsertBulk) UpdateAllowedModels() *AccountGroupUpsertBulk {
+	return u.Update(func(s *AccountGroupUpsert) {
+		s.UpdateAllowedModels()
+	})
+}
+
+// ClearAllowedModels clears the value of the "allowed_models" field.
+func (u *AccountGroupUpsertBulk) ClearAllowedModels() *AccountGroupUpsertBulk {
+	return u.Update(func(s *AccountGroupUpsert) {
+		s.ClearAllowedModels()
 	})
 }
 

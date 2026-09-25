@@ -26,7 +26,7 @@ describe('Mihomo settings', () => {
     await wrapper.get('textarea').setValue('https://example.org/unsaved')
     await wrapper.findAll('button').find(b=>b.text().includes('快捷'))!.trigger('click')
     await wrapper.findAll('button').find(b=>b.text()==='保存地区规则')!.trigger('click');await flushPromises()
-    expect(post).toHaveBeenCalledWith('/admin/system/mihomo',expect.objectContaining({action:'country_filter',subscriptions:[],country_filter:{mode:'exclude',codes:['HK'],allow_unknown:false}}))
+    expect(post).toHaveBeenCalledWith('/admin/system/mihomo',expect.objectContaining({action:'country_filter',subscriptions:[],country_filter:{mode:'exclude',codes:['HK'],allow_unknown:false,dynamic_provider_managed:false}}))
     expect(wrapper.get<HTMLTextAreaElement>('textarea').element.value).toBe('https://example.org/unsaved')
     wrapper.unmount()
   })
@@ -55,5 +55,40 @@ describe('Mihomo settings', () => {
     await wrapper.findAll('button').find(b => b.text() === '保存并应用')!.trigger('click'); await flushPromises()
     expect(post).toHaveBeenCalledWith('/admin/system/mihomo', expect.objectContaining({ action: 'apply', subscriptions: ['https://example.org/a?token=secret', 'https://example.org/b'] }))
     expect(wrapper.get<HTMLTextAreaElement>('textarea').element.value).toBe(''); wrapper.unmount()
+  })
+  it('applies dynamic proxies without sending them through the subscription URL field', async () => {
+    get.mockResolvedValue({ data: { ...base, installed: true, running: true } })
+    const wrapper = mount(MihomoSettings); await flushPromises()
+    await wrapper.get('#mihomo-dynamic-proxies').setValue('user:pass@proxy.example:2000\nuser2:pass2@proxy.example:2001')
+    await wrapper.findAll('button').find(b => b.text() === '应用动态代理')!.trigger('click'); await flushPromises()
+    expect(post).toHaveBeenCalledWith('/admin/system/mihomo', expect.objectContaining({
+      action: 'apply_dynamic',
+      subscriptions: [],
+      dynamic_proxies: ['http://user:pass@proxy.example:2000', 'http://user2:pass2@proxy.example:2001']
+    }))
+    expect(wrapper.get<HTMLTextAreaElement>('#mihomo-dynamic-proxies').element.value).toBe('')
+    wrapper.unmount()
+  })
+  it('uses the selected protocol while preserving explicit prefixes and failed drafts', async () => {
+    get.mockResolvedValue({ data: { ...base, installed: true, running: true } })
+    post.mockRejectedValue({ message: 'dynamic proxy line 2: invalid proxy format' })
+    const wrapper = mount(MihomoSettings); await flushPromises()
+    await wrapper.get('#mihomo-dynamic-protocol').setValue('socks5')
+    const draft = 'proxy.example:2000:user:pass\nhttps://user:pass@proxy.example:2001'
+    await wrapper.get('#mihomo-dynamic-proxies').setValue(draft)
+    await wrapper.findAll('button').find(b => b.text() === '应用动态代理')!.trigger('click'); await flushPromises()
+    expect(post).toHaveBeenCalledWith('/admin/system/mihomo', expect.objectContaining({ dynamic_proxies: ['socks5://proxy.example:2000:user:pass', 'https://user:pass@proxy.example:2001'] }))
+    expect(wrapper.text()).toContain('dynamic proxy line 2: invalid proxy format')
+    expect(wrapper.get<HTMLTextAreaElement>('#mihomo-dynamic-proxies').element.value).toBe(draft)
+    await wrapper.findAll('button').find(b => b.text() === '检测状态')!.trigger('click'); await flushPromises()
+    expect(wrapper.text()).not.toContain('dynamic proxy line 2: invalid proxy format')
+    wrapper.unmount()
+  })
+  it('does not offer installation when status loading fails', async () => {
+    get.mockRejectedValue(new Error('network'))
+    const wrapper = mount(MihomoSettings); await flushPromises()
+    expect(wrapper.text()).toContain('无法读取内核状态')
+    expect(wrapper.text()).not.toContain('检测并安装')
+    wrapper.unmount()
   })
 })

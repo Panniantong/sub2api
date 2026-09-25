@@ -12,6 +12,8 @@ type UserGroupRateEntry struct {
 	UserStatus     string   `json:"user_status"`
 	RateMultiplier *float64 `json:"rate_multiplier,omitempty"`
 	RPMOverride    *int     `json:"rpm_override,omitempty"`
+	// DeniedModels 该用户在此分组被禁用的模型；为空表示不限制。
+	DeniedModels []string `json:"denied_models,omitempty"`
 }
 
 // GroupRateMultiplierInput 批量设置分组倍率的输入条目
@@ -27,6 +29,12 @@ type GroupRPMOverrideInput struct {
 	RPMOverride *int  `json:"rpm_override"`
 }
 
+// GroupUserDeniedModelsInput 批量设置分组内用户禁用模型的输入条目；DeniedModels 为空表示清除。
+type GroupUserDeniedModelsInput struct {
+	UserID       int64    `json:"user_id"`
+	DeniedModels []string `json:"denied_models"`
+}
+
 // UserGroupRateRepository 用户专属分组倍率/RPM 仓储接口。
 // 允许管理员为特定用户设置分组的专属计费倍率与 RPM 上限，覆盖分组默认值。
 type UserGroupRateRepository interface {
@@ -39,7 +47,7 @@ type UserGroupRateRepository interface {
 	// GetRPMOverrideByUserAndGroup 获取用户在特定分组的 rpm_override（NULL 返回 nil）
 	GetRPMOverrideByUserAndGroup(ctx context.Context, userID, groupID int64) (*int, error)
 
-	// GetByGroupID 获取指定分组下所有用户的专属配置（rate 与 rpm_override 任一非 NULL 即返回）
+	// GetByGroupID 获取指定分组下所有用户的专属配置（rate、rpm_override、denied_models 任一非 NULL 即返回）
 	GetByGroupID(ctx context.Context, groupID int64) ([]UserGroupRateEntry, error)
 
 	// SyncUserGroupRates 同步用户的分组专属倍率；nil 表示清空该分组的 rate_multiplier
@@ -54,6 +62,19 @@ type UserGroupRateRepository interface {
 
 	// ClearGroupRPMOverrides 清空指定分组的所有 rpm_override（整组 rpm 部分归 NULL）
 	ClearGroupRPMOverrides(ctx context.Context, groupID int64) error
+
+	// GetDeniedModelsByUserAndGroup 获取用户在特定分组被禁用的模型（未设置返回 nil）
+	GetDeniedModelsByUserAndGroup(ctx context.Context, userID, groupID int64) ([]string, error)
+
+	// GetDeniedModelsByUserID 获取用户在各分组被禁用的模型（只返回有设置的分组）
+	GetDeniedModelsByUserID(ctx context.Context, userID int64) (map[int64][]string, error)
+
+	// SyncGroupDeniedModels 批量同步分组的用户禁用模型（替换整组 denied_models 部分）。
+	// 未出现在 entries 中的用户、以及 DeniedModels 为空的条目都会清空该部分。
+	SyncGroupDeniedModels(ctx context.Context, groupID int64, entries []GroupUserDeniedModelsInput) error
+
+	// ClearGroupDeniedModels 清空指定分组所有用户的禁用模型
+	ClearGroupDeniedModels(ctx context.Context, groupID int64) error
 
 	// DeleteByGroupID 删除指定分组的所有用户专属条目（分组删除时调用）
 	DeleteByGroupID(ctx context.Context, groupID int64) error

@@ -1108,6 +1108,18 @@ func (s *APIKeyService) GetUserGroupRates(ctx context.Context, userID int64) (ma
 	return rates, nil
 }
 
+// GetUserGroupDeniedModels 获取用户在各分组被禁用的模型，返回 map[groupID]models。
+func (s *APIKeyService) GetUserGroupDeniedModels(ctx context.Context, userID int64) (map[int64][]string, error) {
+	if s.userGroupRateRepo == nil {
+		return nil, nil
+	}
+	denied, err := s.userGroupRateRepo.GetDeniedModelsByUserID(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("get user group denied models: %w", err)
+	}
+	return denied, nil
+}
+
 // CheckAPIKeyQuotaAndExpiry checks if the API key is valid for use (not expired, quota not exhausted)
 // Returns nil if valid, error if invalid
 func (s *APIKeyService) CheckAPIKeyQuotaAndExpiry(apiKey *APIKey) error {

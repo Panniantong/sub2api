@@ -15,8 +15,8 @@ import (
 //
 // 归因发生在 openai_gateway_handler.go 的 ingress 收尾处：只有
 // *service.OpenAIWSClientCloseError 且状态码为 1000 被认作正常关闭，其余一律落到
-// shouldReportOpenAIWSProxyAccountFailure —— 而它只排除 model-switch 与
-// session-preempted 两种。于是客户端干净关闭（底层直接回裸 coderws.CloseError{1000}）
+// shouldReportOpenAIWSProxyAccountFailure —— 而它只排除已标记的本地策略与连接抢占，
+// 不会自动识别连接结束。于是客户端干净关闭（底层直接回裸 coderws.CloseError{1000}）
 // 与客户端中途断开（context.Canceled，收尾用 1001 关闭）都会喂给
 // ObserveOpenAIAPIKeyHealthFailure 与 scheduler.ReportResult(success=false)，
 // 累积到阈值即把上游账号熔断出调度池。

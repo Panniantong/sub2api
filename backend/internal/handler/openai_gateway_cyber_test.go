@@ -5,10 +5,13 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 // newTestGinContext builds a bare gin.Context backed by an httptest recorder.
@@ -161,6 +164,21 @@ func TestBuildCyberSessionBlockedOpsEntry(t *testing.T) {
 		SessionBlockKey: "abc123",
 	})
 	require.Equal(t, "session_block_key=abc123", entryWithKey.ErrorBody)
+
+	identityRejected := buildCyberSessionIdentityRejectedOpsEntry(cyberPolicyOpsErrorMeta{
+		RequestID:      "req-10",
+		Model:          "gpt-5",
+		RequestPath:    "/openai/v1/responses",
+		IdentityStatus: string(service.OpenAIClientSessionIdentityConflict),
+		IdentityKind:   "thread",
+		IdentitySource: service.OpenAIClientSessionIdentitySourceHeaderBody,
+	})
+	require.Equal(t, http.StatusBadRequest, identityRejected.StatusCode)
+	require.Equal(t, "cyber_session_identity_rejected", identityRejected.ErrorType)
+	require.Equal(t, "client", identityRejected.ErrorOwner)
+	require.Contains(t, identityRejected.ErrorMessage, "session_identity_status=conflict")
+	require.Contains(t, identityRejected.ErrorMessage, "session_identity_kind=thread")
+	require.Contains(t, identityRejected.ErrorMessage, "session_identity_source=header_body")
 }
 
 // TestRejectIfCyberSessionBlocked_FailOpen verifies fail-open paths: nil handler
@@ -178,22 +196,168 @@ func TestRejectIfCyberSessionBlocked_FailOpen(t *testing.T) {
 	require.False(t, h2.rejectIfCyberSessionBlocked(c, key, []byte(`{}`), "gpt-5", cyberBlockFormatResponses), "nil gateway service → pass")
 }
 
-func TestBuildCyberSessionBlockWritePlanUsesOnlyExplicitIdentity(t *testing.T) {
-	body := []byte(`{"messages":[{"role":"user","content":"setup"},{"role":"assistant","content":"ready"},{"role":"user","content":"trigger"}]}`)
+func newCyberIdentityAdmissionTestHandler(settings map[string]string) *OpenAIGatewayHandler {
+	settingSvc := service.NewSettingService(&contentModerationHandlerSettingRepo{values: settings}, nil)
+	cfg := &config.Config{}
+	gatewaySvc := service.NewOpenAIGatewayService(
+		nil, nil, nil, nil, nil, nil, nil, nil, cfg, nil, nil,
+		service.NewBillingService(cfg, nil), nil, nil, nil, &service.DeferredService{},
+		nil, nil, nil, nil, nil, settingSvc, nil,
+	)
+	return &OpenAIGatewayHandler{gatewayService: gatewaySvc}
+}
+
+func TestRejectIfCyberSessionBlocked_StrictIdentityGate(t *testing.T) {
+	apiKey := &service.APIKey{ID: 77, Key: "sk-test", User: &service.User{ID: 9}}
+
+	t.Run("strict off remains compatible", func(t *testing.T) {
+		h := newCyberIdentityAdmissionTestHandler(map[string]string{
+			service.SettingKeyCyberSessionBlockEnabled:          "true",
+			service.SettingKeyCyberSessionIdentityStrictEnabled: "false",
+		})
+		c := newTestGinContext()
+		c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(`{}`))
+		require.False(t, h.rejectIfCyberSessionBlocked(c, apiKey, []byte(`{}`), "gpt-5", cyberBlockFormatResponses))
+		require.Equal(t, http.StatusOK, c.Writer.Status())
+	})
+
+	t.Run("missing identity rejected before routing", func(t *testing.T) {
+		h := newCyberIdentityAdmissionTestHandler(map[string]string{
+			service.SettingKeyCyberSessionBlockEnabled:          "true",
+			service.SettingKeyCyberSessionIdentityStrictEnabled: "true",
+		})
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(`{}`))
+		require.True(t, h.rejectIfCyberSessionBlocked(c, apiKey, []byte(`{}`), "gpt-5", cyberBlockFormatResponses))
+		require.Equal(t, http.StatusBadRequest, rec.Code)
+		require.Contains(t, rec.Body.String(), `"code":"cyber_session_identity_required"`)
+	})
+
+	t.Run("conflicting identity rejected", func(t *testing.T) {
+		h := newCyberIdentityAdmissionTestHandler(map[string]string{
+			service.SettingKeyCyberSessionBlockEnabled:          "true",
+			service.SettingKeyCyberSessionIdentityStrictEnabled: "true",
+		})
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(`{"client_metadata":{"thread_id":"body"}}`))
+		c.Request.Header.Set("thread_id", "header")
+		require.True(t, h.rejectIfCyberSessionBlocked(c, apiKey, []byte(`{"client_metadata":{"thread_id":"body"}}`), "gpt-5", cyberBlockFormatResponses))
+		require.Equal(t, http.StatusBadRequest, rec.Code)
+		require.Contains(t, rec.Body.String(), `"code":"cyber_session_identity_conflict"`)
+	})
+
+	t.Run("resolved identity passes when not blocked", func(t *testing.T) {
+		h := newCyberIdentityAdmissionTestHandler(map[string]string{
+			service.SettingKeyCyberSessionBlockEnabled:          "true",
+			service.SettingKeyCyberSessionIdentityStrictEnabled: "true",
+		})
+		c := newTestGinContext()
+		c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(`{"client_metadata":{"session_id":"session-a"}}`))
+		require.False(t, h.rejectIfCyberSessionBlocked(c, apiKey, []byte(`{"client_metadata":{"session_id":"session-a"}}`), "gpt-5", cyberBlockFormatResponses))
+	})
+}
+
+func TestWriteCyberSessionIdentityRejectedResponseFormats(t *testing.T) {
+	apiKey := &service.APIKey{ID: 77, Key: "sk-test", User: &service.User{ID: 9}}
+	metadata := service.OpenAIClientSessionIdentityMetadata{
+		Status: service.OpenAIClientSessionIdentityConflict,
+		Kind:   "thread",
+		Source: service.OpenAIClientSessionIdentitySourceHeaderBody,
+	}
+
+	t.Run("responses and chat use OpenAI JSON envelope", func(t *testing.T) {
+		for _, format := range []cyberSessionBlockFormat{cyberBlockFormatResponses, cyberBlockFormatChat} {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+
+			(&OpenAIGatewayHandler{}).writeCyberSessionIdentityRejected(c, apiKey, "gpt-5", format, metadata)
+
+			require.Equal(t, http.StatusBadRequest, rec.Code)
+			require.Equal(t, "cyber_session_identity_conflict", gjson.Get(rec.Body.String(), "error.code").String())
+			require.Equal(t, "invalid_request_error", gjson.Get(rec.Body.String(), "error.type").String())
+		}
+	})
+
+	t.Run("messages uses Anthropic JSON envelope", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/messages", nil)
+
+		(&OpenAIGatewayHandler{}).writeCyberSessionIdentityRejected(c, apiKey, "gpt-5", cyberBlockFormatAnthropic, metadata)
+
+		require.Equal(t, http.StatusBadRequest, rec.Code)
+		require.Equal(t, "error", gjson.Get(rec.Body.String(), "type").String())
+		require.Equal(t, "invalid_request_error", gjson.Get(rec.Body.String(), "error.type").String())
+		require.False(t, gjson.Get(rec.Body.String(), "error.code").Exists())
+	})
+
+	t.Run("committed compact stream uses response failed event", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+		service.MarkOpenAICompactClientStream(c)
+
+		stop := service.StartOpenAICompactSSEKeepalive(c, time.Millisecond)
+		defer stop()
+		require.Eventually(t, c.Writer.Written, time.Second, time.Millisecond)
+
+		(&OpenAIGatewayHandler{}).writeCyberSessionIdentityRejected(c, apiKey, "gpt-5", cyberBlockFormatResponses, metadata)
+
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.Contains(t, rec.Body.String(), "event: response.failed\n")
+		require.Contains(t, rec.Body.String(), `"code":"cyber_session_identity_conflict"`)
+		require.NotContains(t, rec.Body.String(), `"error":{"type":"invalid_request_error","code":"cyber_session_identity_conflict"`)
+	})
+}
+
+func TestOpenAIWSCyberIdentityBinding(t *testing.T) {
 	c := newTestGinContext()
-	c.Request = httptest.NewRequest("POST", "/openai/v1/responses", strings.NewReader(string(body)))
-	c.Request.RemoteAddr = "203.0.113.44:12345"
-	c.Request.Header.Set("User-Agent", "client/1.2.3")
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	binding := &openAIWSCyberIdentityBinding{}
 
-	plan := buildCyberSessionBlockWritePlan(7, c, body)
-	require.Empty(t, plan.keys)
+	first := binding.resolve(7, c, []byte(`{"client_metadata":{"thread_id":"thread-a"}}`), true, false)
+	require.False(t, first.reject)
+	require.True(t, first.effective.Resolved())
+	require.False(t, first.effective.Inherited)
 
-	c.Request.Header.Set("session_id", "sess-explicit")
-	plan = buildCyberSessionBlockWritePlan(7, c, body)
-	require.Equal(t, []string{service.CyberSessionExplicitBlockKey(7, c, body)}, plan.keys)
+	missingFollowup := binding.resolve(7, c, []byte(`{"input":"follow-up"}`), true, true)
+	require.False(t, missingFollowup.reject, "strict mode accepts a turn inherited from the verified connection identity")
+	require.True(t, missingFollowup.effective.Resolved())
+	require.True(t, missingFollowup.effective.Inherited)
+	require.Equal(t, first.effective.BlockKey, missingFollowup.effective.BlockKey)
 
-	c.Request.Header.Del("session_id")
-	require.Empty(t, buildCyberSessionBlockWritePlan(7, c, []byte(`{"prompt_cache_key":"shared-cache"}`)).keys)
+	swapped := binding.resolve(7, c, []byte(`{"client_metadata":{"thread_id":"thread-b"}}`), true, false)
+	require.True(t, swapped.reject)
+	require.True(t, swapped.identitySwap)
+
+	c.Request.Header.Set("thread_id", "thread-c")
+	conflicting := binding.resolve(7, c, []byte(`{"client_metadata":{"thread_id":"thread-b"}}`), true, false)
+	require.True(t, conflicting.reject, "ambiguous follow-up must not inherit a trusted connection identity")
+
+	c.Request.Header.Del("thread_id")
+	strictBinding := &openAIWSCyberIdentityBinding{}
+	strictMissing := strictBinding.resolve(7, c, []byte(`{}`), true, true)
+	require.True(t, strictMissing.reject)
+	require.Equal(t, service.OpenAIClientSessionIdentityMissing, strictMissing.observed.Metadata.Status)
+
+	staticHeaderCtx := newTestGinContext()
+	staticHeaderCtx.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	staticHeaderCtx.Request.Header.Set("session_id", "connection-session")
+	staticHeaderBinding := &openAIWSCyberIdentityBinding{}
+	bodyThread := staticHeaderBinding.resolve(7, staticHeaderCtx, []byte(`{"client_metadata":{"thread_id":"thread-from-first-frame"}}`), true, true)
+	require.False(t, bodyThread.reject)
+	require.Equal(t, "thread", bodyThread.effective.Metadata.Kind)
+	staticHeaderFollowup := staticHeaderBinding.resolve(7, staticHeaderCtx, []byte(`{}`), true, true)
+	require.False(t, staticHeaderFollowup.reject, "a lower-priority static upgrade header must not look like an explicit identity switch")
+	require.True(t, staticHeaderFollowup.effective.Inherited)
+	require.Equal(t, bodyThread.effective.BlockKey, staticHeaderFollowup.effective.BlockKey)
+
+	disabledBinding := &openAIWSCyberIdentityBinding{}
+	disabled := disabledBinding.resolve(7, c, []byte(`{}`), false, true)
+	require.False(t, disabled.reject, "strict setting is inert while cyber session blocking is disabled")
 }
 
 // TestRecordCyberPolicyIfMarked_BlockKeyPlumbed verifies the 6th param is
@@ -234,4 +398,22 @@ func TestBuildCyberPolicyOpsErrorEntry_StatusCode(t *testing.T) {
 			require.Equal(t, "request", entry.ErrorPhase)
 		})
 	}
+}
+
+func TestBuildCyberPolicyOpsErrorEntryIncludesIdentityMetadataWithoutRawID(t *testing.T) {
+	entry := buildCyberPolicyOpsErrorEntry(cyberPolicyOpsErrorMeta{
+		IdentityStatus:    string(service.OpenAIClientSessionIdentityResolved),
+		IdentityKind:      "thread",
+		IdentitySource:    service.OpenAIClientSessionIdentitySourceConnection,
+		IdentityInherited: true,
+	}, &service.CyberPolicyMark{
+		Message:        "blocked",
+		UpstreamStatus: http.StatusBadRequest,
+	})
+
+	require.Contains(t, entry.ErrorMessage, "session_identity_status=resolved")
+	require.Contains(t, entry.ErrorMessage, "session_identity_kind=thread")
+	require.Contains(t, entry.ErrorMessage, "session_identity_source=connection")
+	require.Contains(t, entry.ErrorMessage, "session_identity_inherited=true")
+	require.NotContains(t, entry.ErrorMessage, "private-thread-value")
 }

@@ -69,6 +69,31 @@ func TestSubscriptionDownloadCanUseManagedProxy(t *testing.T) {
 	require.Contains(t, string(body), "proxied-node")
 }
 
+func TestSubscriptionDirectFallbackWithDynamicExit(t *testing.T) {
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusBadGateway) }))
+	defer proxy.Close()
+	sub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "clash.meta", r.Header.Get("User-Agent"))
+		_, _ = w.Write([]byte("proxies:\n  - {name: airport, type: http, server: example.org, port: 2000}\n"))
+	}))
+	defer sub.Close()
+	m := New(t.TempDir())
+	t.Cleanup(m.Close)
+	m.state.Running = true
+	m.subscriptionProxyURL = proxy.URL
+	m.saved.DynamicProxies = []string{"http://user:private-password@example.org:2000"}
+	nodes, names, err := m.fetchNodes(context.Background(), []string{sub.URL + "/?token=private-token"})
+	require.NoError(t, err)
+	require.Len(t, nodes, 1)
+	require.Len(t, names, 1)
+	require.Len(t, m.saved.DynamicProxies, 1)
+	// A failed direct fetch must not leak subscription or proxy credentials.
+	_, _, err = m.fetchNodes(context.Background(), []string{proxy.URL + "/?token=private-token"})
+	require.ErrorContains(t, err, "and direct")
+	require.NotContains(t, err.Error(), "private-token")
+	require.NotContains(t, err.Error(), "private-password")
+}
+
 func TestFailedSubscriptionPreservesSavedConfiguration(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusForbidden) }))
 	defer server.Close()

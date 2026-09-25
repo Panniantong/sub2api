@@ -44,10 +44,10 @@ func openAICodexReturnedStateAcceptable(account *Account, returned string, now t
 	if err != nil || targetLen <= 0 || len(returned) != targetLen || !strings.HasPrefix(returned, openAICodexTicketStatePrefix) {
 		return shape, false
 	}
-	if shape.Blocks != openAICodexTicketExpectedBlocks(account) {
+	if targetLen != 780 && shape.Blocks != openAICodexTicketExpectedBlocks(account) {
 		return shape, false
 	}
-	if shape.IssuedAt.After(now.Add(30*time.Second)) || !now.Before(shape.IssuedAt.Add(time.Hour-30*time.Second)) {
+	if shape.IssuedAt.After(now.Add(30*time.Second)) || !now.Before(shape.IssuedAt.Add(codexTicketLifetime(targetLen))) {
 		return shape, false
 	}
 	return shape, true
@@ -58,7 +58,7 @@ func codexTicketExpiryFromShape(ttlSeconds int, shape openAICodexTicketShape, no
 		ttlSeconds = 3600
 	}
 	expires := now.Add(time.Duration(ttlSeconds) * time.Second)
-	if issuedExpiry := shape.IssuedAt.Add(time.Hour - 30*time.Second); !shape.IssuedAt.IsZero() && issuedExpiry.Before(expires) {
+	if issuedExpiry := shape.IssuedAt.Add(codexTicketLifetime(4 * ((57 + 16*shape.Blocks + 2) / 3))); !shape.IssuedAt.IsZero() && issuedExpiry.Before(expires) {
 		expires = issuedExpiry
 	}
 	return expires
@@ -72,7 +72,7 @@ func codexResponseMismatches(req *http.Request, resp *http.Response, account *Ac
 	if returned == "" {
 		return false
 	}
-	_, ok := openAICodexReturnedStateAcceptable(account, returned, time.Now(), openAICodexTicketExpectedLength(account))
+	_, ok := openAICodexReturnedStateAcceptable(account, returned, time.Now(), len(req.Header.Get(openAICodexTurnStateHeader)))
 	return !ok
 }
 
@@ -86,6 +86,15 @@ func (s *OpenAIGatewayService) observeCodexTicketResponse(req *http.Request, res
 	}
 	sent := req.Header.Get(openAICodexTurnStateHeader)
 	returned := extractOpenAICodexTurnState(resp.Header)
+	routeChanged := false
+	for _, c := range resp.Cookies() {
+		if c.Name == "__cflb" || c.Name == "__oailb" {
+			routeChanged = true
+		}
+	}
+	if len(sent) == 780 && returned == "" && routeChanged {
+		returned = sent
+	}
 	if sent == "" || returned == "" || !s.openAICodexTicketEnabledContext(req.Context()) {
 		return
 	}
@@ -94,7 +103,7 @@ func (s *OpenAIGatewayService) observeCodexTicketResponse(req *http.Request, res
 	targetLen := openAICodexTicketTargetLength(account, cfg)
 	shape, acceptable := openAICodexReturnedStateAcceptable(account, returned, now, targetLen)
 	returnedCookies := responseCookiePairs(resp)
-	if acceptable && returned == sent && len(returnedCookies) == 0 {
+	if acceptable && returned == sent && len(returnedCookies) == 0 && !routeChanged {
 		return
 	}
 	s.openaiCodexTicketStateMu.Lock()
@@ -107,6 +116,16 @@ func (s *OpenAIGatewayService) observeCodexTicketResponse(req *http.Request, res
 		next := *current
 		if len(next.HarvestCookies) > 0 && next.HarvestCookiesAt.IsZero() {
 			next.HarvestCookiesAt = current.CapturedAt
+		}
+		if current.Length == 780 {
+			route := current.HarvestCookies
+			changed := routeChanged
+			if changed {
+				route = returnedCookies
+			}
+			clean, _, err := codex780Route(route, current.Gateway, now)
+			acceptable = acceptable && err == nil
+			returnedCookies = clean
 		}
 		if acceptable {
 			next.State = returned

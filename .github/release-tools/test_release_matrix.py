@@ -187,5 +187,42 @@ class ReleaseMatrixTest(unittest.TestCase):
 
 
 
+    def test_prerelease_plan_and_image_tags_are_isolated(self):
+        release.VERSION_FILE.write_text('9.8.7-rc.1\n')
+        with patch.dict(os.environ, {'GITHUB_OUTPUT': 'outputs'}), patch.object(subprocess, 'check_output', return_value='a' * 40 + '\n'):
+            release.plan(argparse.Namespace(ref='feature/rc', dry_run=True, simple=False))
+        output = dict(line.split('=', 1) for line in Path('outputs').read_text().splitlines())
+        self.assertEqual(output['prerelease'], 'true')
+        fake_bin = Path('bin')
+        fake_bin.mkdir()
+        docker = fake_bin / 'docker'
+        docker.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$DOCKER_LOG"\n')
+        docker.chmod(0o755)
+        for simple in (False, True):
+            with self.subTest(simple=simple):
+                log_path = Path(f'rc-{simple}.log').resolve()
+                env = {**os.environ, 'PATH': str(fake_bin.resolve()) + os.pathsep + os.environ['PATH'],
+                       'DOCKER_LOG': str(log_path), 'RUNNER_TEMP': self.temp.name,
+                       'RELEASE_VERSION': '9.8.7-rc.1', 'RELEASE_SHA': 'a' * 40, 'GITHUB_REPOSITORY': 'ExampleOwner/sub2api',
+                       'DRY_RUN': 'false', 'SIMPLE_RELEASE': str(simple).lower(), 'DOCKERHUB_USERNAME': 'fixturehub'}
+                subprocess.run(['bash', str(ROOT / '.github/release-tools/release-images.sh')], env=env, check=True)
+                log = log_path.read_text()
+                self.assertIn('--push', log)
+                self.assertIn(':9.8.7-rc.1', log)
+                self.assertNotIn(':latest', log)
+                self.assertNotRegex(log, r':9(?:\.8)?(?:\s|$)')
+        workflow = yaml.safe_load((ROOT / '.github/workflows/release.yml').read_text())
+        self.assertIn("prerelease != 'true'", workflow['jobs']['sync-version-file']['if'])
+        notification = next(step for step in workflow['jobs']['release']['steps'] if step.get('name') == 'Send Telegram Notification')
+        self.assertIn("prerelease != 'true'", notification['if'])
+
+    def test_release_announcement_requires_explicit_opt_in(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/release.yml').read_text())
+        trigger = workflow.get('on', workflow.get(True))
+        self.assertIs(trigger['workflow_dispatch']['inputs']['notify_release']['default'], False)
+        step = next(step for step in workflow['jobs']['release']['steps'] if step.get('name') == 'Send Telegram Notification')
+        self.assertIn('inputs.notify_release == true', step['if'])
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -22,6 +22,11 @@ func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, a
 }
 
 func (s *OpenAIGatewayService) huntCodexHarvestTicket(ctx context.Context, account *Account, model string) {
+	if !s.codexHarvestRunMu.TryRLock() {
+		return
+	}
+	defer s.codexHarvestRunMu.RUnlock()
+
 	controls, _ := s.harvestControls(ctx)
 	round, _ := ctx.Value(codexHarvestRoundKey{}).(*codexHarvestRound)
 	if round == nil {
@@ -80,6 +85,9 @@ func (s *OpenAIGatewayService) huntCodexHarvestTicket(ctx context.Context, accou
 		if !ok {
 			break
 		}
+		if attempt.node.ID != "" {
+			recordCodexHarvestNode(attempt.node.Name, "Selector", 0)
+		}
 		started := time.Now()
 		session := s.harvestAttemptSession(account, model, attempt)
 		result := s.executeCodexHarvestProbe(ctx, account, token, model, attempt.proxy, time.Duration(controls.Speed.AttemptTimeoutSeconds)*time.Second, func() bool {
@@ -99,7 +107,7 @@ func (s *OpenAIGatewayService) huntCodexHarvestTicket(ctx context.Context, accou
 		if result.Err != nil {
 			raw = result.Err.Error()
 		}
-		recordCodexHarvestProbe(account, model, result.Kind, attempt.node.Name, raw, result.Status, len(result.State), result.Shape.Blocks, openAICodexTicketTargetLength(account, cfg), openAICodexTicketExpectedBlocks(account))
+		recordCodexHarvestProbe(account, model, result.Kind, attempt.node.Name, raw, result.Status, len(result.State), result.Shape.Blocks, openAICodexTicketTargetLength(account, cfg), codexHarvestExpectedBlocks(account, cfg))
 		if result.Kind == "success" {
 			s.openaiCodexTicketProbeCooldown.Delete(openAICodexTicketKey(account.ID, model))
 			ticket := codexHarvestTicket(account, model, result, cfg, attempts)

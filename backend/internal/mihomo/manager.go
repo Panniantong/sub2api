@@ -55,6 +55,7 @@ type Status struct {
 	Phase            string        `json:"phase"`
 	Error            string        `json:"error,omitempty"`
 	Subscriptions    int           `json:"subscriptions"`
+	DynamicProxies   int           `json:"dynamic_proxies"`
 	Nodes            int           `json:"nodes"`
 	Endpoint         string        `json:"endpoint"`
 	Supported        bool          `json:"supported"`
@@ -62,6 +63,7 @@ type Status struct {
 }
 
 type NodeStatus struct {
+	Dynamic          bool       `json:"dynamic"`
 	CountryCode      string     `json:"country_code,omitempty"`
 	CountryCheckedAt *time.Time `json:"country_checked_at,omitempty"`
 	CountryError     string     `json:"country_error,omitempty"`
@@ -72,14 +74,15 @@ type NodeStatus struct {
 }
 
 type saved struct {
-	CountryFilter CountryFilter                 `json:"country_filter"`
-	Countries     map[string]CountryObservation `json:"countries,omitempty"`
-	UseOnce       bool                          `json:"use_once,omitempty"`
-	URLs          []string                      `json:"urls"`
-	Nodes         []map[string]any              `json:"nodes"`
-	NodeNames     map[string]string             `json:"node_names,omitempty"`
-	Secret        string                        `json:"secret"`
-	Disabled      map[string]string             `json:"disabled,omitempty"`
+	CountryFilter  CountryFilter                 `json:"country_filter"`
+	Countries      map[string]CountryObservation `json:"countries,omitempty"`
+	UseOnce        bool                          `json:"use_once,omitempty"`
+	URLs           []string                      `json:"urls"`
+	DynamicProxies []string                      `json:"dynamic_proxies,omitempty"`
+	Nodes          []map[string]any              `json:"nodes"`
+	NodeNames      map[string]string             `json:"node_names,omitempty"`
+	Secret         string                        `json:"secret"`
+	Disabled       map[string]string             `json:"disabled,omitempty"`
 }
 
 type Manager struct {
@@ -128,6 +131,7 @@ func (m *Manager) Status() Status {
 	s.CountryCodes = countryCodes()
 	s.UseOnce = m.saved.UseOnce
 	s.Subscriptions = len(m.saved.URLs)
+	s.DynamicProxies = len(m.saved.DynamicProxies)
 	s.Nodes = len(m.saved.Nodes)
 	for _, n := range m.saved.Nodes {
 		if name, ok := n["name"].(string); ok {
@@ -136,6 +140,10 @@ func (m *Manager) Status() Status {
 				state = disabled
 			}
 			observation := m.saved.Countries[name]
+			dynamic := strings.HasPrefix(name, "DYNAMIC-")
+			if dynamic {
+				observation = CountryObservation{}
+			}
 			blocked := !countryAllowed(m.saved, name)
 			if !validCountry(observation.Code) {
 				s.UnknownCountries++
@@ -148,7 +156,7 @@ func (m *Manager) Status() Status {
 			} else if state == "enabled" {
 				s.EligibleNodes++
 			}
-			node := NodeStatus{Name: name, DisplayName: m.saved.NodeNames[name], State: state, CountryCode: observation.Code, CountryError: observation.Error, CountryBlocked: blocked}
+			node := NodeStatus{Dynamic: dynamic, Name: name, DisplayName: m.saved.NodeNames[name], State: state, CountryCode: observation.Code, CountryError: observation.Error, CountryBlocked: blocked}
 			if !observation.CheckedAt.IsZero() {
 				checked := observation.CheckedAt
 				node.CountryCheckedAt = &checked
@@ -161,14 +169,25 @@ func (m *Manager) Status() Status {
 
 // Submit serializes long-running work and never returns subprocess output or URLs.
 func (m *Manager) Submit(action string, urls []string, appendURLs bool, filters ...*CountryFilter) error {
+	return m.SubmitWithDynamicProxies(action, urls, nil, appendURLs, filters...)
+}
+
+// SubmitWithDynamicProxies accepts raw proxy URLs in addition to remote
+// Clash/Mihomo subscriptions. The legacy Submit method remains unchanged for
+// callers that do not use the dynamic source.
+func (m *Manager) SubmitWithDynamicProxies(action string, urls, dynamicProxies []string, appendURLs bool, filters ...*CountryFilter) error {
 	op, node, hasNode := strings.Cut(action, "/")
-	if op != "install" && op != "apply" && op != "start" && op != "disable" && op != "recover" && op != "probe" && op != "once_on" && op != "once_off" && op != "country_filter" && op != "country_scan" && op != "country_probe" {
+	if op != "install" && op != "apply" && op != "apply_dynamic" && op != "start" && op != "disable" && op != "recover" && op != "probe" && op != "once_on" && op != "once_off" && op != "country_filter" && op != "country_scan" && op != "country_probe" {
 		return errors.New("unknown operation")
 	}
 	if (op == "disable" || op == "recover" || op == "probe" || op == "country_probe") != hasNode || (hasNode && (node == "" || strings.Contains(node, "/"))) {
 		return errors.New("invalid operation target")
 	}
 	clean, err := normalizeURLs(urls)
+	if err != nil {
+		return err
+	}
+	cleanDynamic, err := normalizeDynamicProxies(dynamicProxies)
 	if err != nil {
 		return err
 	}
@@ -195,6 +214,14 @@ func (m *Manager) Submit(action string, urls []string, appendURLs bool, filters 
 	if op == "country_filter" {
 		next.CountryFilter = filter
 	}
+	if op == "apply_dynamic" {
+		if len(cleanDynamic) == 0 {
+			m.mu.Unlock()
+			return errors.New("a dynamic proxy is required")
+		}
+		next.URLs = nil
+		next.DynamicProxies = cleanDynamic
+	}
 	if action == "apply" && len(clean) > 0 {
 		if appendURLs {
 			merged, mergeErr := normalizeURLs(append(append([]string{}, next.URLs...), clean...))
@@ -205,6 +232,18 @@ func (m *Manager) Submit(action string, urls []string, appendURLs bool, filters 
 			next.URLs = merged
 		} else {
 			next.URLs = clean
+		}
+	}
+	if action == "apply" && len(cleanDynamic) > 0 {
+		if appendURLs {
+			merged, mergeErr := normalizeDynamicProxies(append(append([]string{}, next.DynamicProxies...), cleanDynamic...))
+			if mergeErr != nil {
+				m.mu.Unlock()
+				return mergeErr
+			}
+			next.DynamicProxies = merged
+		} else {
+			next.DynamicProxies = cleanDynamic
 		}
 	}
 	m.state.Busy = true
@@ -297,13 +336,30 @@ func (m *Manager) run(ctx context.Context, action string, next saved) error {
 	if !installed {
 		return errors.New("install the kernel first")
 	}
-	if action == "apply" {
-		if len(next.URLs) == 0 {
-			return errors.New("a subscription is required")
+	if action == "apply" || action == "apply_dynamic" {
+		var nodes []map[string]any
+		var names map[string]string
+		if len(next.URLs) > 0 {
+			var err error
+			nodes, names, err = m.fetchNodes(ctx, next.URLs)
+			if err != nil {
+				return err
+			}
+		} else {
+			nodes, names = []map[string]any{}, map[string]string{}
 		}
-		nodes, names, err := m.fetchNodes(ctx, next.URLs)
-		if err != nil {
-			return err
+		if len(next.DynamicProxies) > 0 {
+			dynamicNodes, dynamicNames, err := dynamicProxyNodes(next.DynamicProxies)
+			if err != nil {
+				return err
+			}
+			nodes = append(nodes, dynamicNodes...)
+			for name, display := range dynamicNames {
+				names[name] = display
+			}
+		}
+		if len(nodes) == 0 {
+			return errors.New("save a valid subscription or dynamic proxy first")
 		}
 		next.Nodes = nodes
 		next.NodeNames = names
@@ -449,16 +505,23 @@ func (m *Manager) get(ctx context.Context, address string, limit int64, ua strin
 }
 
 func (m *Manager) getViaProxy(ctx context.Context, address string, limit int64, ua, proxyAddress string) ([]byte, error) {
-	proxyURL, err := url.Parse(proxyAddress)
-	if err != nil || proxyURL.Scheme == "" || proxyURL.Host == "" {
-		return nil, errors.New("invalid subscription proxy")
+	var proxyURL *url.URL
+	if proxyAddress != "" {
+		var err error
+		proxyURL, err = url.Parse(proxyAddress)
+		if err != nil || proxyURL.Scheme == "" || proxyURL.Host == "" {
+			return nil, errors.New("invalid subscription proxy")
+		}
 	}
 	baseTransport, ok := http.DefaultTransport.(*http.Transport)
 	if !ok {
 		return nil, errors.New("subscription proxy transport unavailable")
 	}
 	transport := baseTransport.Clone()
-	transport.Proxy = http.ProxyURL(proxyURL)
+	transport.Proxy = nil // Explicit direct access must not inherit HTTP_PROXY.
+	if proxyURL != nil {
+		transport.Proxy = http.ProxyURL(proxyURL)
+	}
 	client := &http.Client{Transport: transport, Timeout: m.client.Timeout}
 	defer client.CloseIdleConnections()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
@@ -549,8 +612,17 @@ func (m *Manager) fetchNodes(ctx context.Context, urls []string) ([]map[string]a
 		var err error
 		if proxy != "" {
 			b, err = m.getViaProxy(ctx, address, 4<<20, "clash.meta", proxy)
+			if err != nil && ctx.Err() == nil {
+				// Subscription retrieval must work even when the current exit is
+				// broken. This fallback never applies to harvest/model traffic.
+				proxyErr := err
+				b, err = m.getViaProxy(ctx, address, 4<<20, "clash.meta", "")
+				if err != nil {
+					err = fmt.Errorf("subscription download failed via proxy (%v) and direct (%v)", proxyErr, err)
+				}
+			}
 		} else {
-			b, err = m.get(ctx, address, 4<<20, "clash.meta")
+			b, err = m.getViaProxy(ctx, address, 4<<20, "clash.meta", "")
 		}
 		if err != nil {
 			return nil, nil, err
@@ -618,7 +690,20 @@ func (m *Manager) config(s saved) ([]byte, error) {
 		delete(group, "url")
 		delete(group, "interval")
 	}
-	return json.Marshal(map[string]any{"mixed-port": 3101, "allow-lan": false, "bind-address": "127.0.0.1", "mode": "rule", "log-level": "silent", "external-controller": "127.0.0.1:9098", "secret": s.Secret, "proxies": s.Nodes, "proxy-groups": []any{group}, "rules": []string{"MATCH,CODEX-ROTATE"}})
+	groups := []any{group}
+	laneNodes := []string{"REJECT"}
+	for _, n := range s.Nodes {
+		name, _ := n["name"].(string)
+		if countryAllowed(s, name) && (s.Disabled[name] == "" || s.Disabled[name] == "used") {
+			laneNodes = append(laneNodes, name)
+		}
+	}
+	listeners := make([]any, 0, MaxCollectLanes)
+	for lane := 0; lane < MaxCollectLanes; lane++ {
+		groups = append(groups, map[string]any{"name": collectionGroup(lane), "type": "select", "proxies": laneNodes})
+		listeners = append(listeners, map[string]any{"name": collectionGroup(lane), "type": "mixed", "listen": "127.0.0.1", "port": collectPort + lane, "proxy": collectionGroup(lane)})
+	}
+	return json.Marshal(map[string]any{"mixed-port": 3101, "allow-lan": false, "bind-address": "127.0.0.1", "mode": "rule", "log-level": "silent", "external-controller": "127.0.0.1:9098", "secret": s.Secret, "proxies": s.Nodes, "proxy-groups": groups, "listeners": listeners, "rules": []string{"MATCH,CODEX-ROTATE"}})
 }
 
 func (m *Manager) control(ctx context.Context, method, path, secret string, payload []byte) error {
@@ -650,7 +735,11 @@ func (m *Manager) reload(ctx context.Context, b []byte, secret string) error {
 }
 
 func (m *Manager) start(ctx context.Context, path, secret string) error {
-	for _, port := range []string{"127.0.0.1:3101", "127.0.0.1:9098"} {
+	ports := []string{"127.0.0.1:3101", "127.0.0.1:9098"}
+	for lane := 0; lane < MaxCollectLanes; lane++ {
+		ports = append(ports, fmt.Sprintf("127.0.0.1:%d", collectPort+lane))
+	}
+	for _, port := range ports {
 		ln, err := net.Listen("tcp", port)
 		if err != nil {
 			return errors.New("proxy/controller port occupied; migrate the existing sidecar first")

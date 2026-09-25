@@ -208,6 +208,11 @@ func (Group) Fields() []ent.Field {
 			Nillable().
 			Comment("无效请求兜底使用的分组 ID"),
 
+		// 仅允许流式请求 (added by migration 246)
+		field.Bool("stream_only").
+			Default(false).
+			Comment("是否仅允许流式请求：开启后非流式的对话生成请求在网关入口直接拒绝"),
+
 		// 模型路由配置 (added by migration 040)
 		field.JSON("model_routing", map[string][]int64{}).
 			Optional().

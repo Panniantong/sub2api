@@ -110,6 +110,16 @@ func PriorityLTE(v int) predicate.AccountGroup {
 	return predicate.AccountGroup(sql.FieldLTE(FieldPriority, v))
 }
 
+// AllowedModelsIsNil applies the IsNil predicate on the "allowed_models" field.
+func AllowedModelsIsNil() predicate.AccountGroup {
+	return predicate.AccountGroup(sql.FieldIsNull(FieldAllowedModels))
+}
+
+// AllowedModelsNotNil applies the NotNil predicate on the "allowed_models" field.
+func AllowedModelsNotNil() predicate.AccountGroup {
+	return predicate.AccountGroup(sql.FieldNotNull(FieldAllowedModels))
+}
+
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.
 func CreatedAtEQ(v time.Time) predicate.AccountGroup {
 	return predicate.AccountGroup(sql.FieldEQ(FieldCreatedAt, v))

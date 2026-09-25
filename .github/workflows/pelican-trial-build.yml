@@ -1,0 +1,61 @@
+name: Pelican trial validation and artifact
+on:
+  push:
+    branches: [feat/pelican-schedule]
+  workflow_dispatch:
+concurrency:
+  group: pelican-trial-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  validate-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: frontend
+      - name: Backend service tests
+        working-directory: backend
+        run: go test ./internal/service -count=1
+      - name: Pelican regression tests with race detector
+        working-directory: backend
+        run: go test -race ./internal/service ./internal/repository ./internal/handler/admin -run 'TestPelican|TestScheduled' -count=1
+      - name: PostgreSQL schedule and cleanup integration
+        working-directory: backend
+        run: go test -tags=integration ./internal/repository -run 'TestPelicanSchedulePersistenceLeaseAndRetention|TestPelicanHistoryReturnsEveryRetainedOutputAcrossAccounts' -count=1
+      - name: Frontend regression tests
+        working-directory: frontend
+        run: pnpm test:run src/components/admin/account/__tests__/PelicanRecordsDashboard.spec.ts src/components/admin/account/__tests__/IQTestModal.spec.ts src/components/admin/account/__tests__/ScheduledTestsPanel.pelican.spec.ts src/i18n/__tests__/localeKeyCompleteness.spec.ts
+      - name: Frontend production build
+        working-directory: frontend
+        run: pnpm build
+      - name: Build pinned trial binary
+        working-directory: backend
+        run: |
+          mkdir -p ../artifacts
+          VERSION=$(cat cmd/server/VERSION)
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags embed -trimpath -ldflags "-s -w -X main.Version=$VERSION -X main.Commit=$GITHUB_SHA -X main.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X main.BuildType=trial" -o ../artifacts/sub2api ./cmd/server
+          cd ../artifacts
+          sha256sum sub2api > SHA256SUMS
+          printf '%s\n' "$GITHUB_SHA" > SOURCE_COMMIT
+          git -C .. rev-parse HEAD^{tree} > SOURCE_TREE
+          printf 'linux/amd64\n' > ARCHITECTURE
+          ./sub2api --version > VERSION.txt 2>&1
+      - uses: actions/upload-artifact@v6
+        with:
+          name: pelican-trial-linux-amd64
+          path: artifacts/
+          retention-days: 14

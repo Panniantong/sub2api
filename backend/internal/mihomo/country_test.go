@@ -36,6 +36,41 @@ func TestCountryFilterRules(t *testing.T) {
 	require.Contains(t, countryCodes(), "US")
 }
 
+func TestDynamicCountryPolicyIgnoresStaleMeasurements(t *testing.T) {
+	s := saved{CountryFilter: CountryFilter{Mode: "exclude", Codes: []string{"HK"}}, Nodes: []map[string]any{{"name": "DYNAMIC-one"}, {"name": "airport-hk"}}, Countries: map[string]CountryObservation{"DYNAMIC-one": {Code: "US", CheckedAt: time.Now()}, "airport-hk": {Code: "HK"}}}
+	require.False(t, countryAllowed(s, "DYNAMIC-one"), "a previously allowed IP must not qualify a new dynamic connection")
+	s.CountryFilter.DynamicProviderManaged = true
+	require.True(t, countryAllowed(s, "DYNAMIC-one"))
+	require.False(t, countryAllowed(s, "airport-hk"), "dynamic policy must not bypass airport rules")
+	m := New(t.TempDir())
+	t.Cleanup(m.Close)
+	m.saved = s
+	status := m.Status()
+	require.True(t, status.NodeStates[0].Dynamic)
+	require.Empty(t, status.NodeStates[0].CountryCode)
+	require.Nil(t, status.NodeStates[0].CountryCheckedAt)
+	b, err := m.config(s)
+	require.NoError(t, err)
+	var cfg struct {
+		Groups []struct {
+			Proxies []string `json:"proxies"`
+		} `json:"proxy-groups"`
+	}
+	require.NoError(t, json.Unmarshal(b, &cfg))
+	require.Contains(t, cfg.Groups[0].Proxies, "DYNAMIC-one")
+	require.NotContains(t, cfg.Groups[0].Proxies, "airport-hk")
+	s.Disabled = map[string]string{"DYNAMIC-one": "disabled"}
+	m.saved = s
+	require.Zero(t, m.Status().EligibleNodes)
+	raw, err := json.Marshal(s)
+	require.NoError(t, err)
+	var restored saved
+	require.NoError(t, json.Unmarshal(raw, &restored))
+	require.True(t, restored.CountryFilter.DynamicProviderManaged)
+	_, err = m.scanCountries(context.Background(), s, "DYNAMIC-one")
+	require.ErrorContains(t, err, "dynamic exit")
+}
+
 func TestCountryFilterPersistsAndCannotBeBypassedByRecovery(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
 	defer server.Close()

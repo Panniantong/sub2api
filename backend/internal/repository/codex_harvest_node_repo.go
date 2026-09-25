@@ -99,7 +99,7 @@ func (r *codexHarvestNodeRepository) Record(ctx context.Context, f service.Codex
 	switch f.Result {
 	case "success":
 		success = 1
-	case "invalid_state", "response_incomplete_or_error", "upstream_error":
+	case "invalid_state", "invalid_route", "model_mismatch", "response_incomplete_or_error", "upstream_error":
 		miss = 1
 	case "network_error":
 		network = 1

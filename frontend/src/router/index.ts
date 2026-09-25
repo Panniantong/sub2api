@@ -502,6 +502,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/pelican-showcase',
+    name: 'PelicanShowcase',
+    component: () => import('@/views/user/PelicanShowcaseView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: false,
+      title: 'Pelican Showcase',
+      titleKey: 'pelicanShowcase.title',
+      descriptionKey: 'pelicanShowcase.description'
+    }
+  },
+  {
     path: '/admin/subscriptions',
     name: 'AdminSubscriptions',
     component: () => import('@/views/admin/SubscriptionsView.vue'),
@@ -512,6 +524,14 @@ const routes: RouteRecordRaw[] = [
       titleKey: 'admin.subscriptions.title',
       descriptionKey: 'admin.subscriptions.description'
     }
+  },
+  { path: '/admin/smart-ops', redirect: '/admin/account-quality', meta: { requiresAuth: true, requiresAdmin: true } },
+  { path: '/admin/account-ops', name: 'AdminAccountOps', component: () => import('@/views/admin/AccountOpsView.vue'), meta: { requiresAuth: true, requiresAdmin: true, title: 'Account operations', titleKey: 'accountOps.title', descriptionKey: 'accountOps.description' } },
+  {
+    path: '/admin/account-quality',
+    name: 'AdminAccountQuality',
+    component: () => import('@/views/admin/AccountQualityView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true, title: 'Account Quality Operations', titleKey: 'qualityOps.title', descriptionKey: 'qualityOps.description' }
   },
   {
     path: '/admin/accounts',

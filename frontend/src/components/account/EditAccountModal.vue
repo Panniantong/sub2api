@@ -1721,6 +1721,18 @@
             />
           </div>
         </div>
+        <div>
+          <label class="input-label">{{ t('admin.accounts.groupBillingRateMultiplier') }}</label>
+          <input
+            v-model.number="form.group_rate_multiplier"
+            type="number"
+            min="0"
+            step="0.01"
+            class="input"
+            data-testid="account-group-rate-multiplier"
+          />
+          <p class="input-hint">{{ t('admin.accounts.groupBillingRateMultiplierHint') }}</p>
+        </div>
       </div>
       <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <label class="input-label">{{ t('admin.accounts.expiresAt') }}</label>
@@ -1737,6 +1749,14 @@
           {{ t('admin.accounts.expiresAtHint') }}
           {{ t('admin.accounts.expiresAtTimezoneHint', { timezone: browserTimeZone }) }}
         </p>
+      </div>
+
+      <div v-if="account?.platform === 'openai' && account?.type === 'apikey'" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <label class="flex items-center gap-2">
+          <input v-model="copilotSDKEnabled" type="checkbox" data-testid="copilot-sdk-toggle" />
+          <span>Copilot SDK</span>
+        </label>
+        <p class="input-hint">{{ t('admin.accounts.openai.copilotSDKDesc') }}</p>
       </div>
 
       <!-- OpenAI 自动透传开关（OAuth/API Key） -->
@@ -1991,6 +2011,91 @@
         :account="account"
         @updated="handleOllamaCloudUsageUpdated"
       />
+
+      <section
+        v-if="account?.opencode_go_usage?.eligible"
+        class="space-y-4 border-t border-gray-200 pt-4 dark:border-dark-600"
+        data-testid="opencode-go-usage-settings"
+      >
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <h3 class="text-sm font-semibold text-gray-900 dark:text-white">
+              {{ t('admin.accounts.opencodeGo.title') }}
+            </h3>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.opencodeGo.panelHint') }}
+            </p>
+          </div>
+          <span
+            class="whitespace-nowrap rounded px-2 py-1 text-xs font-medium"
+            :class="opencodeGoStatusOk
+              ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+              : 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300'"
+          >
+            {{ opencodeGoStatusLabel }}
+          </span>
+        </div>
+
+        <div v-if="opencodeGoLoading" class="flex h-20 items-center justify-center text-gray-400">
+          <Icon name="refresh" size="sm" class="animate-spin" />
+        </div>
+        <template v-else>
+          <div
+            v-if="opencodeGoSnapshot"
+            class="border-y border-gray-100 py-3 dark:border-dark-700"
+            data-testid="opencode-go-usage-details"
+          >
+            <div class="grid grid-cols-[minmax(4rem,auto)_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-xs">
+              <span class="text-gray-500 dark:text-gray-400">{{ t('admin.accounts.opencodeGo.rolling') }}</span>
+              <span class="break-words text-gray-900 dark:text-white">{{ opencodeGoWindowSummary(opencodeGoSnapshot.data?.rolling) }}</span>
+              <span class="text-gray-500 dark:text-gray-400">{{ t('admin.accounts.opencodeGo.weekly') }}</span>
+              <span class="break-words text-gray-900 dark:text-white">{{ opencodeGoWindowSummary(opencodeGoSnapshot.data?.weekly) }}</span>
+              <span class="text-gray-500 dark:text-gray-400">{{ t('admin.accounts.opencodeGo.monthly') }}</span>
+              <span class="break-words text-gray-900 dark:text-white">{{ opencodeGoWindowSummary(opencodeGoSnapshot.data?.monthly) }}</span>
+              <span class="text-gray-500 dark:text-gray-400">{{ t('admin.accounts.opencodeGo.status') }}</span>
+              <span class="break-words font-medium text-gray-900 dark:text-white">{{ opencodeGoStatusLabel }}</span>
+              <span class="text-gray-500 dark:text-gray-400">{{ t('admin.accounts.opencodeGo.updatedAt') }}</span>
+              <span class="break-words text-gray-900 dark:text-white">{{ opencodeGoFormatDate(opencodeGoSnapshot.fetched_at || opencodeGoSnapshot.last_attempt_at) }}</span>
+            </div>
+            <p
+              v-if="opencodeGoSnapshot.last_error"
+              class="mt-2 break-words border-t border-gray-100 pt-2 text-xs text-amber-700 dark:border-dark-700 dark:text-amber-300"
+            >
+              {{ t(`admin.accounts.opencodeGo.errors.${opencodeGoSnapshot.last_error}`, opencodeGoSnapshot.last_error) }}
+            </p>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              class="btn btn-secondary btn-sm"
+              :disabled="opencodeGoRefreshing"
+              data-testid="opencode-go-refresh"
+              @click="refreshOpenCodeGoUsage"
+            >
+              <Icon name="refresh" size="xs" class="mr-1.5" :class="{ 'animate-spin': opencodeGoRefreshing }" />
+              {{ t('admin.accounts.opencodeGo.refreshNow') }}
+            </button>
+          </div>
+
+          <div class="flex items-center justify-between gap-4 border-t border-gray-100 pt-4 dark:border-dark-700">
+            <div>
+              <label class="text-sm font-medium text-gray-900 dark:text-white">
+                {{ t('admin.accounts.opencodeGo.autoRefresh') }}
+              </label>
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.accounts.opencodeGo.autoRefreshHint') }}
+              </p>
+            </div>
+            <Toggle
+              :model-value="opencodeGoState?.auto_refresh_enabled ?? false"
+              :disabled="opencodeGoSaving"
+              data-testid="opencode-go-auto-refresh"
+              @update:model-value="setOpenCodeGoAutoRefresh"
+            />
+          </div>
+        </template>
+      </section>
 
       <!-- Anthropic API Key 自动透传开关 -->
       <div
@@ -3008,6 +3113,13 @@
         data-tour="account-form-groups"
       />
 
+      <AccountGroupModelLimits
+        v-model="groupAllowedModels"
+        :groups="groupsForModelLimits"
+        :platform="account?.platform"
+        :account-id="account?.id"
+      />
+
     </form>
 
     <template #footer>
@@ -3062,7 +3174,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, watch, nextTick } from 'vue'
+import { ref, reactive, computed, watch, nextTick, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 
@@ -3079,7 +3191,9 @@ import type {
   OpenAIEndpointCapability,
   OllamaCloudUsageState,
   GrokMediaEligibilityMode,
-  GrokMediaEligibilityState
+  GrokMediaEligibilityState,
+  OpenCodeGoUsageState,
+  OpenCodeGoUsageWindow
 } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -3092,6 +3206,12 @@ import ProxySelector from '@/components/common/ProxySelector.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
+import AccountGroupModelLimits from '@/components/account/AccountGroupModelLimits.vue'
+import {
+  buildGroupAllowedModelsPayload,
+  groupAllowedModelsFromAccount,
+  type GroupAllowedModels
+} from '@/components/account/groupAllowedModels'
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
 import CnBaseUrlPresets from '@/components/account/CnBaseUrlPresets.vue'
@@ -3134,6 +3254,7 @@ import {
   getBrowserTimeZone,
   parseDateTimeLocalInput
 } from '@/utils/format'
+import { extractApiErrorMessage, extractI18nErrorMessage } from '@/utils/apiError'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
 import { getAccountExpiryTimestamp } from '@/components/account/accountExpiry'
 import { allSelectedGroupsEnableLongContextPricing } from '@/components/account/longContextBilling'
@@ -3184,6 +3305,16 @@ const selectableGroups = computed(() => {
   return Array.from(groups.values())
 })
 
+// 各分组内的可用模型限制，按当前勾选的分组顺序展示
+const groupAllowedModels = ref<GroupAllowedModels>({})
+const groupsForModelLimits = computed(() => {
+  const byId = new Map(selectableGroups.value.map(group => [group.id, group]))
+  return form.group_ids.flatMap(id => {
+    const group = byId.get(id)
+    return group ? [{ id: group.id, name: group.name }] : []
+  })
+})
+
 // Spark 影子账号(parent_account_id 非空):代理恒继承母账号,不可独立编辑(外审 B/P1),
 // 故隐藏代理选择器。
 const isSparkShadow = computed(() => props.account?.parent_account_id != null)
@@ -3204,6 +3335,88 @@ const hideAccountLongContextBilling = computed(() => {
 const handleOllamaCloudUsageUpdated = (state: OllamaCloudUsageState) => {
   if (props.account) emit('updated', { ...props.account, ollama_cloud_usage: state })
 }
+
+// OpenCode Go usage panel state
+const opencodeGoState = ref<OpenCodeGoUsageState | null>(props.account?.opencode_go_usage ?? null)
+const opencodeGoLoading = ref(false)
+const opencodeGoSaving = ref(false)
+const opencodeGoRefreshing = ref(false)
+const opencodeGoSnapshot = computed(() => opencodeGoState.value?.snapshot)
+const opencodeGoStatusOk = computed(() => opencodeGoSnapshot.value?.status === 'ok')
+const opencodeGoStatusLabel = computed(() => {
+  if (!opencodeGoSnapshot.value) return t('admin.accounts.opencodeGo.notRefreshed')
+  if (opencodeGoSnapshot.value.status === 'unauthorized') return t('admin.accounts.opencodeGo.unauthorized')
+  if (opencodeGoSnapshot.value.status === 'failed') return t('admin.accounts.opencodeGo.failed')
+  return t('admin.accounts.opencodeGo.ok')
+})
+const opencodeGoFormatPercent = (value?: number) => typeof value === 'number' && Number.isFinite(value)
+  ? `${value.toFixed(value % 1 ? 1 : 0)}%`
+  : '-'
+const opencodeGoFormatDate = (value?: string) => {
+  if (!value) return '-'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
+}
+const opencodeGoWindowSummary = (window?: OpenCodeGoUsageWindow) => {
+  if (!window) return '-'
+  const reset = window.resets_at ? opencodeGoFormatDate(window.resets_at) : null
+  return reset
+    ? t('admin.accounts.opencodeGo.windowWithReset', { percent: opencodeGoFormatPercent(window.percent), reset })
+    : opencodeGoFormatPercent(window.percent)
+}
+
+const applyOpenCodeGoState = (next: OpenCodeGoUsageState) => {
+  opencodeGoState.value = next
+  if (props.account) emit('updated', { ...props.account, opencode_go_usage: next })
+}
+
+const loadOpenCodeGoUsage = async () => {
+  opencodeGoLoading.value = true
+  try {
+    applyOpenCodeGoState(await adminAPI.accounts.getOpenCodeGoUsage(props.account!.id))
+  } catch (error) {
+    appStore.showError(extractApiErrorMessage(error, t('admin.accounts.opencodeGo.loadFailed')))
+  } finally {
+    opencodeGoLoading.value = false
+  }
+}
+
+const setOpenCodeGoAutoRefresh = async (enabled: boolean) => {
+  opencodeGoSaving.value = true
+  try {
+    applyOpenCodeGoState(await adminAPI.accounts.setOpenCodeGoUsageAutoRefresh(props.account!.id, enabled))
+  } catch (error) {
+    appStore.showError(extractApiErrorMessage(error, t('admin.accounts.opencodeGo.autoRefreshFailed')))
+  } finally {
+    opencodeGoSaving.value = false
+  }
+}
+
+const refreshOpenCodeGoUsage = async () => {
+  opencodeGoRefreshing.value = true
+  try {
+    applyOpenCodeGoState(await adminAPI.accounts.refreshOpenCodeGoUsage(props.account!.id))
+    appStore.showSuccess(t('admin.accounts.opencodeGo.refreshSuccess'))
+  } catch (error) {
+    appStore.showError(extractI18nErrorMessage(
+      error,
+      t,
+      'admin.accounts.opencodeGo.errors',
+      t('admin.accounts.opencodeGo.refreshFailed')
+    ))
+  } finally {
+    opencodeGoRefreshing.value = false
+  }
+}
+
+watch(() => props.account?.id, () => {
+  opencodeGoState.value = props.account?.opencode_go_usage ?? null
+  if (opencodeGoState.value && !opencodeGoState.value.snapshot) void loadOpenCodeGoUsage()
+})
+
+onMounted(() => {
+  if (opencodeGoState.value && !opencodeGoState.value.snapshot) void loadOpenCodeGoUsage()
+})
 
 // Platform-specific hint for Base URL
 const baseUrlHint = computed(() => {
@@ -3563,6 +3776,7 @@ const customBaseUrlEnabled = ref(false)
 const customBaseUrl = ref('')
 
 // OpenAI 自动透传开关（OAuth/API Key）
+const copilotSDKEnabled = ref(false)
 const openaiPassthroughEnabled = ref(false)
 // OpenAI Codex namespace 工具摊平兼容开关（仅 OAuth），缺省关闭即原样保留
 const openaiFlattenNamespacesEnabled = ref(false)
@@ -3804,7 +4018,7 @@ const normalizeOpenAIResponsesMode = (mode: unknown): OpenAIResponsesMode => {
   return 'auto'
 }
 const isOpenAIModelRestrictionDisabled = computed(() =>
-  props.account?.platform === 'openai' && openaiPassthroughEnabled.value
+  props.account?.platform === 'openai' && (openaiPassthroughEnabled.value || copilotSDKEnabled.value)
 )
 const openAIResponsesStatusKey = computed(() => {
   if (openAIResponsesMode.value === 'force_responses') {
@@ -3901,6 +4115,7 @@ const form = reactive({
   load_factor: null as number | null,
   priority: 1,
   rate_multiplier: 1,
+  group_rate_multiplier: 1,
   status: 'active' as 'active' | 'inactive' | 'error',
   group_ids: [] as number[],
   expires_at: null as number | null
@@ -3967,7 +4182,7 @@ const buildModelRestrictionMapping = () =>
   buildModelMappingObject('combined', allowedModels.value, modelMappings.value)
 
 const applyOpenAIModelMappingCredentials = (credentials: Record<string, unknown>) => {
-  const shouldApplyModelMapping = !openaiPassthroughEnabled.value
+  const shouldApplyModelMapping = !(openaiPassthroughEnabled.value || copilotSDKEnabled.value)
 
   if (shouldApplyModelMapping) {
     const modelMapping = buildModelRestrictionMapping()
@@ -4009,10 +4224,12 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   form.load_factor = newAccount.load_factor ?? null
   form.priority = newAccount.priority
   form.rate_multiplier = newAccount.rate_multiplier ?? 1
+  form.group_rate_multiplier = newAccount.group_rate_multiplier ?? 1
   form.status = (newAccount.status === 'active' || newAccount.status === 'inactive' || newAccount.status === 'error')
     ? newAccount.status
     : 'active'
   form.group_ids = newAccount.group_ids || []
+  groupAllowedModels.value = groupAllowedModelsFromAccount(newAccount)
   form.expires_at = newAccount.expires_at ?? null
 
   // Load intercept warmup requests setting (applies to all account types)
@@ -4051,6 +4268,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     upstreamBillingAutoProbeEnabled.value && extra?.upstream_billing_rate_sync_enabled === true
 
   // Load OpenAI passthrough toggle (OpenAI OAuth/SetupToken/API Key)
+  copilotSDKEnabled.value = false
   openaiPassthroughEnabled.value = false
   openaiFlattenNamespacesEnabled.value = false
   openAILongContextBillingEnabled.value = false
@@ -4069,6 +4287,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   anthropicAPIKeyAuthScheme.value = 'x_api_key'
   webSearchEmulationMode.value = 'default'
   if (newAccount.platform === 'openai' && (newAccount.type === 'oauth' || newAccount.type === 'setup-token' || newAccount.type === 'apikey')) {
+    copilotSDKEnabled.value = newAccount.type === 'apikey' && extra?.openai_copilot_sdk === true
     openaiPassthroughEnabled.value = extra?.openai_passthrough === true || extra?.openai_oauth_passthrough === true
     openaiFlattenNamespacesEnabled.value =
       newAccount.type === 'oauth' && extra?.openai_responses_flatten_namespaces === true
@@ -5037,6 +5256,8 @@ const handleSubmit = async () => {
       updatePayload.load_factor = 0
     }
     updatePayload.auto_pause_on_expired = autoPauseOnExpired.value
+    // 整体覆盖：只带仍勾选的分组，没有列出的分组由后端恢复为不限制
+    updatePayload.group_allowed_models = buildGroupAllowedModelsPayload(form.group_ids, groupAllowedModels.value)
     if (props.account.type === 'apikey') {
       updatePayload.upstream_billing_probe_enabled = upstreamBillingAutoProbeEnabled.value
       updatePayload.upstream_billing_rate_sync_enabled = upstreamBillingRateSyncEnabled.value
@@ -5049,7 +5270,7 @@ const handleSubmit = async () => {
     if (props.account.type === 'apikey') {
       const currentCredentials = (props.account.credentials as Record<string, unknown>) || {}
       const newBaseUrl = editBaseUrl.value.trim() || defaultBaseUrl.value
-      const shouldApplyModelMapping = !(props.account.platform === 'openai' && openaiPassthroughEnabled.value)
+      const shouldApplyModelMapping = !(props.account.platform === 'openai' && (openaiPassthroughEnabled.value || copilotSDKEnabled.value))
 
       // Always update credentials for apikey type to handle model mapping changes
       const newCredentials: Record<string, unknown> = {
@@ -5553,6 +5774,11 @@ const handleSubmit = async () => {
       }
       delete newExtra.responses_websockets_v2_enabled
       delete newExtra.openai_ws_enabled
+      if (props.account.type === 'apikey' && copilotSDKEnabled.value) {
+        newExtra.openai_copilot_sdk = true
+      } else {
+        delete newExtra.openai_copilot_sdk
+      }
       if (openaiPassthroughEnabled.value) {
         newExtra.openai_passthrough = true
       } else {

@@ -4,7 +4,7 @@
       <h4 id="country-filter-title" class="text-sm font-semibold">{{ text('国家／地区过滤', 'Country / region filter') }}</h4>
       <span class="text-xs text-gray-500">{{ text('预计可用', 'Eligible') }} {{ eligible }} / {{ nodes.length }}</span>
     </div>
-    <p class="text-xs text-gray-500">{{ text('按最近的出口 IP 检测结果筛选，不依据节点名称。动态出口改变地区后需要重新检测。', 'Uses the last exit-IP country check, not node names. Recheck when a dynamic exit changes region.') }}</p>
+    <p class="text-xs text-gray-500">{{ text('机场节点按最近的出口 IP 检测结果筛选。动态代理每次连接可能更换 IP，历史检测结果不用于准入。', 'Subscription nodes use the last exit-IP country check. Dynamic proxies may change IP on every connection; previous checks do not determine eligibility.') }}</p>
     <div class="flex flex-wrap items-center gap-2">
       <label class="sr-only" for="country-filter-mode">{{ text('过滤模式', 'Filter mode') }}</label>
       <select id="country-filter-mode" v-model="draft.mode" class="input w-auto" :disabled="busy" @change="dirty = true">
@@ -24,7 +24,10 @@
         <button v-for="code in options" :key="code" type="button" class="rounded-md border px-2 py-1 text-xs" :class="draft.codes.includes(code) ? 'border-primary-500 bg-primary-50 text-primary-700 dark:bg-primary-900 dark:text-primary-200' : 'border-gray-200 dark:border-dark-600'" :disabled="busy" :aria-pressed="draft.codes.includes(code)" :data-country="code" @click="toggle(code)">{{ label(code) }}</button>
       </div>
       <label class="flex items-start gap-2 text-xs"><input v-model="draft.allow_unknown" type="checkbox" class="mt-0.5" :disabled="busy" @change="dirty = true" />{{ text('允许未知地区节点（尚未检测或检测失败）', 'Allow unknown regions (unchecked or failed checks)') }}</label>
+      <label class="flex items-start gap-2 text-xs"><input v-model="draft.dynamic_provider_managed" type="checkbox" data-testid="dynamic-provider-managed" :disabled="busy" @change="dirty = true" />{{ text('动态代理地区由供应商控制（允许动态节点，不应用上方地区筛选）', 'Provider controls dynamic proxy regions (allow dynamic nodes without the region filter above)') }}</label>
+      <p class="text-xs text-amber-700">{{ text('开启后请在供应商侧限定地区；Random 不保证排除 CN/HK。关闭时动态节点按未知地区处理。', 'When enabled, restrict regions at your provider; Random does not guarantee exclusion of CN/HK. Otherwise dynamic nodes are treated as unknown.') }}</p>
     </template>
+    <p v-if="dynamicBlocked" class="text-xs text-amber-700" role="status">{{ text('动态代理未参与轮换：请启用供应商控制地区，或明确允许未知地区。重复检测不能保证下次连接的地区。', 'Dynamic proxies are excluded. Enable provider-managed regions or allow unknown regions; repeated checks cannot guarantee the next connection’s country.') }}</p>
     <p v-if="eligible === 0 && nodes.length" class="text-xs text-amber-700 dark:text-amber-400" role="status">{{ text('应用后没有可参与打票的节点。可先检测地区或调整筛选；不会自动回退到被排除地区。', 'No eligible harvest nodes after applying. Check regions or adjust the filter; excluded regions are never a fallback.') }}</p>
     <div class="flex flex-wrap gap-2">
       <button type="button" class="btn btn-primary btn-sm" :disabled="busy || (draft.mode !== 'off' && !draft.codes.length)" @click="save">{{ text('保存地区规则', 'Save region rules') }}</button>
@@ -45,8 +48,8 @@ const draft = reactive<CountryFilter>({ mode: 'off', codes: [], allow_unknown: f
 const dirty = ref(false); const search = ref('')
 watch(() => props.filter, value => {
   const next = value || { mode: 'off' as const, codes: [], allow_unknown: false }
-  const equal = draft.mode === next.mode && draft.allow_unknown === next.allow_unknown && [...draft.codes].sort().join(',') === [...(next.codes || [])].sort().join(',')
-  if (!dirty.value || equal) { Object.assign(draft, next, { codes: [...(next.codes || [])] }); dirty.value = false }
+  const equal = draft.mode === next.mode && draft.allow_unknown === next.allow_unknown && !!draft.dynamic_provider_managed === !!next.dynamic_provider_managed && [...draft.codes].sort().join(',') === [...(next.codes || [])].sort().join(',')
+  if (!dirty.value || equal) { Object.assign(draft, { dynamic_provider_managed: false }, next, { codes: [...(next.codes || [])] }); dirty.value = false }
 }, { immediate: true, deep: true })
 const names = computed(() => new Intl.DisplayNames([locale.value.startsWith('zh') ? 'zh' : 'en'], { type: 'region' }))
 const englishNames = new Intl.DisplayNames(['en'], { type: 'region' })
@@ -63,8 +66,10 @@ function save() { emit('save', { ...draft, codes: [...draft.codes] }) }
 const eligible = computed(() => props.nodes.filter(node => {
   if (node.state !== 'enabled' && node.state !== 'country_excluded') return false
   if (draft.mode === 'off') return true
+  if (node.dynamic) return draft.dynamic_provider_managed || draft.allow_unknown
   if (!node.country_code) return draft.allow_unknown
   const selected = draft.codes.includes(node.country_code)
   return draft.mode === 'include' ? selected : !selected
 }).length)
+const dynamicBlocked = computed(() => props.nodes.some(n => n.dynamic) && draft.mode !== 'off' && !draft.dynamic_provider_managed && !draft.allow_unknown)
 </script>

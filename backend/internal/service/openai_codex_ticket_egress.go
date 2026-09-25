@@ -64,6 +64,15 @@ func restoreBoundCodexTicketHarvestIdentity(h http.Header, ticket *openAICodexTi
 	if h == nil || ticket == nil {
 		return
 	}
+	if ticket.Length == 780 {
+		h.Del(responsesLiteHeaderKey)
+		if codexTicketCookiesFresh(ticket, time.Now()) {
+			h.Set("Cookie", strings.Join(ticket.HarvestCookies, "; "))
+		} else {
+			h.Del("Cookie")
+		}
+		return
+	}
 	prevBeta := strings.TrimSpace(h.Get("OpenAI-Beta"))
 	if session := harvestTicketSessionID(ticket); session != "" {
 		h.Set("session_id", session)
@@ -82,6 +91,9 @@ func restoreBoundCodexTicketHarvestIdentity(h http.Header, ticket *openAICodexTi
 	applyOpenAICodexTicketHarvestIdentity(h, ticket.Model)
 	for _, key := range boundCodexTicketHarvestStrippedHeaders {
 		h.Del(key)
+	}
+	if ticket.HarvestLite {
+		h.Set(responsesLiteHeaderKey, "true")
 	}
 	if prevBeta == openAIWSBetaV1Value || prevBeta == openAIWSBetaV2Value {
 		h.Set("OpenAI-Beta", prevBeta)
@@ -327,6 +339,13 @@ func (s *OpenAIGatewayService) pinCodexTicketEgressFromHeader(ctx context.Contex
 	}
 	if strings.TrimSpace(ticket.HarvestNodeID) == "" && strings.TrimSpace(ticket.HarvestNodeName) == "" {
 		return pinned, noop, nil
+	}
+	if ticket.HarvestNodeProvider == "managed" {
+		proxy, release, err := mihomo.PinNode(ctx, ticket.HarvestNodeID)
+		if err != nil {
+			return "", noop, ErrOpenAICodexTicketUnavailable
+		}
+		return proxy, release, nil
 	}
 	sidecar, err := s.loadCodexTicketDirectedSidecar(ctx, pinned)
 	if err != nil {

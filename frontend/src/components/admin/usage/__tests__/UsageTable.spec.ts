@@ -854,3 +854,109 @@ describe('admin UsageTable deleted-user badge', () => {
     expect(wrapper.text()).toContain('active@test.com')
   })
 })
+
+const DataTableStubWithLatency = {
+  props: ['data'],
+  template: `
+    <div>
+      <div v-for="row in data" :key="row.request_id" :data-row="row.request_id">
+        <slot name="cell-latency" :row="row" />
+      </div>
+    </div>
+  `,
+}
+
+describe('admin UsageTable latency TPS', () => {
+  const mountLatency = (data: Record<string, unknown>[]) =>
+    mount(UsageTable, {
+      props: {
+        data: data as any,
+        loading: false,
+        columns: [{ key: 'latency', label: 'Latency' }],
+      },
+      global: {
+        stubs: {
+          DataTable: DataTableStubWithLatency,
+          EmptyState: true,
+          Icon: true,
+          Teleport: true,
+        },
+      },
+    })
+
+  const tpsCell = (wrapper: ReturnType<typeof mountLatency>, requestId: string) =>
+    wrapper.find(`[data-row="${requestId}"] [data-testid="latency-tps"]`)
+
+  const barClasses = (wrapper: ReturnType<typeof mountLatency>, requestId: string) =>
+    wrapper.find(`[data-row="${requestId}"] [data-testid="latency-bar"]`).classes()
+
+  it('shows output speed after the first token for streaming rows', () => {
+    const wrapper = mountLatency([
+      { request_id: 'req-tps-stream', output_tokens: 872, duration_ms: 31_260, first_token_ms: 2_910 },
+    ])
+
+    expect(wrapper.text()).toContain('usage.latencyTps')
+    const cell = tpsCell(wrapper, 'req-tps-stream')
+    expect(cell.text()).toBe('30.8 t/s')
+    expect(cell.attributes('title')).toBe('usage.latencyTpsHint')
+    expect(cell.classes()).toContain('text-emerald-600')
+  })
+
+  it('colors the TPS text and the bottom bar segment red below 10 t/s and yellow below 20 t/s', () => {
+    const wrapper = mountLatency([
+      // first token 12s (warn), total 17s (good), 5 t/s (critical)
+      { request_id: 'req-tps-slow', output_tokens: 25, duration_ms: 17_000, first_token_ms: 12_000 },
+      // first token 2s (good), total 12s (good), 15 t/s (warn)
+      { request_id: 'req-tps-mid', output_tokens: 150, duration_ms: 12_000, first_token_ms: 2_000 },
+    ])
+
+    expect(tpsCell(wrapper, 'req-tps-slow').text()).toBe('5.0 t/s')
+    expect(tpsCell(wrapper, 'req-tps-slow').classes()).toContain('text-red-600')
+    expect(barClasses(wrapper, 'req-tps-slow')).toEqual(
+      expect.arrayContaining(['from-amber-400', 'via-emerald-500', 'to-red-500']),
+    )
+
+    expect(tpsCell(wrapper, 'req-tps-mid').text()).toBe('15.0 t/s')
+    expect(tpsCell(wrapper, 'req-tps-mid').classes()).toContain('text-amber-600')
+    expect(barClasses(wrapper, 'req-tps-mid')).toEqual(
+      expect.arrayContaining(['from-emerald-500', 'via-emerald-500', 'to-amber-400']),
+    )
+  })
+
+  it('lets bar segments without first-token or TPS data follow the total-duration color', () => {
+    const wrapper = mountLatency([
+      // no first token, total 70s (warn), 1400 tokens / 70s = 20 t/s (good)
+      { request_id: 'req-bar-sync', output_tokens: 1_400, duration_ms: 70_000, first_token_ms: null },
+      // image row: no first token and no TPS, total 40s (good)
+      { ...baseImageRow, request_id: 'req-bar-image', duration_ms: 40_000, first_token_ms: null },
+    ])
+
+    expect(barClasses(wrapper, 'req-bar-sync')).toEqual(
+      expect.arrayContaining(['from-amber-400', 'via-amber-400', 'to-emerald-500']),
+    )
+    expect(barClasses(wrapper, 'req-bar-image')).toEqual(
+      expect.arrayContaining(['from-emerald-500', 'via-emerald-500', 'to-emerald-500']),
+    )
+  })
+
+  it('uses the total duration and a different hint when first token is missing', () => {
+    const wrapper = mountLatency([
+      { request_id: 'req-tps-sync', output_tokens: 500, duration_ms: 10_000, first_token_ms: null },
+    ])
+
+    const cell = tpsCell(wrapper, 'req-tps-sync')
+    expect(cell.text()).toBe('50.0 t/s')
+    expect(cell.attributes('title')).toBe('usage.latencyTpsHintNoFirstToken')
+  })
+
+  it('renders a placeholder when TPS cannot be computed', () => {
+    const wrapper = mountLatency([
+      { request_id: 'req-tps-empty', output_tokens: 0, duration_ms: 1_200, first_token_ms: 300 },
+      { ...baseImageRow, request_id: 'req-tps-image', duration_ms: 40_000, first_token_ms: null },
+    ])
+
+    expect(tpsCell(wrapper, 'req-tps-empty').text()).toBe('-')
+    expect(tpsCell(wrapper, 'req-tps-empty').attributes('title')).toBeUndefined()
+    expect(tpsCell(wrapper, 'req-tps-image').text()).toBe('-')
+  })
+})

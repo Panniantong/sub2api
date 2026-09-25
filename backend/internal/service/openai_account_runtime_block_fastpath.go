@@ -103,6 +103,7 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 	// Any non-2xx upstream HTTP response means the model request was actually sent.
 	if s != nil {
 		scheduleOllamaCloudUsageActivity(s.deferredService, account)
+		scheduleOpenCodeGoUsageActivity(s.deferredService, account)
 	}
 	// Capacity shedding describes this request, not account health. Keep the
 	// account schedulable while the request-local retry budget handles recovery.
@@ -111,6 +112,9 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 	}
 	stateCtx, cancel := openAIAccountStateContext(ctx)
 	defer cancel()
+	if s != nil {
+		stateCtx = s.rateLimitService.observeAccountOps(stateCtx, account, statusCode, headers, responseBody)
+	}
 	if account != nil && account.Platform == PlatformOpenAI && isOpenAIHTTPUpstreamAccessStateError(statusCode, "", responseBody) {
 		message := "OpenAI upstream account or workspace is unavailable"
 		if upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(responseBody)); upstreamMsg != "" {

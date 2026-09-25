@@ -3,6 +3,7 @@ package middleware
 import (
 	"errors"
 	"fmt"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	"net/http"
 	"strings"
 
@@ -13,13 +14,13 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// GroupModelAllowlist 是分组级模型白名单准入中间件。
+// GroupModelAllowlist 是分组级模型白名单准入中间件，同时执行用户在分组内的禁用模型。
 //
 // 挂载位置：每条网关链的 apiKeyAuth 之后、compositeTarget 之前——
 // 保证校验发生在合成路由改写与调度之前，且只看客户端书写的公开模型名。
 //
 // 行为：
-//   - 快速路径：未绑定分组或白名单未开启时直接放行，不读请求体。
+//   - 快速路径：分组白名单未开启、且该 Key 所属用户在分组内没有禁用模型时直接放行，不读请求体。
 //   - Responses WebSocket 入口跳过（首帧与后续 turn 由 ResponsesWebSocket 逐帧
 //     校验）；Grok Realtime 的升级请求模型固定在查询参数里，仍走中间件校验，
 //     其他路由伪造 Upgrade 头不得绕过校验。
@@ -29,21 +30,33 @@ import (
 //     `model`/`session.model` 或 multipart `model`/`session` 后回填请求体。
 //   - 拒绝：按入口协议格式返回 404，并标记运维业务限流原因
 //     local_model_configuration 与 ingress 拒绝原因 model_not_allowed。
+//     命中用户禁用模型时提示「对你的账号不可用」，与分组白名单的提示区分开。
 func GroupModelAllowlist() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		done := requesttiming.Observe(c.Request.Context(), "model_allowlist")
+		defer done()
 		apiKey, ok := GetAPIKeyFromContext(c)
-		if !ok || apiKey == nil || apiKey.Group == nil || !apiKey.Group.ModelAllowlistEnabled() {
+		if !ok || apiKey == nil {
+			done()
 			c.Next()
 			return
 		}
-		allowlist := apiKey.Group.ModelAllowlist
+		allowlistEnabled := apiKey.Group != nil && apiKey.Group.ModelAllowlistEnabled()
+		deniedModels := apiKey.DeniedModelsInGroup()
+		if !allowlistEnabled && len(deniedModels) == 0 {
+			done()
+			c.Next()
+			return
+		}
 		if c.Request == nil {
+			done()
 			c.Next()
 			return
 		}
 
 		if isResponsesWebSocketRoute(c) {
 			// Responses WS 长连接由 ResponsesWebSocket 校验首帧与每个 response.create。
+			done()
 			c.Next()
 			return
 		}
@@ -71,20 +84,27 @@ func GroupModelAllowlist() gin.HandlerFunc {
 		}
 
 		blocked := ""
-		for _, candidate := range models {
-			if !allowlist.Allows(candidate) {
-				blocked = candidate
-				break
+		if allowlistEnabled {
+			for _, candidate := range models {
+				if !apiKey.Group.ModelAllowlist.Allows(candidate) {
+					blocked = candidate
+					break
+				}
 			}
 		}
+		message := fmt.Sprintf("Model %q is not available for this group", blocked)
 		if blocked == "" {
-			c.Next()
-			return
+			if blocked = service.FirstUserGroupDeniedModel(deniedModels, models); blocked == "" {
+				done()
+				c.Next()
+				return
+			}
+			message = fmt.Sprintf("Model %q is not available for your account in this group", blocked)
 		}
 
 		service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalModelConfiguration)
 		MarkIngressRejected(c, IngressRejectModelNotAllowed)
-		groupModelAllowlistErrorWriter(c)(c, http.StatusNotFound, fmt.Sprintf("Model %q is not available for this group", blocked))
+		groupModelAllowlistErrorWriter(c)(c, http.StatusNotFound, message)
 		c.Abort()
 	}
 }
@@ -111,6 +131,16 @@ func isResponsesWebSocketRoute(c *gin.Context) bool {
 // 不敏感）与 multipart 表单（首/末字段）三类解析器，这里返回「任一解析器可能
 // 绑定到的全部模型值」，调用方必须逐一校验，任一未命中即拒绝。
 func groupModelAllowlistModelsFromBody(c *gin.Context) ([]string, bool) {
+	body, ok := readAdmissionRequestBody(c)
+	if !ok {
+		return nil, false
+	}
+	return requestmodel.FromBodyCandidates(c.FullPath(), c.GetHeader("Content-Type"), body), true
+}
+
+// readAdmissionRequestBody 供准入中间件读取请求体：读完用 PrereadBody 回填，后续 handler
+// 零拷贝重读。读取失败按合成中间件的方式返回 400/413 并 Abort（第二个返回值为 false）。
+func readAdmissionRequestBody(c *gin.Context) ([]byte, bool) {
 	body, err := httputil.ReadRequestBodyWithPrealloc(c.Request)
 	if err != nil {
 		status := http.StatusBadRequest
@@ -125,7 +155,7 @@ func groupModelAllowlistModelsFromBody(c *gin.Context) ([]string, bool) {
 		return nil, false
 	}
 	requestmodel.ResetRequestBody(c.Request, body)
-	return requestmodel.FromBodyCandidates(c.FullPath(), c.GetHeader("Content-Type"), body), true
+	return body, true
 }
 
 // groupModelAllowlistModelFromParams 从路由参数提取模型名：Gemini 原生 URL 的

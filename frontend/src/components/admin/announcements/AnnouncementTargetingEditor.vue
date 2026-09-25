@@ -6,11 +6,11 @@
           {{ t('admin.announcements.form.targetingMode') }}
         </div>
         <div class="mt-1 text-xs text-gray-500 dark:text-dark-400">
-          {{ mode === 'all' ? t('admin.announcements.form.targetingAll') : t('admin.announcements.form.targetingCustom') }}
+          {{ modeDescription }}
         </div>
       </div>
 
-      <div class="flex items-center gap-3">
+      <div class="flex flex-wrap items-center gap-3">
         <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
           <input
             type="radio"
@@ -26,17 +26,42 @@
           <input
             type="radio"
             name="announcement-targeting-mode"
+            value="users"
+            :checked="mode === 'users'"
+            @change="setMode('users')"
+            class="h-4 w-4"
+            data-testid="announcement-targeting-mode-users"
+          />
+          {{ t('admin.announcements.form.targetingUsers') }}
+        </label>
+        <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+          <input
+            type="radio"
+            name="announcement-targeting-mode"
             value="custom"
             :checked="mode === 'custom'"
             @change="setMode('custom')"
             class="h-4 w-4"
+            data-testid="announcement-targeting-mode-custom"
           />
           {{ t('admin.announcements.form.targetingCustom') }}
         </label>
       </div>
     </div>
 
-    <div v-if="mode === 'custom'" class="mt-4 space-y-4">
+    <div v-if="mode === 'users'" class="mt-4 space-y-2" data-testid="announcement-targeting-users">
+      <label class="input-label">{{ t('admin.announcements.form.selectUsers') }}</label>
+      <AnnouncementUserPicker
+        :model-value="singleConditionUserIds"
+        @update:model-value="(ids) => setUserIds(0, 0, ids)"
+      />
+      <p class="input-hint">{{ t('admin.announcements.form.targetingUsersHint') }}</p>
+      <div v-if="validationError" class="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900/30 dark:bg-red-900/10 dark:text-red-300">
+        {{ validationError }}
+      </div>
+    </div>
+
+    <div v-if="mode === 'custom'" class="mt-4 space-y-4" data-testid="announcement-targeting-custom">
       <div class="flex items-center justify-between">
         <div class="text-sm font-medium text-gray-900 dark:text-white">
           OR
@@ -109,6 +134,14 @@
                 />
               </div>
 
+              <div v-else-if="cond.type === 'user'" class="flex-1">
+                <label class="input-label">{{ t('admin.announcements.form.selectUsers') }}</label>
+                <AnnouncementUserPicker
+                  :model-value="cond.user_ids ?? []"
+                  @update:model-value="(ids) => setUserIds(groupIndex, condIndex, ids)"
+                />
+              </div>
+
               <div v-else class="flex flex-1 flex-col gap-3 sm:flex-row">
                 <div class="w-full sm:w-44">
                   <label class="input-label">{{ t('admin.announcements.form.operator') }}</label>
@@ -165,7 +198,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type {
   AdminGroup,
@@ -179,6 +212,8 @@ import type {
 import Select from '@/components/common/Select.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
 import Icon from '@/components/icons/Icon.vue'
+import AnnouncementUserPicker from './AnnouncementUserPicker.vue'
+import { isSpecificUsersTargeting, targetingUserIds } from '@/utils/announcementTargeting'
 
 const { t } = useI18n()
 
@@ -193,12 +228,31 @@ const emit = defineEmits<{
 
 const anyOf = computed(() => props.modelValue?.any_of ?? [])
 
-type Mode = 'all' | 'custom'
-const mode = computed<Mode>(() => (anyOf.value.length === 0 ? 'all' : 'custom'))
+type Mode = 'all' | 'users' | 'custom'
+const deriveMode = (targeting?: AnnouncementTargeting): Mode => {
+  if (!targeting?.any_of?.length) return 'all'
+  return isSpecificUsersTargeting(targeting) ? 'users' : 'custom'
+}
+// 编辑框每次打开都会重新挂载：挂载时按已有规则确定模式，之后只随管理员点选变化。
+// 「一个组里只有一个指定用户条件」在两种模式下都合法，实时按形状推断会让「按条件」里
+// 一改条件类型就跳到「指定用户」。
+const pickedMode = ref<Mode>(deriveMode(props.modelValue))
+const mode = computed<Mode>(() => {
+  if (anyOf.value.length === 0) return 'all'
+  return pickedMode.value === 'all' ? deriveMode(props.modelValue) : pickedMode.value
+})
+
+const modeDescription = computed(() => {
+  if (mode.value === 'users') return t('admin.announcements.form.targetingUsers')
+  return mode.value === 'all' ? t('admin.announcements.form.targetingAll') : t('admin.announcements.form.targetingCustom')
+})
+
+const singleConditionUserIds = computed(() => anyOf.value[0]?.all_of?.[0]?.user_ids ?? [])
 
 const conditionTypeOptions = computed(() => [
   { value: 'subscription', label: t('admin.announcements.form.conditionSubscription') },
-  { value: 'balance', label: t('admin.announcements.form.conditionBalance') }
+  { value: 'balance', label: t('admin.announcements.form.conditionBalance') },
+  { value: 'user', label: t('admin.announcements.form.conditionUser') }
 ])
 
 const balanceOperatorOptions = computed(() => [
@@ -210,8 +264,16 @@ const balanceOperatorOptions = computed(() => [
 ])
 
 function setMode(next: Mode) {
+  pickedMode.value = next
   if (next === 'all') {
     emit('update:modelValue', { any_of: [] })
+    return
+  }
+  if (next === 'users') {
+    // 从「按条件」切过来时保留已经选过的用户，其他条件不再生效
+    if (!isSpecificUsersTargeting(props.modelValue)) {
+      emit('update:modelValue', { any_of: [{ all_of: [defaultUserCondition(targetingUserIds(props.modelValue))] }] })
+    }
     return
   }
   if (anyOf.value.length === 0) {
@@ -224,6 +286,14 @@ function defaultSubscriptionCondition(): AnnouncementCondition {
     type: 'subscription' as AnnouncementConditionType,
     operator: 'in' as AnnouncementOperator,
     group_ids: []
+  }
+}
+
+function defaultUserCondition(userIds: number[] = []): AnnouncementCondition {
+  return {
+    type: 'user' as AnnouncementConditionType,
+    operator: 'in' as AnnouncementOperator,
+    user_ids: userIds
   }
 }
 
@@ -283,6 +353,8 @@ function setConditionType(groupIndex: number, condIndex: number, nextType: Annou
 
     if (nextType === 'subscription') {
       group.all_of[condIndex] = defaultSubscriptionCondition()
+    } else if (nextType === 'user') {
+      group.all_of[condIndex] = defaultUserCondition()
     } else {
       group.all_of[condIndex] = defaultBalanceCondition()
     }
@@ -298,6 +370,14 @@ function setOperator(groupIndex: number, condIndex: number, op: AnnouncementOper
     if (!cond) return
 
     cond.operator = op
+  })
+}
+
+function setUserIds(groupIndex: number, condIndex: number, userIds: number[]) {
+  updateTargeting((draft) => {
+    const cond = draft.any_of[groupIndex]?.all_of?.[condIndex]
+    if (!cond) return
+    cond.user_ids = userIds
   })
 }
 
@@ -384,7 +464,7 @@ watch(
 )
 
 const validationError = computed(() => {
-  if (mode.value !== 'custom') return ''
+  if (mode.value === 'all') return ''
 
   const groups = anyOf.value
   if (groups.length === 0) return t('admin.announcements.form.addOrGroup')
@@ -399,6 +479,9 @@ const validationError = computed(() => {
     for (const c of allOf) {
       if (c.type === 'subscription') {
         if (!c.group_ids || c.group_ids.length === 0) return t('admin.announcements.form.selectPackages')
+      }
+      if (c.type === 'user') {
+        if (!c.user_ids || c.user_ids.length === 0) return t('admin.announcements.form.selectUsersRequired')
       }
     }
   }

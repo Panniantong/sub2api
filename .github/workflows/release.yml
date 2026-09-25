@@ -15,6 +15,11 @@ on:
         required: false
         type: boolean
         default: false
+      notify_release:
+        description: 'Send the release announcement to Telegram (explicit opt-in)'
+        required: false
+        type: boolean
+        default: false
       dry_run:
         description: 'Build and verify all selected artifacts without publishing'
         required: false
@@ -40,6 +45,7 @@ jobs:
       owner_lower: ${{ steps.plan.outputs.owner_lower }}
       tag: ${{ steps.plan.outputs.tag }}
       version: ${{ steps.plan.outputs.version }}
+      prerelease: ${{ steps.plan.outputs.prerelease }}
       date: ${{ steps.plan.outputs.date }}
       matrix: ${{ steps.plan.outputs.matrix }}
       simple: ${{ steps.plan.outputs.simple }}
@@ -294,7 +300,7 @@ jobs:
 
       # Update DockerHub description
       - name: Update DockerHub description
-        if: ${{ env.DRY_RUN != 'true' && env.SIMPLE_RELEASE != 'true' && env.DOCKERHUB_USERNAME != '' }}
+        if: ${{ env.DRY_RUN != 'true' && env.SIMPLE_RELEASE != 'true' && env.DOCKERHUB_USERNAME != '' && needs.prepare.outputs.prerelease != 'true' }}
         uses: peter-evans/dockerhub-description@v5
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -307,7 +313,7 @@ jobs:
 
       # Send Telegram notification
       - name: Send Telegram Notification
-        if: ${{ env.DRY_RUN != 'true' && env.SIMPLE_RELEASE != 'true' }}
+        if: ${{ inputs.notify_release == true && env.DRY_RUN != 'true' && env.SIMPLE_RELEASE != 'true' && needs.prepare.outputs.prerelease != 'true' }}
         env:
           TAG_MESSAGE: ${{ steps.tag_message.outputs.message }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -377,7 +383,7 @@ jobs:
 
   sync-version-file:
     needs: [prepare, release]
-    if: ${{ needs.release.result == 'success' && needs.prepare.outputs.dry_run != 'true' }}
+    if: ${{ needs.release.result == 'success' && needs.prepare.outputs.dry_run != 'true' && needs.prepare.outputs.prerelease != 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

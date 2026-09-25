@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 )
@@ -19,7 +20,7 @@ func (h *GatewayHandler) pinnedOpenAIModels(c *gin.Context, group *service.Group
 		writeOpenAIModelsError(c, http.StatusInternalServerError, "api_error", "OpenAI model discovery is not configured")
 		return
 	}
-	etag := c.GetHeader("If-None-Match")
+	etag := modelsIfNoneMatch(c)
 	if c.Param("model") != "" {
 		etag = "" // A collection ETag cannot validate a single-model representation.
 	}
@@ -46,6 +47,19 @@ func writeOpenAIModelsError(c *gin.Context, status int, errorType, message strin
 }
 
 func writeOpenAIModelsResponse(c *gin.Context, manifest *service.OpenAIModelsResponse) {
+	if denied := deniedModelsForRequest(c); len(denied) > 0 && len(manifest.Body) > 0 {
+		body, err := removeDeniedCatalogEntries(manifest.Body, denied)
+		if err != nil {
+			writeOpenAIModelsError(c, http.StatusBadGateway, "upstream_error", "Invalid model catalogue")
+			return
+		}
+		// 过滤后的目录因用户而异，不能沿用分组共享的 ETag 做条件缓存。
+		filtered := *manifest
+		filtered.Body = body
+		filtered.ETag = ""
+		filtered.NotModified = false
+		manifest = &filtered
+	}
 	if c.Param("model") != "" {
 		writeRetrievedModel(c, manifest.Body)
 		return
@@ -65,7 +79,8 @@ func writeOpenAIModelsResponse(c *gin.Context, manifest *service.OpenAIModelsRes
 // selection and allowlist filtering. Preserve every field on the selected entry.
 func writeModelsListResponse(c *gin.Context, models any) {
 	response := gin.H{"object": "list", "data": models}
-	if c.Param("model") == "" {
+	denied := deniedModelsForRequest(c)
+	if c.Param("model") == "" && len(denied) == 0 {
 		c.JSON(http.StatusOK, response)
 		return
 	}
@@ -74,7 +89,70 @@ func writeModelsListResponse(c *gin.Context, models any) {
 		writeOpenAIModelsError(c, http.StatusInternalServerError, "api_error", "Failed to encode model catalogue")
 		return
 	}
+	if len(denied) > 0 {
+		if body, err = removeDeniedCatalogEntries(body, denied); err != nil {
+			writeOpenAIModelsError(c, http.StatusInternalServerError, "api_error", "Failed to encode model catalogue")
+			return
+		}
+	}
+	if c.Param("model") == "" {
+		c.Data(http.StatusOK, "application/json; charset=utf-8", body)
+		return
+	}
 	writeRetrievedModel(c, body)
+}
+
+// deniedModelsForRequest 返回当前请求 API Key 所属用户在分组内被禁用的模型。
+func deniedModelsForRequest(c *gin.Context) []string {
+	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
+	if !ok {
+		return nil
+	}
+	return apiKey.DeniedModelsInGroup()
+}
+
+// modelsIfNoneMatch 返回模型目录请求的 If-None-Match；用户有禁用模型时目录要按用户过滤，
+// 不能用分组共享的 ETag 命中 304，因此忽略该请求头。
+func modelsIfNoneMatch(c *gin.Context) string {
+	if len(deniedModelsForRequest(c)) > 0 {
+		return ""
+	}
+	return c.GetHeader("If-None-Match")
+}
+
+// removeDeniedCatalogEntries 从模型目录（OpenAI 列表的 data[].id、Codex 清单的 models[].slug）
+// 去掉被禁用的条目，保留条目与信封的其余字段。
+func removeDeniedCatalogEntries(body []byte, denied []string) ([]byte, error) {
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return nil, err
+	}
+	for _, list := range []struct{ field, idField string }{{"data", "id"}, {"models", "slug"}} {
+		raw, ok := envelope[list.field]
+		if !ok {
+			continue
+		}
+		var entries []json.RawMessage
+		if err := json.Unmarshal(raw, &entries); err != nil {
+			continue
+		}
+		kept := make([]json.RawMessage, 0, len(entries))
+		for _, entry := range entries {
+			var fields map[string]json.RawMessage
+			var id string
+			if json.Unmarshal(entry, &fields) == nil && json.Unmarshal(fields[list.idField], &id) == nil &&
+				service.UserGroupDeniesModel(denied, id) {
+				continue
+			}
+			kept = append(kept, entry)
+		}
+		encoded, err := json.Marshal(kept)
+		if err != nil {
+			return nil, err
+		}
+		envelope[list.field] = encoded
+	}
+	return json.Marshal(envelope)
 }
 
 func writeRetrievedModel(c *gin.Context, body []byte) {

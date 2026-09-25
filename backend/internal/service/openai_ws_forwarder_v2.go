@@ -228,7 +228,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 				)
 				return nil, err
 			}
-			if err := s.applyOpenAICodexTicket(factoryCtx, latest, mappedModel, headers); err != nil {
+			if err := s.applyOpenAICodexTicket(factoryCtx, latest, mappedModel, headers, "websocket"); err != nil {
 				s.invalidateOpenAIWSTurnStateAfterAdmissionFailure(
 					factoryCtx,
 					groupID,

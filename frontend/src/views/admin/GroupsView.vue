@@ -124,10 +124,16 @@
           default-sort-order="asc"
           @sort="handleSort"
         >
-          <template #cell-name="{ value }">
+          <template #cell-name="{ value, row }">
             <span class="font-medium text-gray-900 dark:text-white">{{
               value
             }}</span>
+            <span
+              v-if="row.stream_only"
+              class="badge badge-warning ml-2"
+              data-testid="group-stream-only-badge"
+              >{{ t("admin.groups.form.streamOnlyBadge") }}</span
+            >
           </template>
 
           <template #cell-id="{ value }">
@@ -443,6 +449,17 @@
                 }}</span>
               </button>
               <button
+                v-if="!authStore.isSimpleMode"
+                data-testid="group-user-denied-models"
+                @click="handleUserDeniedModels(row)"
+                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-red-600 dark:hover:bg-dark-700 dark:hover:text-red-400"
+              >
+                <Icon name="ban" size="sm" />
+                <span class="text-xs">{{
+                  t("admin.groups.userDeniedModels")
+                }}</span>
+              </button>
+              <button
                 @click="handleDelete(row)"
                 class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400"
               >
@@ -637,6 +654,17 @@
             :placeholder="t('admin.groups.form.rpmLimitPlaceholder')"
           />
           <p class="input-hint">{{ t("admin.groups.form.rpmLimitHint") }}</p>
+        </div>
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <label class="input-label">{{ t("admin.groups.form.streamOnly") }}</label>
+            <p class="input-hint">{{ t("admin.groups.form.streamOnlyHint") }}</p>
+          </div>
+          <Toggle
+            data-testid="create-stream-only"
+            :aria-label="t('admin.groups.form.streamOnly')"
+            v-model="createForm.stream_only"
+          />
         </div>
         <ReasoningEffortPolicyFields
           v-if="supportsReasoningEffortPolicyPlatform(createForm.platform)"
@@ -2275,6 +2303,17 @@
             :placeholder="t('admin.groups.form.rpmLimitPlaceholder')"
           />
           <p class="input-hint">{{ t("admin.groups.form.rpmLimitHint") }}</p>
+        </div>
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <label class="input-label">{{ t("admin.groups.form.streamOnly") }}</label>
+            <p class="input-hint">{{ t("admin.groups.form.streamOnlyHint") }}</p>
+          </div>
+          <Toggle
+            data-testid="edit-stream-only"
+            :aria-label="t('admin.groups.form.streamOnly')"
+            v-model="editForm.stream_only"
+          />
         </div>
         <ReasoningEffortPolicyFields
           v-if="supportsReasoningEffortPolicyPlatform(editForm.platform)"
@@ -4261,6 +4300,14 @@
       @close="showRPMOverridesModal = false"
       @success="loadGroups"
     />
+
+    <!-- Group User Denied Models Modal -->
+    <GroupUserDeniedModelsModal
+      :show="showUserDeniedModelsModal"
+      :group="userDeniedModelsGroup"
+      @close="showUserDeniedModelsModal = false"
+      @success="loadGroups"
+    />
   </AppLayout>
 </template>
 
@@ -4300,6 +4347,7 @@ import PlatformIcon from "@/components/common/PlatformIcon.vue";
 import Icon from "@/components/icons/Icon.vue";
 import GroupRateMultipliersModal from "@/components/admin/group/GroupRateMultipliersModal.vue";
 import GroupRPMOverridesModal from "@/components/admin/group/GroupRPMOverridesModal.vue";
+import GroupUserDeniedModelsModal from "@/components/admin/group/GroupUserDeniedModelsModal.vue";
 import GroupCapacityBadge from "@/components/common/GroupCapacityBadge.vue";
 import ReasoningEffortPolicyFields from "@/components/admin/group/ReasoningEffortPolicyFields.vue";
 import CodexManifestAccountsField from "@/components/admin/group/CodexManifestAccountsField.vue";
@@ -4309,9 +4357,11 @@ import {
   apiIntervalsToForm,
   createDefaultTimePricingForm,
   formIntervalsToAPI,
+  formReasoningEffortMultipliersToAPI,
   mTokToPerToken,
   perTokenToMTok,
   toNullableNumber,
+  validateReasoningEffortMultipliers,
 } from "@/components/admin/channel/types";
 import type { ChannelModelPricing } from "@/api/admin/channels";
 import { VueDraggable } from "vue-draggable-plus";
@@ -4386,6 +4436,7 @@ const emptyGroupPricing = (): PricingFormEntry => ({
   cache_write_price: null,
   cache_write_1h_price: null,
   cache_read_price: null,
+  reasoning_effort_multipliers: null,
   image_input_price: null,
   image_output_price: null,
   per_request_price: null,
@@ -4407,6 +4458,9 @@ const groupPricingFromAPI = (
     cache_write_price: perTokenToMTok(entry.cache_write_price),
     cache_write_1h_price: perTokenToMTok(entry.cache_write_1h_price),
     cache_read_price: perTokenToMTok(entry.cache_read_price),
+    reasoning_effort_multipliers: entry.reasoning_effort_multipliers
+      ? { ...entry.reasoning_effort_multipliers }
+      : null,
     image_input_price: perTokenToMTok(entry.image_input_price),
     image_output_price: perTokenToMTok(entry.image_output_price),
     per_request_price: entry.per_request_price,
@@ -4429,6 +4483,9 @@ const groupPricingToAPI = (
       cache_write_price: mTokToPerToken(entry.cache_write_price),
       cache_write_1h_price: mTokToPerToken(entry.cache_write_1h_price),
       cache_read_price: mTokToPerToken(entry.cache_read_price),
+      reasoning_effort_multipliers: formReasoningEffortMultipliersToAPI(
+        entry.reasoning_effort_multipliers,
+      ),
       image_input_price: mTokToPerToken(entry.image_input_price),
       image_output_price: mTokToPerToken(entry.image_output_price),
       per_request_price: toNullableNumber(entry.per_request_price),
@@ -4833,6 +4890,8 @@ const showRateMultipliersModal = ref(false);
 const rateMultipliersGroup = ref<AdminGroup | null>(null);
 const showRPMOverridesModal = ref(false);
 const rpmOverridesGroup = ref<AdminGroup | null>(null);
+const showUserDeniedModelsModal = ref(false);
+const userDeniedModelsGroup = ref<AdminGroup | null>(null);
 const sortableGroups = ref<AdminGroup[]>([]);
 type ConcreteGroupPlatform = Exclude<GroupPlatform, "composite">;
 type CompositeRouteFormState = {
@@ -4988,6 +5047,8 @@ const createForm = reactive({
   // 账号过滤控制（OpenAI/Antigravity 平台）
   require_oauth_only: false,
   require_privacy_set: false,
+  // 仅允许流式请求
+  stream_only: false,
   // 模型路由开关
   model_routing_enabled: false,
   // 支持的模型系列（仅 antigravity 平台）
@@ -5354,6 +5415,8 @@ const editForm = reactive({
   // 账号过滤控制（OpenAI/Antigravity 平台）
   require_oauth_only: false,
   require_privacy_set: false,
+  // 仅允许流式请求
+  stream_only: false,
   // 模型路由开关
   model_routing_enabled: false,
   // 支持的模型系列（仅 antigravity 平台）
@@ -5803,6 +5866,7 @@ const closeCreateModal = () => {
   createForm.allow_live = false;
   createForm.require_oauth_only = false;
   createForm.require_privacy_set = false;
+  createForm.stream_only = false;
   createForm.supported_model_scopes = ["claude", "gemini_text", "gemini_image"];
   createForm.mcp_xml_inject = true;
   createForm.copy_accounts_from_group_ids = [];
@@ -5857,6 +5921,17 @@ const validateProfitControlForm = (form: ProfitControlFormState): boolean => {
   return true;
 };
 
+const validateGroupReasoningMultipliers = (pricing: PricingFormEntry[]): boolean => {
+  for (const entry of pricing) {
+    const error = validateReasoningEffortMultipliers(entry.reasoning_effort_multipliers, t);
+    if (error) {
+      appStore.showError(`${entry.models.join(", ") || t("admin.channels.form.unnamed")}: ${error}`);
+      return false;
+    }
+  }
+  return true;
+};
+
 const handleCreateGroup = async () => {
   if (!createForm.name.trim()) {
     appStore.showError(t("admin.groups.nameRequired"));
@@ -5872,6 +5947,7 @@ const handleCreateGroup = async () => {
   if (!validateProfitControlForm(createForm)) {
     return;
   }
+  if (!validateGroupReasoningMultipliers(createForm.model_pricing)) return;
   // 模型白名单：开启且没有任何条目时阻止提交，与后端 400 对齐。
   if (
     createModelAllowlistState.enabled &&
@@ -6093,6 +6169,7 @@ const handleEdit = async (group: AdminGroup) => {
     messagesDispatchFormState.exact_model_mappings;
   editForm.require_oauth_only = group.require_oauth_only ?? false;
   editForm.require_privacy_set = group.require_privacy_set ?? false;
+  editForm.stream_only = group.stream_only ?? false;
   editForm.model_routing_enabled = group.model_routing_enabled || false;
   editForm.supported_model_scopes = group.supported_model_scopes || [
     "claude",
@@ -6203,6 +6280,7 @@ const handleUpdateGroup = async () => {
   if (!validateProfitControlForm(editForm)) {
     return;
   }
+  if (!validateGroupReasoningMultipliers(editForm.model_pricing)) return;
   // 模型白名单：开启且没有任何条目时阻止提交，与后端 400 对齐。
   if (
     editModelAllowlistState.enabled &&
@@ -6399,6 +6477,11 @@ const handleRateMultipliers = (group: AdminGroup) => {
 const handleRPMOverrides = (group: AdminGroup) => {
   rpmOverridesGroup.value = group;
   showRPMOverridesModal.value = true;
+};
+
+const handleUserDeniedModels = (group: AdminGroup) => {
+  userDeniedModelsGroup.value = group;
+  showUserDeniedModelsModal.value = true;
 };
 
 const handleDuplicate = async (group: AdminGroup) => {

@@ -17,6 +17,9 @@ import (
 )
 
 type codexHarvestProbeResult struct {
+	EdgeIP     string
+	Transport  string
+	Gateway    string
 	State      string
 	Status     int
 	RetryAfter time.Duration
@@ -75,6 +78,11 @@ func bindCodexHarvestEgress(ticket *openAICodexTicket, attempt codexHarvestAttem
 		return
 	}
 	ticket.HarvestProxyURL = strings.TrimSpace(attempt.proxy)
+	if attempt.node.Provider == "managed" {
+		// Lane listeners are temporary leases; a stored ticket must reacquire
+		// its node through the manager before reusing the exit.
+		ticket.HarvestProxyURL = mihomo.Endpoint
+	}
 	ticket.HarvestNodeID = strings.TrimSpace(attempt.node.ID)
 	ticket.HarvestNodeName = strings.TrimSpace(attempt.node.Name)
 	ticket.HarvestNodeProvider = strings.TrimSpace(attempt.node.Provider)
@@ -105,7 +113,10 @@ func (s *OpenAIGatewayService) executeCodexHarvestProbe(ctx context.Context, acc
 }
 
 func (s *OpenAIGatewayService) requestCodexHarvestProbe(ctx context.Context, account *Account, token, model, proxy string, reserve func() bool, sessionID string) (out codexHarvestProbeResult) {
-	body := []byte(`{"model":` + jsonString(model) + `,"store":false,"stream":true,"instructions":"Reply with exactly: pong","input":[{"role":"user","content":[{"type":"input_text","text":"ping"}]}]}`)
+	if openAICodexTicketTargetLength(account, s.openAICodexTicketConfig()) == 780 {
+		return s.requestCodex780Probe(ctx, account, token, model, proxy, reserve, sessionID)
+	}
+	body := []byte(`{"model":` + jsonString(model) + `,"store":false,"stream":true,"instructions":"Reply with exactly: pong. Do not call tools.","parallel_tool_calls":false,"include":["reasoning.encrypted_content"],"reasoning":{"context":"all_turns"},"input":[{"type":"additional_tools","role":"developer","tools":[{"type":"namespace","name":"codex","description":"local tools","tools":[{"type":"function","name":"noop","description":"Do nothing.","strict":false,"parameters":{"type":"object","properties":{},"additionalProperties":false}}]}]},{"role":"user","content":[{"type":"input_text","text":"ping"}]}]}`)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, chatgptCodexURL, bytes.NewReader(body))
 	if err != nil {
 		out.Err = err
@@ -113,6 +124,7 @@ func (s *OpenAIGatewayService) requestCodexHarvestProbe(ctx context.Context, acc
 	}
 	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAIHarvest))
 	req.Close = true
+	req.Header.Set(responsesLiteHeaderKey, "true")
 	req.Host = "chatgpt.com"
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "text/event-stream")
@@ -125,9 +137,6 @@ func (s *OpenAIGatewayService) requestCodexHarvestProbe(ctx context.Context, acc
 	if err := resolveAndSetOpenAIChatGPTAccountHeaders(ctx, s.accountRepo, req.Header, account); err != nil {
 		out.Err = err
 		return
-	}
-	if previous := s.lookupOpenAICodexTicket(account, model); codexTicketCookiesFresh(previous, time.Now()) {
-		req.Header.Set("Cookie", strings.Join(previous.HarvestCookies, "; "))
 	}
 	applyOpenAICodexTicketHarvestIdentity(req.Header, model)
 	if ctx.Err() != nil {
@@ -166,13 +175,14 @@ func (s *OpenAIGatewayService) requestCodexHarvestProbe(ctx context.Context, acc
 		return
 	}
 	if out.Status == http.StatusOK {
-		out.Err = validateCodexProbeResponse(response)
+		out.Err = validateCodexProbeResponse(response, model)
 	}
 	return
 }
 
 func classifyCodexHarvestProbe(ctx context.Context, account *Account, cfg config.OpenAICodexTicketConfig, result codexHarvestProbeResult) (openAICodexTicketShape, string) {
 	shape, err := parseOpenAICodexTicketShape(result.State)
+	var mintErr *codexMintError
 	switch {
 	case ctx.Err() != nil:
 		return shape, "cancelled"
@@ -184,14 +194,21 @@ func classifyCodexHarvestProbe(ctx context.Context, account *Account, cfg config
 		return shape, "rate_limited"
 	case result.Status == 0:
 		return shape, "network_error"
-	case result.Status != http.StatusOK:
+	case result.Status != http.StatusOK && (result.Transport != "websocket" || result.Status != http.StatusSwitchingProtocols):
 		return shape, "upstream_error"
+	case errors.As(result.Err, &mintErr):
+		return shape, mintErr.kind
 	case result.Err != nil:
 		return shape, "response_incomplete_or_error"
 	}
 	now := time.Now()
-	if err != nil || shape.Blocks != openAICodexTicketExpectedBlocks(account) || len(result.State) != openAICodexTicketTargetLength(account, cfg) || !strings.HasPrefix(result.State, openAICodexTicketStatePrefix) || shape.IssuedAt.After(now.Add(30*time.Second)) || !now.Before(shape.IssuedAt.Add(time.Hour-30*time.Second)) {
+	if err != nil || (len(result.State) != 780 && shape.Blocks != openAICodexTicketExpectedBlocks(account)) || len(result.State) != openAICodexTicketTargetLength(account, cfg) || !strings.HasPrefix(result.State, openAICodexTicketStatePrefix) || shape.IssuedAt.After(now.Add(30*time.Second)) || !now.Before(shape.IssuedAt.Add(codexTicketLifetime(len(result.State)))) {
 		return shape, "invalid_state"
+	}
+	if len(result.State) == 780 {
+		if _, _, err := codex780Route(result.Cookies, result.Gateway, now); err != nil {
+			return shape, "invalid_route"
+		}
 	}
 	return shape, "success"
 }
@@ -209,10 +226,24 @@ func codexHarvestRetryAfter(raw string, now time.Time) time.Duration {
 func codexHarvestTicket(account *Account, model string, r codexHarvestProbeResult, cfg config.OpenAICodexTicketConfig, attempts int) *openAICodexTicket {
 	now := time.Now()
 	expires := now.Add(time.Duration(cfg.TTLSeconds) * time.Second)
-	if issuedExpiry := r.Shape.IssuedAt.Add(time.Hour - 30*time.Second); issuedExpiry.Before(expires) {
+	if issuedExpiry := r.Shape.IssuedAt.Add(codexTicketLifetime(len(r.State))); issuedExpiry.Before(expires) {
 		expires = issuedExpiry
 	}
-	return &openAICodexTicket{AccountID: account.ID, Model: model, State: r.State, Length: len(r.State),
+	transport := ""
+	if len(r.State) == 780 {
+		transport = r.Transport
+		if transport == "" {
+			transport = "sse"
+		}
+	}
+	return &openAICodexTicket{EdgeIP: r.EdgeIP, Transport: transport, Gateway: r.Gateway, AccountID: account.ID, Model: model, State: r.State, Length: len(r.State),
 		CapturedAt: now, ExpiresAt: expires, Attempts: attempts, Blocks: r.Shape.Blocks, IssuedAt: r.Shape.IssuedAt,
-		HarvestCookies: append([]string(nil), r.Cookies...), HarvestCookiesAt: now}
+		HarvestLite: len(r.State) != 780, HarvestCookies: append([]string(nil), r.Cookies...), HarvestCookiesAt: now}
+}
+
+func codexHarvestExpectedBlocks(account *Account, cfg config.OpenAICodexTicketConfig) int {
+	if openAICodexTicketTargetLength(account, cfg) == 780 {
+		return 33
+	}
+	return openAICodexTicketExpectedBlocks(account)
 }

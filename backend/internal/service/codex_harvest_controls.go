@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -30,6 +31,9 @@ type CodexHarvestBound struct {
 }
 
 type CodexHarvestControls struct {
+	EdgeIP            string            `json:"edge_ip"`
+	Transport         string            `json:"transport"`
+	TargetGateway     string            `json:"target_gateway"`
 	Version           int               `json:"version"`
 	NodeMemoryEnabled bool              `json:"node_memory_enabled"`
 	Speed             CodexHarvestSpeed `json:"speed"`
@@ -161,6 +165,13 @@ func normalizeCodexHarvestControls(v *CodexHarvestControls) {
 	if v == nil {
 		return
 	}
+	v.TargetGateway = normalizeCodex780Gateway(v.TargetGateway)
+	if v.Transport == "" {
+		v.Transport = "sse"
+	}
+	if v.TargetGateway == "" {
+		v.TargetGateway = "unified-95"
+	}
 	if v.Speed.RefreshBeforeSeconds <= 0 {
 		v.Speed.RefreshBeforeSeconds = 600
 	}
@@ -197,6 +208,15 @@ func ProvideCodexHarvestService(nodes CodexHarvestNodeRepository, settings Setti
 
 func ValidateCodexHarvestControls(v CodexHarvestControls) error {
 	normalizeCodexHarvestControls(&v)
+	if err := validateCodexMintEdgeIP(v.EdgeIP); err != nil {
+		return err
+	}
+	if v.Transport != "sse" && v.Transport != "websocket" {
+		return errors.New("transport must be sse or websocket")
+	}
+	if v.TargetGateway != "any" && !regexp.MustCompile(`^unified-[0-9]{1,5}$`).MatchString(v.TargetGateway) {
+		return errors.New("target_gateway must be any, unified-N or chat.gateway.unified-N.api.openai.com")
+	}
 	if v.Version != 1 {
 		return errors.New("unsupported harvest settings version")
 	}

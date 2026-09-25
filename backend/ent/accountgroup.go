@@ -3,6 +3,7 @@
 package ent
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -23,6 +24,8 @@ type AccountGroup struct {
 	GroupID int64 `json:"group_id,omitempty"`
 	// Priority holds the value of the "priority" field.
 	Priority int `json:"priority,omitempty"`
+	// AllowedModels holds the value of the "allowed_models" field.
+	AllowedModels []string `json:"allowed_models,omitempty"`
 	// CreatedAt holds the value of the "created_at" field.
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
@@ -69,6 +72,8 @@ func (*AccountGroup) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
+		case accountgroup.FieldAllowedModels:
+			values[i] = new([]byte)
 		case accountgroup.FieldAccountID, accountgroup.FieldGroupID, accountgroup.FieldPriority:
 			values[i] = new(sql.NullInt64)
 		case accountgroup.FieldCreatedAt:
@@ -105,6 +110,14 @@ func (_m *AccountGroup) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field priority", values[i])
 			} else if value.Valid {
 				_m.Priority = int(value.Int64)
+			}
+		case accountgroup.FieldAllowedModels:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field allowed_models", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &_m.AllowedModels); err != nil {
+					return fmt.Errorf("unmarshal field allowed_models: %w", err)
+				}
 			}
 		case accountgroup.FieldCreatedAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
@@ -165,6 +178,9 @@ func (_m *AccountGroup) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("priority=")
 	builder.WriteString(fmt.Sprintf("%v", _m.Priority))
+	builder.WriteString(", ")
+	builder.WriteString("allowed_models=")
+	builder.WriteString(fmt.Sprintf("%v", _m.AllowedModels))
 	builder.WriteString(", ")
 	builder.WriteString("created_at=")
 	builder.WriteString(_m.CreatedAt.Format(time.ANSIC))

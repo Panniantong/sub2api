@@ -149,4 +149,19 @@ describe('AccountActionMenu viewport positioning', () => {
 
     expect(wrapper.emitted('close')).toHaveLength(2)
   })
+
+  it('keeps the original actions and opens the dedicated Pelican test', async () => {
+    const wrapper = await mountMenu(new DOMRect(500, 100, 32, 24))
+    const buttons = Array.from(getMenu().querySelectorAll('button'))
+    expect(buttons.map(button => button.textContent?.trim())).toEqual(expect.arrayContaining([
+      'admin.accounts.testConnection',
+      'admin.accounts.viewStats',
+      'admin.scheduledTests.schedule',
+      'admin.accounts.pelicanTest.menu'
+    ]))
+
+    buttons.find(button => button.textContent?.includes('admin.accounts.pelicanTest.menu'))!.click()
+    expect(wrapper.emitted('iq-test')).toEqual([[account]])
+    expect(wrapper.emitted('close')).toHaveLength(1)
+  })
 })

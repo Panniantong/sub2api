@@ -393,6 +393,9 @@ export default {
     latency: 'Latency',
     latencyFirstToken: 'First',
     latencyDuration: 'Total',
+    latencyTps: 'TPS',
+    latencyTpsHint: 'Output speed = output tokens ÷ (total − first token)',
+    latencyTpsHintNoFirstToken: 'Output speed = output tokens ÷ total (no first-token data, so waiting time is included)',
     time: 'Time',
     ws: 'WS',
     stream: 'Stream',
@@ -602,6 +605,47 @@ export default {
     }
   },
 
+  // Pelican showcase (user-facing gallery)
+  pelicanShowcase: {
+    title: 'Pelican Showcase',
+    description: 'Each group answers the same drawing prompt on a schedule. Compare model quality by looking at the results.',
+    allGroups: 'All groups',
+    keepRule: 'Latest {count} per group',
+    retentionRule: 'Auto-removed after {days} days',
+    itemCount: '{count} items',
+    latestAt: 'Updated {time}',
+    groupEmpty: 'No results in this group yet. They appear here once a scheduled test succeeds.',
+    loadMore: 'Load more',
+    loadError: 'Failed to load the Pelican showcase',
+    itemLoading: 'Loading…',
+    itemLoadError: 'Failed to load this result',
+    invalidHtml: 'This result cannot be displayed',
+    duration: '{seconds}s',
+    reasoning: 'Reasoning {effort}',
+    efforts: {
+      minimal: 'minimal',
+      low: 'low',
+      medium: 'medium',
+      high: 'high',
+      xhigh: 'xhigh'
+    },
+    preview: 'View full size',
+    previewTitle: '{group} · {model}',
+    sandboxNote: 'Results run in an isolated sandbox without network access and cannot read your account.',
+    remove: 'Remove from showcase',
+    removeConfirm: 'Remove this result from the Pelican showcase? No user will see it any more. This cannot be undone.',
+    removed: 'Removed from the showcase',
+    removeFailed: 'Failed to remove',
+    disabled: {
+      title: 'Pelican showcase is not available',
+      description: 'Once an administrator enables it, scheduled results of each group appear here.'
+    },
+    empty: {
+      title: 'Nothing to show yet',
+      description: 'The administrator has not selected any groups to showcase.'
+    }
+  },
+
   // Available Channels (user-facing)
   availableChannels: {
     title: 'Available Channels',
@@ -627,6 +671,8 @@ export default {
       billingModePerRequest: 'Per Request',
       billingModeImage: 'Per Image',
       billingModeVideo: 'Per Video',
+      videoPrice: 'Video Price',
+      unitPerSecond: '/ second',
       inputPrice: 'Input',
       outputPrice: 'Output',
       cacheWritePrice: 'Cache Write',
@@ -680,8 +726,8 @@ export default {
       cacheReadShort: 'R',
       tierHint: 'The whole request is billed at the tier matching its total context (input + cache write + cache read)',
       tierHintMarginal: 'Only the portion above the threshold is billed at this tier; output is unaffected',
-      maxReasoningMultiplierBadge: 'Max ×{multiplier}',
-      maxReasoningMultiplierHint: 'When the forwarded reasoning effort is max, billing and quota usage for the request are multiplied by {multiplier}',
+      reasoningMultiplierBadge: '{effort} ×{multiplier}',
+      reasoningMultiplierHint: 'When the forwarded reasoning effort is {effort}, billing and quota usage for the request are multiplied by {multiplier}. Unconfigured levels use 1×',
       marginalBadge: 'excess-only tiers',
       timePricingRowHint: 'Requests made within this period ({timezone} time) are billed at the prices in this row',
       timePricingRowHintWeekdays:

@@ -11,6 +11,9 @@ export interface CodexHarvestSpeed {
 }
 
 export interface CodexHarvestControls {
+  edge_ip?: string
+  target_gateway?: string
+  transport?: 'sse' | 'websocket'
   version: number
   node_memory_enabled: boolean
   speed: CodexHarvestSpeed

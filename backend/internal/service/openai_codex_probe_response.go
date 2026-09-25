@@ -9,22 +9,35 @@ import (
 )
 
 // A clean EOF or [DONE] is not evidence of a successful Responses generation.
-func validateCodexProbeResponse(body []byte) error {
+func validateCodexProbeResponse(body []byte, expectedModel ...string) error {
 	completed := false
 	inspect := func(data []byte) error {
 		if bytes.Equal(bytes.TrimSpace(data), []byte("[DONE]")) {
 			return nil
 		}
 		var event struct {
+			Model    string          `json:"model"`
 			Type     string          `json:"type"`
 			Status   string          `json:"status"`
 			Error    json.RawMessage `json:"error"`
 			Response *struct {
+				Model  string `json:"model"`
 				Status string `json:"status"`
 			} `json:"response"`
 		}
 		if json.Unmarshal(data, &event) != nil {
 			return errors.New("invalid probe event")
+		}
+		if len(expectedModel) > 0 {
+			models := []string{event.Model}
+			if event.Response != nil {
+				models = append(models, event.Response.Model)
+			}
+			for _, served := range models {
+				if served != "" && normalizeOpenAICodexTicketModel(served) != normalizeOpenAICodexTicketModel(expectedModel[0]) {
+					return errors.New("probe response model mismatch")
+				}
+			}
 		}
 		if event.Type == "error" || event.Type == "response.failed" || event.Type == "response.incomplete" || event.Status == "failed" || event.Status == "incomplete" || (len(event.Error) > 0 && string(event.Error) != "null") {
 			return errors.New("probe response failed")

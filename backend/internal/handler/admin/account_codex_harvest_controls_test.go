@@ -82,6 +82,8 @@ func TestHarvestControlsAdminValidationAndPersistence(t *testing.T) {
 	require.Equal(t, 200, harvestAdminRequest(r, "PUT", "/controls", string(body)).Code)
 	var stored service.CodexHarvestControls
 	require.NoError(t, json.Unmarshal([]byte(settings.raw), &stored))
+	v.Transport = "sse"
+	v.TargetGateway = "unified-95"
 	require.Equal(t, v, stored)
 	settings.fail = true
 	require.Equal(t, 503, harvestAdminRequest(r, "PUT", "/controls", string(body)).Code)
@@ -114,4 +116,16 @@ func TestManualHarvestHandlerValidatesBeforeStream(t *testing.T) {
 	missing := gin.New()
 	missing.POST("/:id/manual-harvest", (&AccountHandler{}).ManualCodexHarvest)
 	require.Equal(t, 503, harvestAdminRequest(missing, "POST", "/1/manual-harvest", `{}`).Code)
+}
+
+func TestManualHarvestRejectsPrivateEdgeBeforeStreaming(t *testing.T) {
+	router := gin.New()
+	router.POST("/:id/manual-harvest", (&AccountHandler{openAIGatewayService: &service.OpenAIGatewayService{}}).ManualCodexHarvest)
+	req := httptest.NewRequest("POST", "/300/manual-harvest", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Edge-IP", "::ffff:127.0.0.1")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, req)
+	require.Equal(t, 400, response.Code)
+	require.NotContains(t, response.Header().Get("Content-Type"), "event-stream")
 }

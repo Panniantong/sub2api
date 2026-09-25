@@ -47,6 +47,21 @@ function response() {
 }
 
 describe('HarvestFlowView nullable API lists', () => {
+  it('shows a route failure without claiming the 780 body is missing or malformed', async () => {
+    getFlow.mockResolvedValue({
+      ...response(),
+      stages: [{ id: 'shape', status: 'warn', detail: 'ticket shape matches; validation incomplete', length: 780, blocks: 33 }],
+      events: [{ id: 'route-failure', stage: 'probe', kind: 'probe_miss', result: 'invalid_route', reason: 'invalid_route', detail: '路由 Cookie 验收失败 · route_cflb_missing', at: '2026-09-24T14:21:05Z' }]
+    })
+    const wrapper = mount(HarvestFlowView, { global: { stubs: { Icon: true, LoadingSpinner: true } } })
+    try {
+      await flushPromises()
+      expect(wrapper.text()).toContain('admin.harvestFlow.shapeValidationIncomplete 780 33')
+      expect(wrapper.text()).toContain('route_cflb_missing')
+      expect(wrapper.text()).not.toContain('admin.harvestFlow.shapeNoBody')
+      expect(wrapper.text()).not.toContain('admin.harvestFlow.shapeBad')
+    } finally { wrapper.unmount() }
+  })
   beforeEach(() => {
     vi.useFakeTimers()
     getFlow.mockReset()

@@ -92,6 +92,12 @@
           </label>
         </div>
 
+        <label class="block text-xs text-gray-600 dark:text-gray-300">
+          {{ t(`${prefix}.collectLanes`) }}
+          <input v-model.number="collectLanes" data-testid="manual-collect-lanes" type="number" min="2" max="32" :disabled="harvesting" class="input mt-1 w-full font-mono text-xs" />
+          <span class="mt-1 block text-[10px] text-gray-400">{{ t(`${prefix}.parallelHint`) }}</span>
+        </label>
+
         <label class="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300">
           <input v-model="form.stop_on_success" data-testid="manual-stop-on-success" type="checkbox" :disabled="harvesting" class="rounded text-primary-600" />
           {{ t(`${prefix}.stopOnSuccess`) }}
@@ -104,10 +110,11 @@
             type="button"
             class="btn btn-primary btn-sm flex-1"
             :disabled="!selected || !selectedModels.length"
-            @click="start"
+            @click="start(false)"
           >
             {{ t(`${prefix}.start`) }}
           </button>
+          <button v-if="!harvesting" data-testid="manual-parallel-start" type="button" class="btn btn-secondary btn-sm flex-1" :disabled="!selected || !selectedModels.length" @click="start(true)">{{ t(`${prefix}.parallelStart`) }}</button>
           <button v-else data-testid="manual-stop" type="button" class="btn btn-secondary btn-sm flex-1" @click="stop">{{ t(`${prefix}.stop`) }}</button>
           <button data-testid="manual-clear" type="button" class="btn btn-secondary btn-sm" :disabled="harvesting" @click="logs = []">{{ t(`${prefix}.clear`) }}</button>
         </div>
@@ -159,6 +166,7 @@ const open = ref(false)
 const selected = ref<CodexHarvestFlowAccount | null>(null)
 const selectedModels = ref<string[]>([])
 const harvesting = ref(false)
+const collectLanes = ref(10)
 const statusText = ref(t(`${prefix}.idle`))
 const statusColor = ref('text-gray-400')
 const progressText = ref('0 / 20')
@@ -274,7 +282,7 @@ function finish(kind: 'success' | 'finished' | 'stopped' | 'auth') {
   if (kind === 'success' || kind === 'finished') emit('finished')
 }
 
-async function start() {
+async function start(parallel = false) {
   if (!selected.value || harvesting.value || !selectedModels.value.length) return
   abort?.abort()
   abort = new AbortController()
@@ -287,6 +295,7 @@ async function start() {
   addLog('START', t(`${prefix}.startLog`, { id: selected.value.id }))
   try {
     await streamManualCodexHarvest(selected.value.id, {
+      collect_lanes: parallel ? collectLanes.value : 1,
       models: [...selectedModels.value],
       probe_interval_seconds: form.value.probe_interval_seconds,
       rate_limit_cooldown_seconds: form.value.rate_limit_cooldown_seconds,

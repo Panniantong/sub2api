@@ -68,6 +68,22 @@ func (s *userGroupRateRepoStubForGroupRate) ClearGroupRPMOverrides(_ context.Con
 	panic("unexpected ClearGroupRPMOverrides call")
 }
 
+func (s *userGroupRateRepoStubForGroupRate) GetDeniedModelsByUserAndGroup(_ context.Context, _, _ int64) ([]string, error) {
+	panic("unexpected GetDeniedModelsByUserAndGroup call")
+}
+
+func (s *userGroupRateRepoStubForGroupRate) GetDeniedModelsByUserID(_ context.Context, _ int64) (map[int64][]string, error) {
+	panic("unexpected GetDeniedModelsByUserID call")
+}
+
+func (s *userGroupRateRepoStubForGroupRate) SyncGroupDeniedModels(_ context.Context, _ int64, _ []GroupUserDeniedModelsInput) error {
+	panic("unexpected SyncGroupDeniedModels call")
+}
+
+func (s *userGroupRateRepoStubForGroupRate) ClearGroupDeniedModels(_ context.Context, _ int64) error {
+	panic("unexpected ClearGroupDeniedModels call")
+}
+
 func (s *userGroupRateRepoStubForGroupRate) DeleteByGroupID(_ context.Context, groupID int64) error {
 	s.deletedGroupIDs = append(s.deletedGroupIDs, groupID)
 	return s.deleteByGroupErr

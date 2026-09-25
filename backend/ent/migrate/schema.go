@@ -110,6 +110,7 @@ var (
 		{Name: "load_factor", Type: field.TypeInt, Nullable: true},
 		{Name: "priority", Type: field.TypeInt, Default: 50},
 		{Name: "rate_multiplier", Type: field.TypeFloat64, Default: 1, SchemaType: map[string]string{"postgres": "decimal(10,4)"}},
+		{Name: "group_rate_multiplier", Type: field.TypeFloat64, Default: 1, SchemaType: map[string]string{"postgres": "decimal(10,4)"}},
 		{Name: "status", Type: field.TypeString, Size: 20, Default: "active"},
 		{Name: "error_message", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "text"}},
 		{Name: "last_used_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
@@ -136,13 +137,13 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "accounts_proxies_proxy",
-				Columns:    []*schema.Column{AccountsColumns[30]},
+				Columns:    []*schema.Column{AccountsColumns[31]},
 				RefColumns: []*schema.Column{ProxiesColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
 			{
 				Symbol:     "accounts_accounts_children",
-				Columns:    []*schema.Column{AccountsColumns[31]},
+				Columns:    []*schema.Column{AccountsColumns[32]},
 				RefColumns: []*schema.Column{AccountsColumns[0]},
 				OnDelete:   schema.Restrict,
 			},
@@ -161,12 +162,12 @@ var (
 			{
 				Name:    "account_status",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[15]},
+				Columns: []*schema.Column{AccountsColumns[16]},
 			},
 			{
 				Name:    "account_proxy_id",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[30]},
+				Columns: []*schema.Column{AccountsColumns[31]},
 			},
 			{
 				Name:    "account_priority",
@@ -176,27 +177,27 @@ var (
 			{
 				Name:    "account_last_used_at",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[17]},
+				Columns: []*schema.Column{AccountsColumns[18]},
 			},
 			{
 				Name:    "account_schedulable",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[20]},
+				Columns: []*schema.Column{AccountsColumns[21]},
 			},
 			{
 				Name:    "account_rate_limited_at",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[21]},
+				Columns: []*schema.Column{AccountsColumns[22]},
 			},
 			{
 				Name:    "account_rate_limit_reset_at",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[22]},
+				Columns: []*schema.Column{AccountsColumns[23]},
 			},
 			{
 				Name:    "account_overload_until",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[23]},
+				Columns: []*schema.Column{AccountsColumns[24]},
 			},
 			{
 				Name:    "account_platform_priority",
@@ -206,7 +207,7 @@ var (
 			{
 				Name:    "account_priority_status",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[13], AccountsColumns[15]},
+				Columns: []*schema.Column{AccountsColumns[13], AccountsColumns[16]},
 			},
 			{
 				Name:    "account_deleted_at",
@@ -216,13 +217,14 @@ var (
 			{
 				Name:    "account_parent_account_id",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[31]},
+				Columns: []*schema.Column{AccountsColumns[32]},
 			},
 		},
 	}
 	// AccountGroupsColumns holds the columns for the "account_groups" table.
 	AccountGroupsColumns = []*schema.Column{
 		{Name: "priority", Type: field.TypeInt, Default: 50},
+		{Name: "allowed_models", Type: field.TypeJSON, Nullable: true, SchemaType: map[string]string{"postgres": "jsonb"}},
 		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
 		{Name: "account_id", Type: field.TypeInt64},
 		{Name: "group_id", Type: field.TypeInt64},
@@ -231,17 +233,17 @@ var (
 	AccountGroupsTable = &schema.Table{
 		Name:       "account_groups",
 		Columns:    AccountGroupsColumns,
-		PrimaryKey: []*schema.Column{AccountGroupsColumns[2], AccountGroupsColumns[3]},
+		PrimaryKey: []*schema.Column{AccountGroupsColumns[3], AccountGroupsColumns[4]},
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "account_groups_accounts_account",
-				Columns:    []*schema.Column{AccountGroupsColumns[2]},
+				Columns:    []*schema.Column{AccountGroupsColumns[3]},
 				RefColumns: []*schema.Column{AccountsColumns[0]},
 				OnDelete:   schema.NoAction,
 			},
 			{
 				Symbol:     "account_groups_groups_group",
-				Columns:    []*schema.Column{AccountGroupsColumns[3]},
+				Columns:    []*schema.Column{AccountGroupsColumns[4]},
 				RefColumns: []*schema.Column{GroupsColumns[0]},
 				OnDelete:   schema.NoAction,
 			},
@@ -250,7 +252,7 @@ var (
 			{
 				Name:    "accountgroup_group_id",
 				Unique:  false,
-				Columns: []*schema.Column{AccountGroupsColumns[3]},
+				Columns: []*schema.Column{AccountGroupsColumns[4]},
 			},
 			{
 				Name:    "accountgroup_priority",
@@ -947,6 +949,7 @@ var (
 		{Name: "claude_code_only", Type: field.TypeBool, Default: false},
 		{Name: "fallback_group_id", Type: field.TypeInt64, Nullable: true},
 		{Name: "fallback_group_id_on_invalid_request", Type: field.TypeInt64, Nullable: true},
+		{Name: "stream_only", Type: field.TypeBool, Default: false},
 		{Name: "model_routing", Type: field.TypeJSON, Nullable: true, SchemaType: map[string]string{"postgres": "jsonb"}},
 		{Name: "model_routing_enabled", Type: field.TypeBool, Default: false},
 		{Name: "mcp_xml_inject", Type: field.TypeBool, Default: true},
@@ -1004,7 +1007,7 @@ var (
 			{
 				Name:    "group_sort_order",
 				Unique:  false,
-				Columns: []*schema.Column{GroupsColumns[49]},
+				Columns: []*schema.Column{GroupsColumns[50]},
 			},
 			{
 				Name:    "idx_groups_duplicate_operation_id_active",

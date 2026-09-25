@@ -67,6 +67,7 @@ def plan(args):
         raise ValueError('invalid VERSION')
     VERSION_FILE.write_text(version + '\n')
     result = {'sha': sha, 'tag': tag, 'version': version,
+              'prerelease': str('-' in version).lower(),
               'owner_lower': os.environ.get('GITHUB_REPOSITORY_OWNER', '').lower(),
               'simple': str(args.simple).lower(), 'dry_run': str(args.dry_run).lower(),
               'date': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),

@@ -874,7 +874,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		if admissionErr != nil {
 			return admissionErr
 		}
-		if err := s.applyOpenAICodexTicket(ctx, latest, gjson.GetBytes(firstClientMessage, "model").String(), headers); err != nil {
+		if err := s.applyOpenAICodexTicket(ctx, latest, gjson.GetBytes(firstClientMessage, "model").String(), headers, "websocket"); err != nil {
 			return err
 		}
 		headers, err = s.refreshOpenAIAgentIdentityHeaders(ctx, account, headers)

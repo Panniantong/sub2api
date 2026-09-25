@@ -169,19 +169,20 @@ type SystemSettings struct {
 	CustomMenuItems             string // JSON array of custom menu items
 	CustomEndpoints             string // JSON array of custom endpoints
 
-	DefaultConcurrency           int
-	DefaultBalance               float64
-	RiskControlEnabled           bool
-	CyberSessionBlockEnabled     bool
-	CyberSessionBlockTTLSeconds  int
-	AffiliateEnabled             bool
-	AffiliateRebateRate          float64
-	AffiliateRebateFreezeHours   int
-	AffiliateRebateDurationDays  int
-	AffiliateRebatePerInviteeCap float64
-	AdminRechargeRebateEnabled   bool
-	DefaultUserRPMLimit          int
-	DefaultSubscriptions         []DefaultSubscriptionSetting
+	DefaultConcurrency                int
+	DefaultBalance                    float64
+	RiskControlEnabled                bool
+	CyberSessionBlockEnabled          bool
+	CyberSessionBlockTTLSeconds       int
+	CyberSessionIdentityStrictEnabled bool
+	AffiliateEnabled                  bool
+	AffiliateRebateRate               float64
+	AffiliateRebateFreezeHours        int
+	AffiliateRebateDurationDays       int
+	AffiliateRebatePerInviteeCap      float64
+	AdminRechargeRebateEnabled        bool
+	DefaultUserRPMLimit               int
+	DefaultSubscriptions              []DefaultSubscriptionSetting
 
 	// Model fallback configuration
 	EnableModelFallback      bool   `json:"enable_model_fallback"`
@@ -215,6 +216,10 @@ type SystemSettings struct {
 
 	// Available Channels feature (user-facing aggregate view)
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
+
+	// Pelican showcase (user-facing gallery of scheduled Pelican HTML results)
+	PelicanShowcaseEnabled bool                  `json:"pelican_showcase_enabled"`
+	PelicanShowcase        PelicanShowcaseConfig `json:"pelican_showcase_config"`
 
 	// Subscription feature switch: gates the whole user-facing subscription surface
 	// (sidebar entries, purchase-page subscription tab, header progress badge,
@@ -264,6 +269,9 @@ type SystemSettings struct {
 	CodexCLIOnlyWhitelist                  string   // codex_cli_only 全局白名单 JSON（[]AllowedClientEntry，AND allow）
 	CodexCLIOnlyAllowAppServerClients      bool     // codex_cli_only App Server 开关：对未列名客户端开闸（默认 false）
 	CodexCLIOnlyEngineFingerprintSignals   string   // codex_cli_only 引擎指纹门信号列表 JSON（[]EngineFingerprintSignal）
+	ClaudeCodeClientVersion                string   // 出站声明的 Claude Code CLI 客户端版本号（管理员覆写）；空值跟随自动同步值
+	ClaudeCodeClientVersionSynced          string   // 自动同步到的官方最新版本号（只读展示）
+	ClaudeCodeVersionAutoSyncEnabled       bool     // 是否启用 Claude Code 客户端版本号自动同步（默认 true）
 
 	// Web Search Emulation
 	WebSearchEmulationEnabled bool // 是否启用 web search 模拟
@@ -276,7 +284,7 @@ type SystemSettings struct {
 
 	// OpenAI 账号调度
 	OpenAILowUpstreamRatePriorityEnabled                   bool
-	OpenAIOAuthSchedulingRateMultiplier                    float64
+	OpenAIOAuthSchedulingRateMultiplier                    *float64
 	OpenAIAdvancedSchedulerEnabled                         bool
 	OpenAIAdvancedSchedulerStickyWeightedEnabled           bool
 	OpenAIAdvancedSchedulerSubscriptionPriorityEnabled     bool
@@ -407,6 +415,9 @@ type PublicSettings struct {
 
 	// Available Channels feature (user-facing aggregate view)
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
+
+	// Pelican showcase feature (user-facing gallery; limits stay admin-only)
+	PelicanShowcaseEnabled bool `json:"pelican_showcase_enabled"`
 
 	// Subscription feature switch (see SystemSettings.SubscriptionEnabled)
 	SubscriptionEnabled bool `json:"subscription_enabled"`

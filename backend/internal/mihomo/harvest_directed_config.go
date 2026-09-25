@@ -44,8 +44,12 @@ func harvestDigest(value any) string {
 
 // LoadDirectedSidecar accepts only the matching external loopback sidecar.
 func LoadDirectedSidecar(dataDir, proxyURL string) (*DirectedSidecar, error) {
-	if _, _, managed := ManagedController(); managed {
-		return nil, errors.New("node learning does not override managed UseOnce")
+	if _, _, managed := ManagedController(); managed && strings.TrimRight(proxyURL, "/") == Endpoint {
+		m := managedManager()
+		if m == nil {
+			return nil, errors.New("managed Mihomo is not running")
+		}
+		return &DirectedSidecar{managed: m, ProxyURL: collectionProxy(0), PoolID: harvestDigest([]string{"managed", m.dir})}, nil
 	}
 	if dataDir == "" {
 		dataDir = "."

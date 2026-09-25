@@ -593,6 +593,7 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		AudioTTSPricePerMillionChars:    audioTTSPricePerMillionChars,
 		AudioSTTPricePerHour:            audioSTTPricePerHour,
 		ClaudeCodeOnly:                  input.ClaudeCodeOnly,
+		StreamOnly:                      input.StreamOnly,
 		FallbackGroupID:                 input.FallbackGroupID,
 		FallbackGroupIDOnInvalidRequest: fallbackOnInvalidRequest,
 		ModelRouting:                    input.ModelRouting,
@@ -927,6 +928,9 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	// Claude Code 客户端限制
 	if input.ClaudeCodeOnly != nil {
 		group.ClaudeCodeOnly = *input.ClaudeCodeOnly
+	}
+	if input.StreamOnly != nil {
+		group.StreamOnly = *input.StreamOnly
 	}
 	if input.FallbackGroupID != nil {
 		// 校验降级分组
@@ -1301,6 +1305,58 @@ func (s *adminServiceImpl) BatchSetGroupRPMOverrides(ctx context.Context, groupI
 		return err
 	}
 	// RPM override 已嵌入 auth cache snapshot (v7)，变更后必须失效相关缓存。
+	if s.authCacheInvalidator != nil {
+		s.authCacheInvalidator.InvalidateAuthCacheByGroupID(ctx, groupID)
+	}
+	return nil
+}
+
+// ClearGroupUserDeniedModels 清空分组内所有用户的禁用模型。
+func (s *adminServiceImpl) ClearGroupUserDeniedModels(ctx context.Context, groupID int64) error {
+	if err := s.ValidateSimpleModeGroupOperation(AdminGroupOperationDeniedModels); err != nil {
+		return err
+	}
+	if s.userGroupRateRepo == nil {
+		return nil
+	}
+	if err := s.userGroupRateRepo.ClearGroupDeniedModels(ctx, groupID); err != nil {
+		return err
+	}
+	// 禁用模型嵌入 auth cache snapshot (v25)，变更后必须失效相关缓存。
+	if s.authCacheInvalidator != nil {
+		s.authCacheInvalidator.InvalidateAuthCacheByGroupID(ctx, groupID)
+	}
+	return nil
+}
+
+// BatchSetGroupUserDeniedModels 整组覆盖用户的禁用模型：未列出的用户、清单为空的条目都恢复为不限制。
+func (s *adminServiceImpl) BatchSetGroupUserDeniedModels(ctx context.Context, groupID int64, entries []GroupUserDeniedModelsInput) error {
+	if err := s.ValidateSimpleModeGroupOperation(AdminGroupOperationDeniedModels); err != nil {
+		return err
+	}
+	if s.userGroupRateRepo == nil {
+		return nil
+	}
+	normalized := make([]GroupUserDeniedModelsInput, 0, len(entries))
+	seen := make(map[int64]struct{}, len(entries))
+	for _, e := range entries {
+		if e.UserID <= 0 {
+			return infraerrors.BadRequest("INVALID_USER_GROUP_DENIED_MODELS", "user_id must be positive")
+		}
+		if _, dup := seen[e.UserID]; dup {
+			return infraerrors.BadRequest("INVALID_USER_GROUP_DENIED_MODELS", fmt.Sprintf("duplicate user_id %d", e.UserID))
+		}
+		seen[e.UserID] = struct{}{}
+		models, err := NormalizeUserGroupDeniedModels(e.DeniedModels)
+		if err != nil {
+			return err
+		}
+		normalized = append(normalized, GroupUserDeniedModelsInput{UserID: e.UserID, DeniedModels: models})
+	}
+	if err := s.userGroupRateRepo.SyncGroupDeniedModels(ctx, groupID, normalized); err != nil {
+		return err
+	}
+	// 禁用模型嵌入 auth cache snapshot (v25)，变更后必须失效相关缓存。
 	if s.authCacheInvalidator != nil {
 		s.authCacheInvalidator.InvalidateAuthCacheByGroupID(ctx, groupID)
 	}

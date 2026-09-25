@@ -30,6 +30,10 @@ type stubAdminService struct {
 	guardedDeletedGroupIDs              []int64
 	deleteGroupIfEmptyErr               error
 	advancedGroupOperationCalls         int
+	userDeniedModelsGroupID             int64
+	userDeniedModelsEntries             []service.GroupUserDeniedModelsInput
+	clearUserDeniedModelsCalls          int
+	batchSetUserDeniedModelsErr         error
 	lastListGroupsIsExclusive           *bool
 	createdProxies                      []*service.CreateProxyInput
 	updatedProxyIDs                     []int64
@@ -422,6 +426,19 @@ func (s *stubAdminService) ClearGroupRPMOverrides(_ context.Context, _ int64) er
 func (s *stubAdminService) BatchSetGroupRPMOverrides(_ context.Context, _ int64, _ []service.GroupRPMOverrideInput) error {
 	s.advancedGroupOperationCalls++
 	return nil
+}
+
+func (s *stubAdminService) ClearGroupUserDeniedModels(_ context.Context, groupID int64) error {
+	s.clearUserDeniedModelsCalls++
+	s.userDeniedModelsGroupID = groupID
+	return nil
+}
+
+func (s *stubAdminService) BatchSetGroupUserDeniedModels(_ context.Context, groupID int64, entries []service.GroupUserDeniedModelsInput) error {
+	s.advancedGroupOperationCalls++
+	s.userDeniedModelsGroupID = groupID
+	s.userDeniedModelsEntries = entries
+	return s.batchSetUserDeniedModelsErr
 }
 
 func (s *stubAdminService) ListAccounts(ctx context.Context, page, pageSize int, platform, accountType, status, search string, groupID int64, privacyMode string, sortBy, sortOrder string) ([]service.Account, int64, error) {

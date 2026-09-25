@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -68,9 +69,10 @@ func TestOpenAISSEReadPumpFullForwardSilence(t *testing.T) {
 		result *OpenAIForwardResult
 		err    error
 	}
+	collector := requesttiming.New(time.Now(), -1)
 	done := make(chan outcome, 1)
 	go func() {
-		result, err := svc.Forward(context.Background(), c, a, []byte(`{"model":"gpt-5.5","stream":true,"input":"synthetic","instructions":"synthetic"}`))
+		result, err := svc.Forward(requesttiming.With(context.Background(), collector), c, a, []byte(`{"model":"gpt-5.5","stream":true,"input":"synthetic","instructions":"synthetic"}`))
 		done <- outcome{result, err}
 	}()
 	select {
@@ -93,6 +95,14 @@ func TestOpenAISSEReadPumpFullForwardSilence(t *testing.T) {
 		require.NotContains(t, recorder.Body.String(), "response.completed")
 		require.True(t, IsResponseCommitted(c), "local timeout terminal must be visible to the handler")
 		require.Nil(t, a.TempUnschedulableUntil)
+		collector.Finish(200, false)
+		collector.WhenFinished(func(data requesttiming.Snapshot) {
+			require.Equal(t, "failed", data.Outcome)
+			require.Contains(t, data.Events, "first_visible")
+			require.Len(t, data.Attempts, 1)
+			require.Contains(t, data.Attempts[0].Events, "first_visible")
+			require.Empty(t, data.Terminal, "local timeout must not invent upstream completion")
+		})
 	case <-time.After(3 * time.Second):
 		unblock()
 		<-done

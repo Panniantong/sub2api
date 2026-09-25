@@ -5065,6 +5065,90 @@
             </div>
           </div>
 
+          <!-- OpenCode Go Usage Settings -->
+          <div class="card" data-testid="opencode-go-usage-global-settings">
+            <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                {{ t("admin.settings.opencodeGoUsage.title") }}
+              </h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {{ t("admin.settings.opencodeGoUsage.description") }}
+              </p>
+            </div>
+            <div class="space-y-5 p-6">
+              <div v-if="opencodeGoUsageLoading" class="flex items-center gap-2 text-gray-500">
+                <div class="h-4 w-4 animate-spin rounded-full border-b-2 border-primary-600"></div>
+                {{ t("common.loading") }}
+              </div>
+              <template v-else>
+                <div class="flex items-center justify-between gap-4">
+                  <div>
+                    <label class="font-medium text-gray-900 dark:text-white">
+                      {{ t("admin.settings.opencodeGoUsage.enabled") }}
+                    </label>
+                    <p class="text-sm text-gray-500 dark:text-gray-400">
+                      {{ t("admin.settings.opencodeGoUsage.enabledHint") }}
+                    </p>
+                  </div>
+                  <Toggle
+                    v-model="opencodeGoUsageForm.enabled"
+                    :aria-label="t('admin.settings.opencodeGoUsage.enabled')"
+                    data-testid="opencode-go-usage-global-enabled"
+                  />
+                </div>
+                <div v-if="opencodeGoUsageForm.enabled" class="space-y-4 border-t border-gray-100 pt-4 dark:border-dark-700">
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300" for="opencode-go-usage-debounce">
+                      {{ t("admin.settings.opencodeGoUsage.debounceMinutes") }}
+                    </label>
+                    <input
+                      id="opencode-go-usage-debounce"
+                      v-model.number="opencodeGoUsageForm.debounce_minutes"
+                      type="number"
+                      min="1"
+                      max="60"
+                      class="input w-32"
+                      data-testid="opencode-go-usage-global-debounce"
+                      @keydown.enter.prevent="saveOpenCodeGoUsageSettings"
+                    />
+                    <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                      {{ t("admin.settings.opencodeGoUsage.debounceHint") }}
+                    </p>
+                  </div>
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300" for="opencode-go-usage-interval">
+                      {{ t("admin.settings.opencodeGoUsage.intervalMinutes") }}
+                    </label>
+                    <input
+                      id="opencode-go-usage-interval"
+                      v-model.number="opencodeGoUsageForm.interval_minutes"
+                      type="number"
+                      min="5"
+                      max="1440"
+                      class="input w-32"
+                      data-testid="opencode-go-usage-global-interval"
+                      @keydown.enter.prevent="saveOpenCodeGoUsageSettings"
+                    />
+                    <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                      {{ t("admin.settings.opencodeGoUsage.intervalHint") }}
+                    </p>
+                  </div>
+                </div>
+                <div class="flex justify-end border-t border-gray-100 pt-4 dark:border-dark-700">
+                  <button
+                    type="button"
+                    class="btn btn-primary btn-sm"
+                    :disabled="opencodeGoUsageSaving"
+                    data-testid="opencode-go-usage-global-save"
+                    @click="saveOpenCodeGoUsageSettings"
+                  >
+                    {{ opencodeGoUsageSaving ? t("common.saving") : t("common.save") }}
+                  </button>
+                </div>
+              </template>
+            </div>
+          </div>
+
           <!-- Gateway Scheduling Settings -->
           <div class="card">
             <div
@@ -5208,7 +5292,6 @@
                     class="input pr-8"
                     data-testid="openai-oauth-scheduling-rate-multiplier"
                     min="0"
-                    required
                     step="0.01"
                     type="number"
                   />
@@ -5297,7 +5380,6 @@
                     class="input pr-8"
                     data-testid="openai-oauth-scheduling-rate-multiplier"
                     min="0"
-                    required
                     step="0.01"
                     type="number"
                   />
@@ -5930,6 +6012,61 @@
                   </p>
                 </div>
                 <Toggle v-model="form.openai_codex_version_auto_sync_enabled" />
+              </div>
+
+              <!-- Claude Code 客户端版本号 -->
+              <div>
+                <label
+                  class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
+                >
+                  {{
+                    t(
+                      "admin.settings.gatewayForwarding.claudeCodeClientVersion",
+                    )
+                  }}
+                </label>
+                <input
+                  v-model="form.claude_code_client_version"
+                  type="text"
+                  class="input w-full font-mono text-sm"
+                  placeholder="2.1.280"
+                />
+                <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                  {{
+                    t(
+                      "admin.settings.gatewayForwarding.claudeCodeClientVersionHint",
+                    )
+                  }}
+                </p>
+              </div>
+
+              <!-- Claude Code 版本号自动同步 -->
+              <div class="flex items-center justify-between">
+                <div>
+                  <label
+                    class="text-sm font-medium text-gray-700 dark:text-gray-300"
+                  >
+                    {{
+                      t(
+                        "admin.settings.gatewayForwarding.claudeCodeVersionAutoSync",
+                      )
+                    }}
+                  </label>
+                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    {{
+                      t(
+                        "admin.settings.gatewayForwarding.claudeCodeVersionAutoSyncHint",
+                      )
+                    }}
+                  </p>
+                  <p
+                    v-if="claudeSyncedVersionLabel"
+                    class="mt-0.5 text-xs text-gray-500 dark:text-gray-400"
+                  >
+                    {{ claudeSyncedVersionLabel }}
+                  </p>
+                </div>
+                <Toggle v-model="form.claude_code_version_auto_sync_enabled" />
               </div>
 
             </div>
@@ -7344,6 +7481,14 @@
           </div>
         </div>
 
+        <PelicanShowcaseSettings
+          v-model:enabled="form.pelican_showcase_enabled"
+          v-model:config="form.pelican_showcase_config"
+          :groups="pelicanShowcaseGroups"
+          :groups-loaded="pelicanShowcaseGroupsLoaded"
+          :groups-load-failed="pelicanShowcaseGroupsLoadFailed"
+        />
+
         <div class="card">
           <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
             <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
@@ -7502,6 +7647,23 @@
                 min="1"
                 class="input"
               />
+            </div>
+
+            <div
+              v-if="form.cyber_session_block_enabled"
+              class="rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-900/60 dark:bg-amber-950/30"
+            >
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <label class="text-sm font-medium text-amber-900 dark:text-amber-200">
+                    {{ t('admin.settings.features.riskControl.cyberSessionIdentityStrict') }}
+                  </label>
+                  <p class="mt-1 text-xs text-amber-800 dark:text-amber-300">
+                    {{ t('admin.settings.features.riskControl.cyberSessionIdentityStrictHint') }}
+                  </p>
+                </div>
+                <Toggle v-model="form.cyber_session_identity_strict_enabled" />
+              </div>
             </div>
           </div>
         </div>
@@ -8997,6 +9159,7 @@ import type {
   DefaultSubscriptionSetting,
   DefaultPlatformQuotasMap,
   OpenAIFastPolicyRule,
+  PelicanShowcaseConfig,
   WeChatConnectMode,
   WebSearchEmulationConfig,
   WebSearchProviderConfig,
@@ -9031,6 +9194,11 @@ import BackupSettings from "@/views/admin/BackupView.vue";
 import EmailTemplateEditor from "@/views/admin/settings/EmailTemplateEditor.vue";
 import OpenAIFastPolicyUserSelector from "@/views/admin/settings/OpenAIFastPolicyUserSelector.vue";
 import MihomoSettings from "@/views/admin/settings/MihomoSettings.vue";
+import PelicanShowcaseSettings from "@/views/admin/settings/PelicanShowcaseSettings.vue";
+import {
+  defaultPelicanShowcaseConfig,
+  sanitizePelicanShowcaseConfig,
+} from "@/views/admin/settings/pelicanShowcase";
 import { useClipboard } from "@/composables/useClipboard";
 import {
   useStepUp,
@@ -9176,6 +9344,9 @@ const newAdminApiKey = ref("");
 const subscriptionGroups = ref<AdminGroup[]>([]);
 const codexHarvestGroups = ref<AdminGroup[]>([]);
 const codexHarvestGroupsLoadFailed = ref(false);
+const pelicanShowcaseGroups = ref<AdminGroup[]>([]);
+const pelicanShowcaseGroupsLoaded = ref(false);
+const pelicanShowcaseGroupsLoadFailed = ref(false);
 const codexHarvestGroupChoices = computed(() => {
   const known = new Set(codexHarvestGroups.value.map(group => group.id));
   return [
@@ -9199,6 +9370,14 @@ const ollamaCloudUsageSaving = ref(false);
 const ollamaCloudUsageForm = reactive({
   enabled: false,
   interval_minutes: 60,
+  debounce_minutes: 1,
+});
+
+const opencodeGoUsageLoading = ref(true);
+const opencodeGoUsageSaving = ref(false);
+const opencodeGoUsageForm = reactive({
+  enabled: false,
+  interval_minutes: 15,
   debounce_minutes: 1,
 });
 
@@ -9708,12 +9887,15 @@ type SettingsForm = Omit<
   | "wechat_connect_open_enabled"
   | "wechat_connect_mp_enabled"
   | "wechat_connect_mobile_enabled"
+  | "openai_oauth_scheduling_rate_multiplier"
 > & {
   openai_codex_ticket_harvest_scope: { mode: "all" | "selected"; group_ids: number[]; account_policy: "schedulable_only" | "prioritize_schedulable" };
   /** Form always binds a concrete boolean (SystemSettings marks this optional). */
   channel_monitor_hide_throughput: boolean;
   channel_monitor_show_quota: boolean;
   channel_monitor_hide_user_ranking: boolean;
+  pelican_showcase_enabled: boolean;
+  pelican_showcase_config: PelicanShowcaseConfig;
   smtp_password: string;
   turnstile_secret_key: string;
   tencent_captcha_app_secret_key: string;
@@ -9734,7 +9916,7 @@ type SettingsForm = Omit<
   google_oauth_client_secret: string;
   force_email_on_third_party_signup: boolean;
   openai_low_upstream_rate_priority_enabled: boolean;
-  openai_oauth_scheduling_rate_multiplier: number;
+  openai_oauth_scheduling_rate_multiplier: number | "" | null;
   openai_advanced_scheduler_enabled: boolean;
   openai_advanced_scheduler_sticky_weighted_enabled: boolean;
   openai_advanced_scheduler_subscription_priority_enabled: boolean;
@@ -9803,6 +9985,7 @@ const form = reactive<SettingsForm>({
   risk_control_enabled: false,
   cyber_session_block_enabled: false,
   cyber_session_block_ttl_seconds: 3600,
+  cyber_session_identity_strict_enabled: false,
   payment_min_amount: 1,
   payment_max_amount: 10000,
   payment_daily_limit: 50000,
@@ -10017,6 +10200,10 @@ const form = reactive<SettingsForm>({
   openai_codex_ticket_harvest_proxy_url: "",
   openai_codex_ticket_harvest_proxy_configured: false,
   openai_codex_ticket_models: ["gpt-6-astra", "gpt-5.6-sol"],
+  claude_code_client_version: "",
+  // 只读展示：自动同步任务写入的官方最新稳定版，不参与提交（提交载荷按字段显式构造）
+  claude_code_client_version_synced: "",
+  claude_code_version_auto_sync_enabled: true,
   // codex_cli_only 加固
   min_codex_version: "",
   max_codex_version: "",
@@ -10040,6 +10227,9 @@ const form = reactive<SettingsForm>({
   channel_monitor_hide_user_ranking: false,
   // Available Channels feature switch
   available_channels_enabled: false,
+  // Pelican showcase switch + gallery limits (defaults match the backend)
+  pelican_showcase_enabled: false,
+  pelican_showcase_config: defaultPelicanShowcaseConfig(),
   // Subscription feature switch (user sidebar "My Subscriptions" entry)
   subscription_enabled: true,
   // Model Plaza feature switches + description
@@ -11037,6 +11227,13 @@ function selectCodexTicketProxyMode(mode: CodexTicketProxyMode): void {
       codexTicketStaticProxyDraft.value;
   }
 }
+const claudeSyncedVersionLabel = computed(() => {
+  const synced = form.claude_code_client_version_synced?.trim();
+  if (!synced) return "";
+  return t("admin.settings.gatewayForwarding.claudeCodeVersionSyncedValue", {
+    version: synced,
+  });
+});
 
 async function loadSettings() {
   loading.value = true;
@@ -11054,6 +11251,10 @@ async function loadSettings() {
     form.openai_codex_ticket_harvest_scope.account_policy =
       form.openai_codex_ticket_harvest_scope.account_policy || 'schedulable_only';
     syncCodexTicketProxyMode();
+    // For this optional override, null explicitly selects per-account rates.
+    if (settings.openai_oauth_scheduling_rate_multiplier === null) {
+      form.openai_oauth_scheduling_rate_multiplier = null;
+    }
     syncCaptchaProviderSelection();
     if (!form.claude_oauth_system_prompt_blocks?.trim()) {
       form.claude_oauth_system_prompt_blocks =
@@ -11223,6 +11424,9 @@ async function loadSubscriptionGroups() {
     const groups = await adminAPI.groups.getAll();
     codexHarvestGroups.value = groups.filter(group => group.platform === 'openai');
     codexHarvestGroupsLoadFailed.value = false;
+    pelicanShowcaseGroups.value = groups.filter((group) => group.status === "active");
+    pelicanShowcaseGroupsLoaded.value = true;
+    pelicanShowcaseGroupsLoadFailed.value = false;
     subscriptionGroups.value = groups.filter(
       (group) =>
         group.subscription_type === "subscription" && group.status === "active",
@@ -11231,6 +11435,9 @@ async function loadSubscriptionGroups() {
     subscriptionGroups.value = [];
     codexHarvestGroups.value = [];
     codexHarvestGroupsLoadFailed.value = true;
+    pelicanShowcaseGroups.value = [];
+    pelicanShowcaseGroupsLoaded.value = false;
+    pelicanShowcaseGroupsLoadFailed.value = true;
   }
 }
 
@@ -11467,6 +11674,16 @@ async function saveSettings() {
     form.claude_oauth_system_prompt_blocks =
       claudeOAuthSystemPromptBlocksJSON;
 
+    const oauthSchedulingRate = form.openai_oauth_scheduling_rate_multiplier;
+    if (
+      oauthSchedulingRate !== "" &&
+      oauthSchedulingRate !== null &&
+      (!Number.isFinite(oauthSchedulingRate) || oauthSchedulingRate < 0)
+    ) {
+      appStore.showError(t("admin.settings.openaiExperimentalScheduler.oauthRateInvalid"));
+      return;
+    }
+
     const payload: UpdateSettingsRequest = {
       registration_enabled: form.registration_enabled,
       email_verify_enabled: form.email_verify_enabled,
@@ -11687,6 +11904,9 @@ async function saveSettings() {
         form.openai_codex_ticket_harvest_proxy_url?.trim() || "",
       openai_codex_ticket_use_saved_static_proxy: codexTicketProxyMode.value === 'static',
       openai_codex_ticket_models: [...form.openai_codex_ticket_models],
+      claude_code_client_version: form.claude_code_client_version?.trim() || "",
+      claude_code_version_auto_sync_enabled:
+        form.claude_code_version_auto_sync_enabled,
       min_codex_version: form.min_codex_version?.trim() || "",
       max_codex_version: form.max_codex_version?.trim() || "",
       codex_cli_only_allow_app_server_clients:
@@ -11706,6 +11926,8 @@ async function saveSettings() {
       cyber_session_block_enabled: form.cyber_session_block_enabled,
       cyber_session_block_ttl_seconds:
         Number(form.cyber_session_block_ttl_seconds) || 3600,
+      cyber_session_identity_strict_enabled:
+        form.cyber_session_identity_strict_enabled,
       payment_min_amount: Number(form.payment_min_amount) || 0,
       payment_max_amount: Number(form.payment_max_amount) || 0,
       payment_daily_limit: Number(form.payment_daily_limit) || 0,
@@ -11738,7 +11960,7 @@ async function saveSettings() {
       openai_low_upstream_rate_priority_enabled:
         form.openai_low_upstream_rate_priority_enabled,
       openai_oauth_scheduling_rate_multiplier:
-        form.openai_oauth_scheduling_rate_multiplier,
+        oauthSchedulingRate === "" ? null : oauthSchedulingRate,
       openai_advanced_scheduler_enabled: form.openai_advanced_scheduler_enabled,
       openai_advanced_scheduler_sticky_weighted_enabled:
         form.openai_advanced_scheduler_sticky_weighted_enabled,
@@ -11788,6 +12010,9 @@ async function saveSettings() {
       channel_monitor_hide_user_ranking: Boolean(form.channel_monitor_hide_user_ranking),
       // Available Channels feature switch
       available_channels_enabled: form.available_channels_enabled,
+      // Pelican showcase switch + gallery limits
+      pelican_showcase_enabled: form.pelican_showcase_enabled,
+      pelican_showcase_config: sanitizePelicanShowcaseConfig(form.pelican_showcase_config),
       // Subscription feature switch
       subscription_enabled: form.subscription_enabled,
       // Model Plaza feature switches + description
@@ -11846,6 +12071,9 @@ async function saveSettings() {
       if (value !== null && value !== undefined) {
         (form as Record<string, unknown>)[key] = value;
       }
+    }
+    if (updated.openai_oauth_scheduling_rate_multiplier === null) {
+      form.openai_oauth_scheduling_rate_multiplier = null;
     }
     Object.assign(authSourceDefaults, buildAuthSourceDefaultsState(updated));
     form.default_platform_quotas = normalizePlatformQuotasMap(updated.default_platform_quotas);
@@ -12131,6 +12359,37 @@ async function saveOllamaCloudUsageSettings() {
     );
   } finally {
     ollamaCloudUsageSaving.value = false;
+  }
+}
+
+async function loadOpenCodeGoUsageSettings() {
+  opencodeGoUsageLoading.value = true;
+  try {
+    Object.assign(
+      opencodeGoUsageForm,
+      await adminAPI.accounts.getOpenCodeGoUsageSettings(),
+    );
+  } catch (_error: unknown) {
+    // Keep the fail-safe disabled defaults when this optional setting cannot be loaded.
+  } finally {
+    opencodeGoUsageLoading.value = false;
+  }
+}
+
+async function saveOpenCodeGoUsageSettings() {
+  opencodeGoUsageSaving.value = true;
+  try {
+    const updated = await adminAPI.accounts.updateOpenCodeGoUsageSettings({
+      ...opencodeGoUsageForm,
+    });
+    Object.assign(opencodeGoUsageForm, updated);
+    appStore.showSuccess(t("admin.settings.opencodeGoUsage.saved"));
+  } catch (error: unknown) {
+    appStore.showError(
+      extractApiErrorMessage(error, t("admin.settings.opencodeGoUsage.saveFailed")),
+    );
+  } finally {
+    opencodeGoUsageSaving.value = false;
   }
 }
 
@@ -12884,6 +13143,7 @@ onMounted(() => {
   loadAdminApiKey();
   loadUpstreamBillingProbeSettings();
   loadOllamaCloudUsageSettings();
+  loadOpenCodeGoUsageSettings();
   loadOverloadCooldownSettings();
   loadRateLimit429CooldownSettings();
   loadPanelRateLimitSettings();

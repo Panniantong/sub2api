@@ -1,7 +1,14 @@
 export default {
   harvestFlow: {
+    transportLabel: 'Mint transport',
+    edgeLabel: 'Edge IP (optional)',
+    edgeHint: 'Dial this public IP while keeping chatgpt.com Host, TLS SNI and certificate verification. Leave empty for DNS. Edge IP and Cookie gateway are separate selections.',
+    gatewayLabel: 'Target routing gateway',
+    gatewayHint: 'Use any for any valid gateway, or specify unified-123 / a full host. Tickets record the actual gateway; past candy checks do not prove the current account or request will pass.',
+    shapeValidationIncomplete: 'Ticket {length}/{blocks} matches the target length and block count, but full validation did not pass; see probe details',
+    nativeHint: 'Native server minting through the existing harvest proxy; no cloud function. 780 is a format length, with a maximum ticket age of 240 seconds. Gateway and model declarations do not prove capability. Mint transport must match the upstream request transport; switching discards tickets from the previous transport.',
     title: 'Ticket Harvest Flow',
-    description: 'Node rotate → harvest probe → 292 shape check → ticket store → account select',
+    description: 'Node rotate → harvest probe → 780 shape check → ticket store → account select',
     externalProxy: 'Static / external proxy',
     externalProxyHint: 'Node rotation is managed by the proxy provider; no local sidecar is required.',
     proxyUnconfigured: 'Harvest proxy not configured',
@@ -41,13 +48,13 @@ export default {
     waitingSidecar: 'Waiting for sidecar',
     poolOnline: 'Load-balance · {n} nodes',
     idleProbe: 'Waiting for harvest probe',
-    idleShape: 'Waiting for 292 check',
+    idleShape: 'Waiting for 780 check',
     idleTicket: 'No stored ticket',
     cookies: { none: 'No cookies', active: '{count} cookies · {time} left', expired: '{count} cookies · expired' },
     idleSelect: 'Waiting for assistant request',
     shapeOk: '{length} bytes / {blocks} blocks',
     shapeBad: 'Got {length}/{blocks}, want {expected_length}/{expected_blocks}',
-    shapeNoBody: 'Latest probe had no ticket body; not a 292 shape miss',
+    shapeNoBody: 'Latest probe had no ticket body; not a 780 shape miss',
     filterAll: 'All',
     ticketsReadyCount: '{n} ready',
     ticketsPausedCount: '{n} models paused',
@@ -56,7 +63,7 @@ export default {
     ticketStored: 'Stored',
     schedulable: 'Schedulable',
     unschedulable: 'Not schedulable',
-    noEvents: 'No flow events yet. This page records node rotation, harvest probes, 292 checks, ticket storage, and account selection.',
+    noEvents: 'No flow events yet. This page records node rotation, harvest probes, 780 checks, ticket storage, and account selection.',
     noAccounts: 'No ChatGPT OAuth accounts eligible for harvest',
     events: 'Flow events',
     accounts: 'Ticket accounts',
@@ -68,7 +75,7 @@ export default {
     durationMinutes: '{minutes}m',
     durationSeconds: '{seconds}s',
     lastProbe: 'Last probe {time}',
-    blocked: 'No 292 ticket; this model is paused',
+    blocked: 'No 780 ticket; this model is paused',
     missing: 'No valid ticket',
     standby: 'Standby',
     skipHarvest: 'Skip harvest',
@@ -98,6 +105,9 @@ export default {
       }
     },
     console: {
+      collectLanes: 'Parallel lanes',
+      parallelStart: 'Collect in parallel',
+      parallelHint: 'Lane count applies only to parallel collection. Requires managed Mihomo; independent exits share the attempt budget and stop after saving a ticket for each model. Serial harvest uses the switch rule above.',
       title: 'Directed single-account harvest',
       description: 'Manually harvest one account. Node switches use the directed exit and node memory, not business rotation.',
       account: 'Account',
@@ -122,7 +132,7 @@ export default {
         never: 'Keep the current exit'
       },
       stopOnSuccess: 'Stop after a stored qualified ticket',
-      start: 'Start harvest',
+      start: 'Serial harvest (1 lane)',
       stop: 'Stop harvest',
       clear: 'Clear logs',
       status: 'Status',
@@ -146,7 +156,7 @@ export default {
     stages: {
       node: 'Node rotate',
       probe: 'Harvest probe',
-      shape: '292 check',
+      shape: '780 check',
       ticket: 'Ticket store',
       select: 'Account select'
     },
@@ -158,7 +168,7 @@ export default {
     },
     kinds: {
       rotate: 'Rotate',
-      probe_hit: '292 hit',
+      probe_hit: '780 hit',
       probe_miss: 'Probe miss',
       accept: 'Ticket stored',
       reject: 'Ticket rejected',
@@ -168,7 +178,7 @@ export default {
       unavailable: 'Select failed'
     },
     reasons: {
-      ticket_unavailable: 'No valid 292 ticket for this model',
+      ticket_unavailable: 'No valid 780 ticket for this model',
       harvest_excluded: 'Out of harvest scope; leftover tickets are not spent',
       unavailable: 'No available account'
     },
@@ -204,6 +214,8 @@ export default {
       reasons: {
         explore: 'Round-robin exploration', recent_success: 'Recent qualified ticket success',
         switch_after_invalid_state: 'Previous node returned an invalid ticket',
+        switch_after_invalid_route: 'Previous node failed routing Cookie validation',
+        switch_after_model_mismatch: 'Previous node returned a different model declaration',
         switch_after_network_error: 'Previous node had a network failure',
         switch_after_upstream_error: 'Previous node had an upstream failure',
         switch_after_response_incomplete_or_error: 'Previous response was incomplete'
@@ -226,6 +238,8 @@ export default {
       cancelled: 'Cancelled',
       not_sent: 'Request not sent',
       invalid_state: 'Invalid shape',
+      invalid_route: 'Routing Cookie validation failed',
+      model_mismatch: 'Upstream model declaration mismatch',
       token_error: 'Token error',
       response_incomplete_or_error: 'Upstream incomplete'
     }

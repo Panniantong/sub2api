@@ -776,3 +776,6 @@
     padding-bottom: env(safe-area-inset-bottom);
   }
 }
+
+.modal-fullscreen { width: 100vw !important; max-width: none !important; height: 100vh !important; max-height: none !important; border-radius: 0 !important; }
+.modal-fullscreen .modal-body { max-height: none !important; }

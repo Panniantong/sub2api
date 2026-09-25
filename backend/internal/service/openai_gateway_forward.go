@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	"io"
 	"net/http"
 	"net/url"
@@ -19,7 +20,19 @@ import (
 )
 
 // Forward forwards request to OpenAI API
-func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (result *OpenAIForwardResult, resultErr error) {
+	defer func() {
+		outcome := "success"
+		if resultErr != nil {
+			outcome = "failed"
+		}
+		disconnected := result != nil && result.ClientDisconnect
+		if disconnected {
+			outcome = "client_disconnected"
+		}
+		requesttiming.Outcome(ctx, outcome, disconnected)
+	}()
+	defer requesttiming.Observe(ctx, "forward_attempt")()
 	latest, admissionErr := s.admitOpenAITurn(ctx, c, account, extractOpenAICodexTicketModel(body))
 	if admissionErr != nil {
 		return nil, admissionErr
@@ -64,6 +77,15 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		return nil, errors.New("codex_cli_only restriction: only codex official clients are allowed")
 	}
 
+	// The SDK adapter owns Lite declarations, custom tools, replay item IDs,
+	// namespaces and compaction. Do not lower them to generic OpenAI API shapes.
+	if account.IsCopilotSDKEnabled() {
+		view := newOpenAIRequestView(body)
+		SetActualOpenAIUpstreamEndpoint(c, openAIResponsesUpstreamEndpoint)
+		return s.forwardOpenAIPassthrough(ctx, c, account, body, body, view.Model, false,
+			extractOpenAIReasoningEffortFromBody(body, view.Model), view.Stream, startTime)
+	}
+
 	normalizedBody, normalized, err := normalizeOpenAICodexCompactReasoningEffortForAccount(c, account, body)
 	if err != nil {
 		return nil, err
@@ -87,7 +109,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		body = sanitizedToolBody
 	}
 	if account.IsOpenAIOAuthLike() {
-		reasoningBody, reasoningChanged, reasoningErr := normalizeOpenAIResponsesReasoningMode(body)
+		reasoningBody, reasoningChanged, reasoningErr := normalizeOpenAIResponsesReasoningMode(body, account.GetMappedModel(gjson.GetBytes(body, "model").String()))
 		if reasoningErr != nil {
 			return nil, fmt.Errorf("normalize OpenAI Responses reasoning.mode: %w", reasoningErr)
 		}
@@ -1391,6 +1413,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 }
 
 func shouldForwardOpenAIResponsesViaRawChatCompletions(account *Account) bool {
+	if account.IsCopilotSDKEnabled() {
+		return false
+	}
 	if account == nil || account.Type != AccountTypeAPIKey {
 		return false
 	}
@@ -1418,6 +1443,9 @@ func shouldForwardOpenAIResponsesViaRawChatCompletions(account *Account) bool {
 // 路由判定：账号级协议配置或探测结论要求回退，或者入站请求的形状是当前上游无法
 // 正确处理的（见 shouldForwardDeepSeekResponsesLiteViaChatCompletions）。
 func shouldForwardOpenAIResponsesViaChatCompletions(account *Account, body []byte) bool {
+	if account.IsCopilotSDKEnabled() {
+		return false
+	}
 	return shouldForwardOpenAIResponsesViaRawChatCompletions(account) ||
 		shouldForwardDeepSeekResponsesLiteViaChatCompletions(account, body)
 }
@@ -1578,6 +1606,7 @@ func shouldAdaptDeepSeekResponsesClientTools(account *Account, body []byte, comp
 
 func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Context, account *Account, body []byte, token string, isStream bool, promptCacheKey string, isCodexCLI bool) (*http.Request, error) {
 	body = s.prepareCodexQuotaOverdraftBody(ctx, account, isOpenAIResponsesCompactPath(c), body)
+	defer requesttiming.Observe(ctx, "build_upstream_request")()
 	// Determine target URL based on account type
 	var targetURL string
 	switch account.Type {
@@ -1728,6 +1757,10 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 		req.Header.Set("content-type", "application/json")
 	}
 
+	// 官方 OpenCode / Command Code 上游收敛为规范客户端 UA：客户端透传的编程库
+	// UA 会命中其前置 Cloudflare bot 拦截（CF 1010/403），并被计入账号 403 strike。
+	applyOpenCodeUpstreamUserAgent(account, targetURL, req.Header)
+
 	// 账号级请求头覆写（仅 openai api_key 账号启用时生效；OAuth 路径 no-op）
 	account.ApplyHeaderOverrides(req.Header)
 	applyOpenCodeSessionHeader(c, account, targetURL, req.Header, body, openCodeSessionHintBody(promptCacheKey))
@@ -1738,6 +1771,9 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	logOpenAIRoutingDiagnosticsFromBody(ctx, account, "http", req.Header, body, "not_applicable")
 	s.pinBoundCodexTicketHarvestIdentity(req, account)
 
+	if err := applyMappedGPT55LiteCompatibility(req, account, body); err != nil {
+		return nil, err
+	}
 	return req, nil
 }
 

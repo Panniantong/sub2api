@@ -223,7 +223,7 @@
                     <span v-if="event.standby"> · {{ t('admin.harvestFlow.standby') }}</span>
                   </p>
                   <p v-if="event.reason || event.detail || event.result" class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    {{ reasonLabel(event.reason) || resultLabel(event.result) || event.detail || event.result }}
+                    {{ event.detail || reasonLabel(event.reason) || resultLabel(event.result) || event.result }}
                   </p>
                 </div>
               </li>
@@ -380,6 +380,7 @@ function stageDetail(stage: CodexHarvestFlowStage) {
     case 'node':
       if (snapshot.value?.sidecar.mode === 'external') return t('admin.harvestFlow.externalProxyHint')
       if (snapshot.value?.sidecar.mode === 'unconfigured') return t('admin.harvestFlow.proxyUnconfigured')
+      if (stage.node) return stage.node
       if (snapshot.value?.sidecar.now) return snapshot.value.sidecar.now
       if (snapshot.value?.sidecar.reachable) {
         return t('admin.harvestFlow.poolOnline', { n: snapshot.value.sidecar.all_count || 0 })
@@ -390,6 +391,9 @@ function stageDetail(stage: CodexHarvestFlowStage) {
       return resultLabel(stage.detail) || stage.node || stage.detail || t('admin.harvestFlow.idleProbe')
     case 'shape':
       if (stage.status === 'idle') return t('admin.harvestFlow.idleShape')
+      if (stage.detail === 'ticket shape matches; validation incomplete') {
+        return t('admin.harvestFlow.shapeValidationIncomplete', { length: stage.length || 0, blocks: stage.blocks || 0 })
+      }
       if (stage.status === 'ok') {
         return t('admin.harvestFlow.shapeOk', { length: stage.length || 0, blocks: stage.blocks || 0 })
       }
@@ -470,6 +474,7 @@ function ticketStatusLine(account: CodexHarvestFlowAccount, ticket: CodexHarvest
 }
 
 function ticketProbeLine(ticket: CodexHarvestFlowTicket) {
+  if (ticket.ready && ticket.transport) return [ticket.transport.toUpperCase(), ticket.gateway, ticket.edge_ip].filter(Boolean).join(' · ')
   const probe = ticket.probe
   if (!probe?.result && !probe?.checked_at) return '\u00a0'
   if (!ticket.ready && probe?.checked_at) {

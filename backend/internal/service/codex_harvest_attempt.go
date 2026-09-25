@@ -70,6 +70,9 @@ func (s *OpenAIGatewayService) harvestTicketConfig(ctx context.Context) config.O
 	cfg := s.openAICodexTicketConfig()
 	controls, _ := s.harvestControls(ctx)
 	applyHarvestSpeed(&cfg, controls.Speed)
+	if cfg.TargetLength == 780 && cfg.RefreshBeforeSeconds > 60 {
+		cfg.RefreshBeforeSeconds = 60
+	}
 	return cfg
 }
 
@@ -145,6 +148,10 @@ func (s *OpenAIGatewayService) prepareHarvestAttempt(ctx context.Context, accoun
 	learning := s.codexHarvest
 	sidecar, err := mihomo.LoadDirectedSidecar(os.Getenv("DATA_DIR"), proxy)
 	if err != nil {
+		if _, _, managed := mihomo.ManagedController(); managed && strings.TrimRight(proxy, "/") == mihomo.Endpoint {
+			learning.degrade(err.Error())
+			return a, false
+		}
 		if pinned != nil && strings.TrimSpace(pinned.HarvestProxyURL) != "" {
 			a.proxy = pinned.HarvestProxyURL
 		}
@@ -156,9 +163,9 @@ func (s *OpenAIGatewayService) prepareHarvestAttempt(ctx context.Context, accoun
 	nodes, err := sidecar.Directory(query)
 	if err != nil {
 		learning.degrade(err.Error())
-		return a, true
+		return a, false
 	}
-	scope := CodexHarvestNodeScope{PoolID: sidecar.PoolID, AccountID: account.ID, Identity: ticketIdentity(account), Model: model, Blocks: openAICodexTicketExpectedBlocks(account)}
+	scope := CodexHarvestNodeScope{PoolID: sidecar.PoolID, AccountID: account.ID, Identity: ticketIdentity(account), Model: model, Blocks: codexHarvestExpectedBlocks(account, s.openAICodexTicketConfig())}
 	generation, records, err := learning.nodes.Snapshot(query, scope)
 	if err != nil {
 		learning.degrade("node learning storage unavailable; using rotation")
@@ -184,8 +191,8 @@ func (s *OpenAIGatewayService) prepareHarvestAttempt(ctx context.Context, accoun
 	tried[node.ID] = true
 	release, err := sidecar.Acquire(ctx, node)
 	if err != nil {
-		learning.degrade("directed selection unavailable; using rotation")
-		return a, true
+		learning.degrade("directed selection unavailable")
+		return a, false
 	}
 	learning.setRuntime(func(r *CodexHarvestRuntime) {
 		r.CurrentNode = node.Name

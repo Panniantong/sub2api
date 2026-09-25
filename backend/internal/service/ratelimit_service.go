@@ -20,6 +20,7 @@ import (
 
 // RateLimitService 处理限流和过载状态管理
 type RateLimitService struct {
+	accountOps            *AccountOpsService
 	accountRepo           AccountRepository
 	usageRepo             UsageLogRepository
 	cfg                   *config.Config
@@ -334,6 +335,7 @@ func (s *RateLimitService) CheckErrorPolicy(ctx context.Context, account *Accoun
 // HandleUpstreamError 处理上游错误响应，标记账号状态
 // 返回是否应该停止该账号的调度
 func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte, requestedModel ...string) (shouldDisable bool) {
+	ctx = s.observeAccountOps(ctx, account, statusCode, headers, responseBody)
 	ctx = withTempUnschedulableModel(ctx, requestedModel)
 	// Team 联动熔断必须先于池模式/自定义错误码/临时不可调度的各类早退；
 	// 同请求内与 fastpath 调用点的重复触发由方法内去重吸收。
@@ -1043,6 +1045,15 @@ func (s *RateLimitService) handleOpenAI403(ctx context.Context, account *Account
 		)
 		return false
 	}
+	if isCloudflareBotBlockResponse(responseBody) {
+		slog.Warn(
+			"openai_403_cloudflare_bot_block_skips_account_penalty",
+			"account_id", account.ID,
+			"platform", account.Platform,
+			"upstream_message", upstreamMsg,
+		)
+		return false
+	}
 
 	msg := buildForbiddenErrorMessage(
 		"Access forbidden (403):",
@@ -1086,6 +1097,14 @@ func (s *RateLimitService) handleOpenAI403(ctx context.Context, account *Account
 		"threshold", openAI403DisableThreshold,
 	)
 	return true
+}
+
+// isCloudflareBotBlockResponse reports Cloudflare's WAF bot-signature response
+// (error code 1010). The upstream never reached the account API, so this is a
+// request/edge-level failure and must not consume the account 403 strike budget.
+func isCloudflareBotBlockResponse(body []byte) bool {
+	normalized := strings.ToLower(strings.TrimSpace(string(body)))
+	return strings.Contains(normalized, "error code: 1010")
 }
 
 // handleAntigravity403 处理 Antigravity 平台的 403 错误
@@ -2315,7 +2334,11 @@ func (s *RateLimitService) HandleTempUnschedulable(ctx context.Context, account 
 		return false
 	}
 	ctx = withTempUnschedulableModel(ctx, requestedModel)
-	return s.tryTempUnschedulable(ctx, account, statusCode, responseBody, firstRequestedModel(requestedModel))
+	matched := s.tryTempUnschedulable(ctx, account, statusCode, responseBody, firstRequestedModel(requestedModel))
+	if matched {
+		s.observeAccountOps(ctx, account, statusCode, nil, responseBody)
+	}
+	return matched
 }
 
 func (s *RateLimitService) HandleOpenAIImageRateLimit(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte) bool {
@@ -2498,6 +2521,9 @@ func parseOpenAIImageTryAgainCooldown(body []byte) time.Duration {
 
 const upstreamModelNotFoundCooldown = 30 * time.Minute
 const upstreamModelNotFoundReason = "upstream_404_model_not_found"
+const upstreamModelNotFound401Reason = "upstream_401_model_not_found"
+const upstreamCodexPlanGatedModelCooldown = 30 * time.Minute
+const upstreamCodexPlanGatedModelReason = "upstream_400_codex_plan_gated_model"
 const tempUnschedBodyMaxBytes = 64 << 10
 const tempUnschedMessageMaxBytes = 2048
 
@@ -2512,7 +2538,16 @@ func (s *RateLimitService) HandleUpstreamModelNotFound(ctx context.Context, acco
 	if !account.ShouldHandleErrorCode(statusCode) {
 		return false
 	}
-	if !isUpstreamModelNotFoundError(statusCode, responseBody) {
+	var cooldown time.Duration
+	var reason string
+	switch {
+	case isUpstreamModelNotFoundError(statusCode, responseBody):
+		cooldown, reason = upstreamModelNotFoundCooldown, upstreamModelNotFoundReason
+	case statusCode == http.StatusUnauthorized && account.Type == AccountTypeAPIKey && account.IsOpenAICompatible() && isOpenAICompatibleModelNotFoundBody(responseBody):
+		cooldown, reason = upstreamModelNotFoundCooldown, upstreamModelNotFound401Reason
+	case isOpenAIOAuthAccount(account) && isOpenAICodexPlanGatedModelError(statusCode, responseBody):
+		cooldown, reason = upstreamCodexPlanGatedModelCooldown, upstreamCodexPlanGatedModelReason
+	default:
 		return false
 	}
 	modelKey := modelRateLimitKeyForUpstreamModelNotFound(ctx, account, requestedModel)

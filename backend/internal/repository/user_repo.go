@@ -566,6 +566,10 @@ func (r *userRepository) ListWithFilters(ctx context.Context, params pagination.
 		))
 	}
 
+	if len(filters.UserIDs) > 0 {
+		q = q.Where(dbuser.IDIn(filters.UserIDs...))
+	}
+
 	// If attribute filters are specified, we need to filter by user IDs first
 	var allowedUserIDs []int64
 	if len(filters.Attributes) > 0 {

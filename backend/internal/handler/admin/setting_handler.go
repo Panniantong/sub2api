@@ -266,6 +266,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		RiskControlEnabled:                                     settings.RiskControlEnabled,
 		CyberSessionBlockEnabled:                               settings.CyberSessionBlockEnabled,
 		CyberSessionBlockTTLSeconds:                            settings.CyberSessionBlockTTLSeconds,
+		CyberSessionIdentityStrictEnabled:                      settings.CyberSessionIdentityStrictEnabled,
 		AffiliateRebateRate:                                    settings.AffiliateRebateRate,
 		AffiliateRebateFreezeHours:                             settings.AffiliateRebateFreezeHours,
 		AffiliateRebateDurationDays:                            settings.AffiliateRebateDurationDays,
@@ -312,6 +313,9 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		OpenAICodexTicketFailClosed:                            settings.OpenAICodexTicketFailClosed,
 		OpenAICodexTicketHarvestProxyConfigured:                strings.TrimSpace(settings.OpenAICodexTicketHarvestProxyURL) != "",
 		OpenAICodexTicketModels:                                settings.OpenAICodexTicketModels,
+		ClaudeCodeClientVersion:                                settings.ClaudeCodeClientVersion,
+		ClaudeCodeClientVersionSynced:                          settings.ClaudeCodeClientVersionSynced,
+		ClaudeCodeVersionAutoSyncEnabled:                       settings.ClaudeCodeVersionAutoSyncEnabled,
 		MinCodexVersion:                                        settings.MinCodexVersion,
 		MaxCodexVersion:                                        settings.MaxCodexVersion,
 		CodexCLIOnlyBlacklist:                                  settings.CodexCLIOnlyBlacklist,
@@ -392,6 +396,8 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		GrokDefaultBaseURLMode:         settings.GrokDefaultBaseURLMode,
 
 		AvailableChannelsEnabled: settings.AvailableChannelsEnabled,
+		PelicanShowcaseEnabled:   settings.PelicanShowcaseEnabled,
+		PelicanShowcase:          settings.PelicanShowcase,
 		SubscriptionEnabled:      settings.SubscriptionEnabled,
 
 		ModelPlazaEnabled:       settings.ModelPlazaEnabled,

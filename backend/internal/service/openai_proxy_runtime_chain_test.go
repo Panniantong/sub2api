@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -46,7 +47,8 @@ func TestRuntimeProxyChainBackupRefusalContinuesToDirect(t *testing.T) {
 			s, account, backup := runtimeChainFixture(quarantine)
 			var attempted []string
 			var outerTraceCalls int
-			ctx := httptrace.WithClientTrace(context.Background(), &httptrace.ClientTrace{
+			collector := requesttiming.New(time.Now(), 8)
+			ctx := httptrace.WithClientTrace(requesttiming.With(context.Background(), collector), &httptrace.ClientTrace{
 				GetConn: func(string) { outerTraceCalls++ },
 			})
 			s.httpUpstream = &runtimeFallbackUpstream{do: func(req *http.Request, proxy string, id int64, _ int) (*http.Response, error) {
@@ -71,6 +73,13 @@ func TestRuntimeProxyChainBackupRefusalContinuesToDirect(t *testing.T) {
 			}
 			require.Equal(t, want, attempted)
 			require.Equal(t, len(want)-1, outerTraceCalls)
+			_ = resp.Body.Close()
+			collector.Finish(200, false)
+			collector.WhenFinished(func(data requesttiming.Snapshot) {
+				require.Len(t, data.Attempts, len(want))
+				require.Equal(t, int64(0), data.Attempts[len(want)-1].ProxyID)
+				require.Equal(t, "transport_error", data.Attempts[0].Error)
+			})
 			id, proxied := openAIResponseEgressProxyID(account, resp)
 			require.Zero(t, id)
 			require.False(t, proxied)

@@ -21,6 +21,26 @@ type manualHarvestAccountRepo struct {
 	persist func(context.Context) error
 }
 
+func TestManualHarvestBudgetIsSharedAcrossModels(t *testing.T) {
+	account := ticketTestAccount(41)
+	calls := 0
+	svc := ticketTestService(t, config.OpenAICodexTicketConfig{TTLSeconds: 3600}, &codexTicketFuncUpstream{do: func(*http.Request) (*http.Response, error) {
+		calls++
+		resp := codexTicketResponse()
+		resp.Header.Set(openAICodexTurnStateHeader, fakeCodexTicketState(312))
+		return resp, nil
+	}})
+	svc.accountRepo = &manualHarvestAccountRepo{account: account}
+	var events []ManualHarvestProgress
+	err := svc.ExecuteManualHarvest(context.Background(), ManualHarvestRequest{AccountID: 41, Models: []string{"gpt-6-astra", "gpt-5.6-sol"}, MaxAttempts: 1, ProbeIntervalSeconds: 1, NodeSwitchRule: ManualHarvestNodeSwitchEveryRequest}, func(p ManualHarvestProgress) { events = append(events, p) })
+	require.NoError(t, err)
+	require.Equal(t, 1, calls)
+	for _, event := range events {
+		require.NotContains(t, event.Message, "已切换到节点")
+		require.Empty(t, event.Node)
+	}
+}
+
 func (r *manualHarvestAccountRepo) GetByID(context.Context, int64) (*Account, error) {
 	return r.account, nil
 }

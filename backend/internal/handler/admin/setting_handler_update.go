@@ -265,6 +265,8 @@ type UpdateSettingsRequest struct {
 	OpenAICodexTicketHarvestProxyURL       string    `json:"openai_codex_ticket_harvest_proxy_url"`
 	OpenAICodexTicketUseSavedStaticProxy   bool      `json:"openai_codex_ticket_use_saved_static_proxy"`
 	OpenAICodexTicketModels                *[]string `json:"openai_codex_ticket_models"`
+	ClaudeCodeClientVersion                *string   `json:"claude_code_client_version"`
+	ClaudeCodeVersionAutoSyncEnabled       *bool     `json:"claude_code_version_auto_sync_enabled"`
 
 	// codex_cli_only 加固（global-only）
 	MinCodexVersion                      string `json:"min_codex_version"`
@@ -352,6 +354,10 @@ type UpdateSettingsRequest struct {
 	// Available Channels feature switch (user-facing)
 	AvailableChannelsEnabled *bool `json:"available_channels_enabled"`
 
+	// Pelican showcase switch + gallery limits (user-facing)
+	PelicanShowcaseEnabled *bool                          `json:"pelican_showcase_enabled"`
+	PelicanShowcase        *service.PelicanShowcaseConfig `json:"pelican_showcase_config"`
+
 	// Subscription feature switch (user-facing subscription surface; see SettingKeySubscriptionEnabled)
 	SubscriptionEnabled *bool `json:"subscription_enabled"`
 
@@ -370,8 +376,9 @@ type UpdateSettingsRequest struct {
 	RiskControlEnabled *bool `json:"risk_control_enabled"`
 
 	// cyber 会话屏蔽开关 + TTL
-	CyberSessionBlockEnabled    *bool `json:"cyber_session_block_enabled"`
-	CyberSessionBlockTTLSeconds *int  `json:"cyber_session_block_ttl_seconds"`
+	CyberSessionBlockEnabled          *bool `json:"cyber_session_block_enabled"`
+	CyberSessionBlockTTLSeconds       *int  `json:"cyber_session_block_ttl_seconds"`
+	CyberSessionIdentityStrictEnabled *bool `json:"cyber_session_identity_strict_enabled"`
 
 	// OpenAI fast/flex policy (optional, only updated when provided)
 	OpenAIFastPolicySettings *dto.OpenAIFastPolicySettings `json:"openai_fast_policy_settings,omitempty"`
@@ -1467,6 +1474,15 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		}
 		req.OpenAICodexClientVersion = &normalized
 	}
+	if req.ClaudeCodeClientVersion != nil {
+		// 该值会被拼进出站 User-Agent 与 billing attribution，必须是合法版本号；空串表示跟随自动同步。
+		normalized := strings.TrimSpace(*req.ClaudeCodeClientVersion)
+		if normalized != "" && service.NormalizeClaudeCodeClientVersion(normalized) == "" {
+			response.Error(c, http.StatusBadRequest, "claude_code_client_version must be empty or a valid version (e.g. 2.1.258)")
+			return
+		}
+		req.ClaudeCodeClientVersion = &normalized
+	}
 
 	// codex_cli_only 加固：最低/最高 Codex 版本（空=禁用，或合法 semver；max>=min）
 	if req.MinCodexVersion != "" && !semverPattern.MatchString(req.MinCodexVersion) {
@@ -1832,6 +1848,20 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.OpenAICodexTicketModels
 		}(),
+		ClaudeCodeClientVersion: func() string {
+			if req.ClaudeCodeClientVersion != nil {
+				return *req.ClaudeCodeClientVersion
+			}
+			return previousSettings.ClaudeCodeClientVersion
+		}(),
+		// 同步值由自动同步任务独占写入，面板保存时原样带回，避免被清空。
+		ClaudeCodeClientVersionSynced: previousSettings.ClaudeCodeClientVersionSynced,
+		ClaudeCodeVersionAutoSyncEnabled: func() bool {
+			if req.ClaudeCodeVersionAutoSyncEnabled != nil {
+				return *req.ClaudeCodeVersionAutoSyncEnabled
+			}
+			return previousSettings.ClaudeCodeVersionAutoSyncEnabled
+		}(),
 		MinCodexVersion:       strings.TrimSpace(req.MinCodexVersion),
 		MaxCodexVersion:       strings.TrimSpace(req.MaxCodexVersion),
 		CodexCLIOnlyBlacklist: strings.TrimSpace(req.CodexCLIOnlyBlacklist),
@@ -1873,9 +1903,10 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.OpenAILowUpstreamRatePriorityEnabled
 		}(),
-		OpenAIOAuthSchedulingRateMultiplier: func() float64 {
-			if req.OpenAIOAuthSchedulingRateMultiplier != nil {
-				return *req.OpenAIOAuthSchedulingRateMultiplier
+		OpenAIOAuthSchedulingRateMultiplier: func() *float64 {
+			// Omitted fields preserve the override; explicit null clears it.
+			if _, sent := sentFields[service.SettingKeyOpenAIOAuthSchedulingRateMultiplier]; sent {
+				return req.OpenAIOAuthSchedulingRateMultiplier
 			}
 			return previousSettings.OpenAIOAuthSchedulingRateMultiplier
 		}(),
@@ -2004,6 +2035,18 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.AvailableChannelsEnabled
 		}(),
+		PelicanShowcaseEnabled: func() bool {
+			if req.PelicanShowcaseEnabled != nil {
+				return *req.PelicanShowcaseEnabled
+			}
+			return previousSettings.PelicanShowcaseEnabled
+		}(),
+		PelicanShowcase: func() service.PelicanShowcaseConfig {
+			if req.PelicanShowcase != nil {
+				return *req.PelicanShowcase
+			}
+			return previousSettings.PelicanShowcase
+		}(),
 		SubscriptionEnabled: func() bool {
 			if req.SubscriptionEnabled != nil {
 				return *req.SubscriptionEnabled
@@ -2057,6 +2100,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 				return *req.CyberSessionBlockTTLSeconds
 			}
 			return previousSettings.CyberSessionBlockTTLSeconds
+		}(),
+		CyberSessionIdentityStrictEnabled: func() bool {
+			if req.CyberSessionIdentityStrictEnabled != nil {
+				return *req.CyberSessionIdentityStrictEnabled
+			}
+			return previousSettings.CyberSessionIdentityStrictEnabled
 		}(),
 	}
 
@@ -2383,6 +2432,9 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		OpenAICodexTicketFailClosed:                            updatedSettings.OpenAICodexTicketFailClosed,
 		OpenAICodexTicketHarvestProxyConfigured:                strings.TrimSpace(updatedSettings.OpenAICodexTicketHarvestProxyURL) != "",
 		OpenAICodexTicketModels:                                updatedSettings.OpenAICodexTicketModels,
+		ClaudeCodeClientVersion:                                updatedSettings.ClaudeCodeClientVersion,
+		ClaudeCodeClientVersionSynced:                          updatedSettings.ClaudeCodeClientVersionSynced,
+		ClaudeCodeVersionAutoSyncEnabled:                       updatedSettings.ClaudeCodeVersionAutoSyncEnabled,
 		MinCodexVersion:                                        updatedSettings.MinCodexVersion,
 		MaxCodexVersion:                                        updatedSettings.MaxCodexVersion,
 		CodexCLIOnlyBlacklist:                                  updatedSettings.CodexCLIOnlyBlacklist,
@@ -2462,6 +2514,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		GrokDefaultBaseURLMode:         updatedSettings.GrokDefaultBaseURLMode,
 
 		AvailableChannelsEnabled: updatedSettings.AvailableChannelsEnabled,
+		PelicanShowcaseEnabled:   updatedSettings.PelicanShowcaseEnabled,
+		PelicanShowcase:          updatedSettings.PelicanShowcase,
 		SubscriptionEnabled:      updatedSettings.SubscriptionEnabled,
 
 		ModelPlazaEnabled:       updatedSettings.ModelPlazaEnabled,
@@ -2471,11 +2525,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 
 		AffiliateEnabled: updatedSettings.AffiliateEnabled,
 
-		RiskControlEnabled:          updatedSettings.RiskControlEnabled,
-		CyberSessionBlockEnabled:    updatedSettings.CyberSessionBlockEnabled,
-		CyberSessionBlockTTLSeconds: updatedSettings.CyberSessionBlockTTLSeconds,
-		AccountSchedulingThresholds: updatedSettings.AccountSchedulingThresholds,
-		AllowUserViewErrorRequests:  updatedSettings.AllowUserViewErrorRequests,
+		RiskControlEnabled:                updatedSettings.RiskControlEnabled,
+		CyberSessionBlockEnabled:          updatedSettings.CyberSessionBlockEnabled,
+		CyberSessionBlockTTLSeconds:       updatedSettings.CyberSessionBlockTTLSeconds,
+		CyberSessionIdentityStrictEnabled: updatedSettings.CyberSessionIdentityStrictEnabled,
+		AccountSchedulingThresholds:       updatedSettings.AccountSchedulingThresholds,
+		AllowUserViewErrorRequests:        updatedSettings.AllowUserViewErrorRequests,
 	}
 	if fastPolicy, err := h.settingService.GetOpenAIFastPolicySettings(c.Request.Context()); err != nil {
 		slog.Error("openai_fast_policy_settings_get_failed", "error", err)

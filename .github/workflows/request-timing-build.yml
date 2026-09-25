@@ -1,0 +1,59 @@
+name: Request timing validation and artifact
+on:
+  push:
+    branches: [feat/request-latency-details, feat/timing-health-colors, production]
+  workflow_dispatch:
+concurrency:
+  group: request-timing-build-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  validate-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: frontend
+      - name: Timing regression tests with race detector
+        working-directory: backend
+        run: go test -race ./internal/pkg/requesttiming ./internal/server/middleware ./internal/repository -run 'Test(FinishAndBinding|ConcurrentCallbacks|HTTPTraceKeeps|RequestTiming|TimingWrite|TimingBinding|CompletedStreamCleanup|HeartbeatFlush)' -count=1
+      - name: Compile affected packages
+        working-directory: backend
+        run: go test -tags=unit ./internal/handler/... ./internal/service ./internal/repository ./internal/server/... -run '^$'
+      - name: Frontend regression tests
+        working-directory: frontend
+        run: pnpm test:run src/components/admin/usage/__tests__/UsageTable.spec.ts src/components/admin/usage/__tests__/UsageTimingDialog.spec.ts src/utils/__tests__/usageTps.spec.ts src/utils/__tests__/latencyHealth.spec.ts src/utils/__tests__/requestTimingHealth.spec.ts
+      - name: Frontend production build
+        working-directory: frontend
+        run: pnpm build
+      - name: Build pinned production binary
+        working-directory: backend
+        run: |
+          mkdir -p ../artifacts
+          VERSION=$(cat cmd/server/VERSION)
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags embed -trimpath -ldflags "-s -w -X main.Version=$VERSION -X main.Commit=$GITHUB_SHA -X main.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o ../artifacts/sub2api ./cmd/server
+          cd ../artifacts
+          sha256sum sub2api > SHA256SUMS
+          printf '%s\n' "$GITHUB_SHA" > SOURCE_COMMIT
+          git -C .. rev-parse HEAD^{tree} > SOURCE_TREE
+          ./sub2api --version > VERSION.txt 2>&1
+      - uses: actions/upload-artifact@v6
+        with:
+          name: request-timing-linux-amd64
+          path: |
+            artifacts/
+            frontend/dist/
+          retention-days: 14

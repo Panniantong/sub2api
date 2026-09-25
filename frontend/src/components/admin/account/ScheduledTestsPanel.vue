@@ -1,11 +1,13 @@
 <template>
-  <BaseDialog
+  <component
+    :is="embedded ? 'div' : BaseDialog"
     :show="show"
     :title="t('admin.scheduledTests.title')"
     width="wide"
     @close="emit('close')"
   >
     <div class="space-y-4">
+      <p v-if="pelicanConfig" class="text-xs text-gray-500">{{ t('admin.accounts.pelicanTest.scheduleHint') }}</p>
       <!-- Add Plan Button -->
       <div class="flex items-center justify-between">
         <p class="text-sm text-gray-500 dark:text-gray-400">
@@ -13,6 +15,7 @@
         </p>
         <button
           @click="showAddForm = !showAddForm"
+          :disabled="disabled"
           class="btn btn-primary flex items-center gap-1.5 text-sm"
         >
           <Icon name="plus" size="sm" :stroke-width="2" />
@@ -33,7 +36,8 @@
             <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
               {{ t('admin.scheduledTests.model') }}
             </label>
-            <Select
+            <Input v-if="pelicanConfig" v-model="newPlan.model_id" />
+            <Select v-else
               v-model="newPlan.model_id"
               :options="modelOptions"
               :placeholder="t('admin.scheduledTests.model')"
@@ -108,6 +112,7 @@
             </div>
           </div>
         </div>
+        <PelicanTestFields v-if="pelicanConfig" v-model="newPelican" class="mt-3" />
         <div class="mt-3 flex justify-end gap-2">
           <button
             @click="showAddForm = false; resetNewPlan()"
@@ -117,7 +122,7 @@
           </button>
           <button
             @click="handleCreate"
-            :disabled="!newPlan.model_id || !newPlan.cron_expression || creating"
+            :disabled="disabled || !newPlan.model_id || !newPlan.cron_expression || creating"
             class="flex items-center gap-1.5 rounded-lg bg-primary-500 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Icon v-if="creating" name="refresh" size="sm" class="animate-spin" :stroke-width="2" />
@@ -194,7 +199,7 @@
               </div>
 
               <!-- Next Run -->
-              <div v-if="plan.next_run_at" class="hidden text-right text-xs text-gray-500 dark:text-gray-400 sm:block">
+              <div v-if="plan.enabled && plan.next_run_at" class="hidden text-right text-xs text-gray-500 dark:text-gray-400 sm:block">
                 <div>{{ t('admin.scheduledTests.nextRun') }}</div>
                 <div>{{ formatDateTime(plan.next_run_at) }}</div>
               </div>
@@ -243,7 +248,8 @@
                 <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
                   {{ t('admin.scheduledTests.model') }}
                 </label>
-                <Select
+                <Input v-if="pelicanConfig" v-model="editForm.model_id" />
+                <Select v-else
                   v-model="editForm.model_id"
                   :options="modelOptions"
                   :placeholder="t('admin.scheduledTests.model')"
@@ -318,6 +324,7 @@
                 </div>
               </div>
             </div>
+            <PelicanTestFields v-if="pelicanConfig" v-model="editPelican" class="mt-3" />
             <div class="mt-3 flex justify-end gap-2">
               <button
                 @click="cancelEdit"
@@ -327,7 +334,7 @@
               </button>
               <button
                 @click="handleEdit"
-                :disabled="!editForm.model_id || !editForm.cron_expression || updating"
+                :disabled="disabled || !editForm.model_id || !editForm.cron_expression || updating"
                 class="flex items-center gap-1.5 rounded-lg bg-primary-500 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <Icon v-if="updating" name="refresh" size="sm" class="animate-spin" :stroke-width="2" />
@@ -390,16 +397,22 @@
 
                     <!-- Latency -->
                     <span v-if="result.latency_ms > 0" class="text-xs text-gray-500 dark:text-gray-400">
-                      {{ result.latency_ms }}ms
+                      {{ pelicanConfig ? `${t('admin.accounts.pelicanTest.duration')} ${(result.latency_ms / 1000).toFixed(1)} s` : `${result.latency_ms}ms` }}
                     </span>
                   </div>
 
                   <!-- Started At -->
                   <span class="text-xs text-gray-400">
-                    {{ formatDateTime(result.started_at) }}
+                    <span v-if="pelicanConfig">{{ t('admin.accounts.pelicanTest.generatedAt') }}：</span>{{ formatDateTime(result.started_at) }}
                   </span>
                 </div>
 
+                <div v-if="pelicanConfig" class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.accounts.pelicanTest.sourceScheduled') }} · {{ result.pelican_config?.model_id || '—' }} / {{ result.pelican_config?.reasoning_effort || '—' }}
+                </div>
+                <button v-if="pelicanConfig" type="button" class="mt-2 text-xs text-primary-600" :disabled="disabled" @click="previewResult(result)">
+                  {{ t('admin.accounts.pelicanTest.preview') }}
+                </button>
                 <!-- Response / Error (collapsible) -->
                 <div v-if="result.error_message" class="mt-2">
                   <div
@@ -459,11 +472,11 @@
       @confirm="handleDelete"
       @cancel="showDeleteConfirm = false"
     />
-  </BaseDialog>
+  </component>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, watch } from 'vue'
+import { ref, reactive, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -475,7 +488,8 @@ import { Icon } from '@/components/icons'
 import { adminAPI } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
 import { formatDateTime } from '@/utils/format'
-import type { ScheduledTestPlan, ScheduledTestResult } from '@/types'
+import PelicanTestFields from './PelicanTestFields.vue'
+import type { PelicanTestConfig, ScheduledTestPlan, ScheduledTestResult } from '@/types'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -484,11 +498,24 @@ const props = defineProps<{
   show: boolean
   accountId: number | null
   modelOptions: SelectOption[]
+  embedded?: boolean
+  pelicanConfig?: PelicanTestConfig
+  defaultModel?: string
+  disabled?: boolean
 }>()
 
 const emit = defineEmits<{
   (e: 'close'): void
+  (e: 'preview', result: ScheduledTestResult): void
+  (e: 'history', results: ScheduledTestResult[]): void
 }>()
+
+const configDefaults = (): PelicanTestConfig => ({ prompt: '', reasoning_effort: 'medium', parallel_count: 1, ...props.pelicanConfig })
+const newPelican = ref(configDefaults())
+const editPelican = ref(configDefaults())
+
+let alive = true
+let revision = 0
 
 // State
 const loading = ref(false)
@@ -504,51 +531,43 @@ const deletingPlan = ref<ScheduledTestPlan | null>(null)
 const editingPlanId = ref<number | null>(null)
 const updating = ref(false)
 const editForm = reactive({
-  model_id: '' as string,
-  cron_expression: '' as string,
+  model_id: props.defaultModel || '',
+  cron_expression: '*/30 * * * *',
   max_results: '100' as string,
   enabled: true,
   auto_recover: false
 })
 
 const newPlan = reactive({
-  model_id: '' as string,
-  cron_expression: '' as string,
+  model_id: props.defaultModel || '',
+  cron_expression: '*/30 * * * *',
   max_results: '100' as string,
   enabled: true,
   auto_recover: false
 })
 
 const resetNewPlan = () => {
-  newPlan.model_id = ''
-  newPlan.cron_expression = ''
+  newPlan.model_id = props.defaultModel || ''
+  newPelican.value = configDefaults()
+  newPlan.cron_expression = '*/30 * * * *'
   newPlan.max_results = '100'
   newPlan.enabled = true
   newPlan.auto_recover = false
 }
 
-// Load plans when dialog opens
-watch(
-  () => props.show,
-  async (visible) => {
-    if (visible && props.accountId) {
-      await loadPlans()
-    } else {
-      plans.value = []
-      results.value = []
-      expandedPlanId.value = null
-      expandedResultIds.clear()
-      showAddForm.value = false
-      showDeleteConfirm.value = false
-    }
-  }
-)
-
 const loadPlans = async () => {
   if (!props.accountId) return
+  const accountId = props.accountId
+  const version = revision
   loading.value = true
   try {
-    plans.value = await adminAPI.scheduledTests.listByAccount(props.accountId)
+    const data = await adminAPI.scheduledTests.listByAccount(accountId)
+    if (alive && props.show && props.accountId === accountId && revision === version) {
+      plans.value = data.filter((plan) => !plan.pelican_config?.quality && Boolean(plan.pelican_config) === Boolean(props.pelicanConfig))
+      if (props.pelicanConfig && plans.value.length > 0 && expandedPlanId.value === null) {
+        await expandPlan(plans.value[0].id)
+      }
+    }
   } catch (error: any) {
     appStore.showError(error?.message || 'Failed to load plans')
   } finally {
@@ -558,6 +577,8 @@ const loadPlans = async () => {
 
 const handleCreate = async () => {
   if (!props.accountId || !newPlan.model_id || !newPlan.cron_expression) return
+  if (props.disabled || creating.value) return
+  revision++
   creating.value = true
   try {
     const maxResults = Number(newPlan.max_results) || 100
@@ -567,7 +588,8 @@ const handleCreate = async () => {
       cron_expression: newPlan.cron_expression,
       enabled: newPlan.enabled,
       max_results: maxResults,
-      auto_recover: newPlan.auto_recover
+      auto_recover: newPlan.auto_recover,
+      ...(props.pelicanConfig ? { pelican_config: newPelican.value } : {})
     })
     appStore.showSuccess(t('admin.scheduledTests.createSuccess'))
     showAddForm.value = false
@@ -581,6 +603,8 @@ const handleCreate = async () => {
 }
 
 const handleToggleEnabled = async (plan: ScheduledTestPlan, enabled: boolean) => {
+  if (props.disabled) return
+  revision++
   try {
     const updated = await adminAPI.scheduledTests.update(plan.id, { enabled })
     const index = plans.value.findIndex((p) => p.id === plan.id)
@@ -600,6 +624,7 @@ const startEdit = (plan: ScheduledTestPlan) => {
   editForm.max_results = String(plan.max_results)
   editForm.enabled = plan.enabled
   editForm.auto_recover = plan.auto_recover
+  if (plan.pelican_config) editPelican.value = { ...plan.pelican_config }
 }
 
 const cancelEdit = () => {
@@ -608,6 +633,8 @@ const cancelEdit = () => {
 
 const handleEdit = async () => {
   if (!editingPlanId.value || !editForm.model_id || !editForm.cron_expression) return
+  if (props.disabled || updating.value) return
+  revision++
   updating.value = true
   try {
     const updated = await adminAPI.scheduledTests.update(editingPlanId.value, {
@@ -615,7 +642,8 @@ const handleEdit = async () => {
       cron_expression: editForm.cron_expression,
       max_results: Number(editForm.max_results) || 100,
       enabled: editForm.enabled,
-      auto_recover: editForm.auto_recover
+      auto_recover: editForm.auto_recover,
+      ...(props.pelicanConfig ? { pelican_config: editPelican.value } : {})
     })
     const index = plans.value.findIndex((p) => p.id === editingPlanId.value)
     if (index !== -1) {
@@ -636,7 +664,8 @@ const confirmDeletePlan = (plan: ScheduledTestPlan) => {
 }
 
 const handleDelete = async () => {
-  if (!deletingPlan.value) return
+  if (!deletingPlan.value || props.disabled) return
+  revision++
   try {
     await adminAPI.scheduledTests.delete(deletingPlan.value.id)
     appStore.showSuccess(t('admin.scheduledTests.deleteSuccess'))
@@ -653,6 +682,22 @@ const handleDelete = async () => {
   }
 }
 
+const expandPlan = async (planId: number) => {
+  const accountId = props.accountId
+  expandedPlanId.value = planId
+  expandedResultIds.clear()
+  loadingResults.value = true
+  try {
+    const data = await adminAPI.scheduledTests.listResults(planId, 20, !props.pelicanConfig)
+    if (alive && props.show && props.accountId === accountId && expandedPlanId.value === planId) { results.value = data; emit('history', data) }
+  } catch (error: any) {
+    appStore.showError(error?.message || 'Failed to load results')
+    results.value = []
+  } finally {
+    loadingResults.value = false
+  }
+}
+
 const toggleExpand = async (planId: number) => {
   if (expandedPlanId.value === planId) {
     expandedPlanId.value = null
@@ -660,18 +705,7 @@ const toggleExpand = async (planId: number) => {
     expandedResultIds.clear()
     return
   }
-
-  expandedPlanId.value = planId
-  expandedResultIds.clear()
-  loadingResults.value = true
-  try {
-    results.value = await adminAPI.scheduledTests.listResults(planId, 20)
-  } catch (error: any) {
-    appStore.showError(error?.message || 'Failed to load results')
-    results.value = []
-  } finally {
-    loadingResults.value = false
-  }
+  await expandPlan(planId)
 }
 
 const toggleResultDetail = (resultId: number) => {
@@ -681,4 +715,41 @@ const toggleResultDetail = (resultId: number) => {
     expandedResultIds.add(resultId)
   }
 }
+const previewResult = async (result: ScheduledTestResult) => {
+  if (props.disabled) return
+  const accountId = props.accountId
+  try {
+    const full = await adminAPI.scheduledTests.getResult(result.plan_id, result.id)
+    if (alive && props.show && props.accountId === accountId) emit('preview', full)
+  } catch (error: any) {
+    appStore.showError(error?.message || 'Failed to load result')
+  }
+}
+
+watch(() => [props.show, props.accountId] as const, async ([visible, accountId]) => {
+  revision++
+  plans.value = []
+  results.value = []
+  emit('history', [])
+  expandedPlanId.value = null
+  expandedResultIds.clear()
+  showAddForm.value = false
+  showDeleteConfirm.value = false
+  editingPlanId.value = null
+  resetNewPlan()
+  if (visible && accountId) await loadPlans()
+}, { immediate: true })
+
+// Refresh background results while the embedded Pelican tab is open.
+const refreshTimer = setInterval(async () => {
+  if (!props.show || !props.pelicanConfig || loading.value || creating.value || updating.value) return
+  await loadPlans()
+  const id = expandedPlanId.value
+  if (!id) return
+  try {
+    const data = await adminAPI.scheduledTests.listResults(id, 20, false)
+    if (alive && props.show && expandedPlanId.value === id) results.value = data
+  } catch { /* Manual expansion still surfaces errors. */ }
+}, 15000)
+onBeforeUnmount(() => { alive = false; clearInterval(refreshTimer) })
 </script>

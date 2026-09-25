@@ -23,9 +23,10 @@ import (
 )
 
 type CountryFilter struct {
-	Mode         string   `json:"mode"` // off, exclude, include
-	Codes        []string `json:"codes"`
-	AllowUnknown bool     `json:"allow_unknown"`
+	Mode                   string   `json:"mode"` // off, exclude, include
+	Codes                  []string `json:"codes"`
+	AllowUnknown           bool     `json:"allow_unknown"`
+	DynamicProviderManaged bool     `json:"dynamic_provider_managed"`
 }
 
 type CountryObservation struct {
@@ -79,6 +80,11 @@ func countryAllowed(s saved, name string) bool {
 	f := s.CountryFilter
 	if f.Mode == "" || f.Mode == "off" {
 		return true
+	}
+	if strings.HasPrefix(name, "DYNAMIC-") {
+		// A different CONNECT may have a different IP even immediately after a
+		// successful country probe. Never enforce a stale per-node observation.
+		return f.DynamicProviderManaged || f.AllowUnknown
 	}
 	code := s.Countries[name].Code
 	if !validCountry(code) {
@@ -214,7 +220,16 @@ func (m *Manager) observeCountry(ctx context.Context, node map[string]any) Count
 // Each click checks up to 20 least-recently checked nodes, at most two at once.
 // Failed checks become unknown; no stale location is silently reused.
 func (m *Manager) scanCountries(ctx context.Context, s saved, target string) (map[string]CountryObservation, error) {
-	nodes := append([]map[string]any{}, s.Nodes...)
+	if strings.HasPrefix(target, "DYNAMIC-") {
+		return nil, errors.New("dynamic exit regions change between connections; configure regions at the provider")
+	}
+	nodes := make([]map[string]any, 0, len(s.Nodes))
+	for _, node := range s.Nodes {
+		name, _ := node["name"].(string)
+		if !strings.HasPrefix(name, "DYNAMIC-") {
+			nodes = append(nodes, node)
+		}
+	}
 	if target != "" {
 		nodes = nil
 		for _, node := range s.Nodes {

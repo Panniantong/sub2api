@@ -12,7 +12,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
@@ -23,7 +22,7 @@ func doWithOpenAIPreRequestRetry(client *http.Client, req *http.Request, proxyUR
 	if req == nil || req.URL == nil || req.URL.Scheme != "https" ||
 		strings.TrimSpace(proxyURL) == "" || profile != service.HTTPUpstreamProfileOpenAI ||
 		(req.Body != nil && req.Body != http.NoBody && req.GetBody == nil) {
-		return servertiming.Do(client, req)
+		return doUpstreamRequest(client, req)
 	}
 	var mu sync.Mutex
 	var started, transientFailure, handedToHTTP bool
@@ -52,7 +51,7 @@ func doWithOpenAIPreRequestRetry(client *http.Client, req *http.Request, proxyUR
 		GotFirstResponseByte: markHTTP,
 	}
 	first := req.Clone(httptrace.WithClientTrace(req.Context(), trace))
-	resp, err := servertiming.Do(client, first)
+	resp, err := doUpstreamRequest(client, first)
 	mu.Lock()
 	retry := transientFailure && !handedToHTTP
 	mu.Unlock()
@@ -77,7 +76,7 @@ func doWithOpenAIPreRequestRetry(client *http.Client, req *http.Request, proxyUR
 	// No URL, proxy credentials, account identity or request body in this marker.
 	slog.Info("openai.upstream_pre_request_retry", "attempt", 2, "reason", "tls_handshake_before_http")
 	// Same client/proxy and TLS verification; at most one additional attempt.
-	return servertiming.Do(client, second)
+	return doUpstreamRequest(client, second)
 }
 
 func transientTLSHandshakeError(err error) bool {

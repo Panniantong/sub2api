@@ -2,6 +2,7 @@ package routes
 
 import (
 	"errors"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	"net/http"
 	"strings"
 
@@ -44,6 +45,8 @@ func RegisterGatewayRoutes(
 	// 分组级模型白名单准入：在 apiKeyAuth 之后、compositeTarget 之前，
 	// 保证校验发生在合成路由改写与调度之前，且只看客户端书写的模型名。
 	groupModelAllowlist := middleware.GroupModelAllowlist()
+	// 分组「仅允许流式请求」准入：挂在模型白名单之后，同样早于合成路由改写与调度。
+	groupStreamOnly := middleware.GroupStreamOnly()
 
 	isOpenAIResponsesCompatibleGatewayPlatform := func(c *gin.Context) bool {
 		switch getGroupPlatform(c) {
@@ -191,6 +194,7 @@ func RegisterGatewayRoutes(
 	gateway.Use(gin.HandlerFunc(apiKeyAuth))
 	gateway.GET("/sub2api/billing", h.Gateway.KeyBillingInfo)
 	gateway.Use(groupModelAllowlist)
+	gateway.Use(groupStreamOnly)
 	gateway.Use(compositeTarget)
 	gateway.Use(requireGroupAnthropic)
 	{
@@ -346,6 +350,7 @@ func RegisterGatewayRoutes(
 	gemini.Use(endpointNorm)
 	gemini.Use(middleware.APIKeyAuthWithSubscriptionGoogle(apiKeyService, subscriptionService, cfg))
 	gemini.Use(groupModelAllowlist)
+	gemini.Use(groupStreamOnly)
 	gemini.Use(compositeGeminiTarget)
 	gemini.Use(requireGroupGoogle)
 	{
@@ -366,7 +371,7 @@ func RegisterGatewayRoutes(
 	// 根路径别名共用中间件链：白名单准入在 apiKeyAuth 之后、compositeTarget
 	// 之前，避免逐条路由手工维护链导致漏挂。
 	rootRoute := func(method, path string, limit gin.HandlerFunc, handler gin.HandlerFunc) {
-		r.Handle(method, path, limit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), groupModelAllowlist, compositeTarget, requireGroupAnthropic, handler)
+		r.Handle(method, path, limit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), groupModelAllowlist, groupStreamOnly, compositeTarget, requireGroupAnthropic, handler)
 	}
 	for _, prefix := range []string{"/api/v3", "/v3", "/v1", ""} {
 		rootRoute(http.MethodPost, prefix+"/contents/generations/tasks", bodyLimit, h.OpenAIGateway.SeedanceTasks)
@@ -383,7 +388,7 @@ func RegisterGatewayRoutes(
 	rootRoute(http.MethodGet, "/models/:model", bodyLimit, h.Gateway.Models)
 	rootRoute(http.MethodPost, "/messages/count_tokens", bodyLimit, countTokensHandler)
 	codexDirect := r.Group("/backend-api/codex")
-	codexDirect.Use(bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), groupModelAllowlist, compositeTarget, requireGroupAnthropic)
+	codexDirect.Use(bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), groupModelAllowlist, groupStreamOnly, compositeTarget, requireGroupAnthropic)
 	{
 		codexDirect.POST("/realtime/calls", h.OpenAIGateway.Live)
 		codexDirect.GET("/:call_id", h.OpenAIGateway.LiveSideband)
@@ -497,6 +502,7 @@ func RegisterGatewayRoutes(
 	antigravityV1.Use(middleware.ForcePlatform(service.PlatformAntigravity))
 	antigravityV1.Use(gin.HandlerFunc(apiKeyAuth))
 	antigravityV1.Use(groupModelAllowlist)
+	antigravityV1.Use(groupStreamOnly)
 	antigravityV1.Use(requireGroupAnthropic)
 	{
 		antigravityV1.POST("/messages", h.Gateway.Messages)
@@ -513,6 +519,7 @@ func RegisterGatewayRoutes(
 	antigravityV1Beta.Use(middleware.ForcePlatform(service.PlatformAntigravity))
 	antigravityV1Beta.Use(middleware.APIKeyAuthWithSubscriptionGoogle(apiKeyService, subscriptionService, cfg))
 	antigravityV1Beta.Use(groupModelAllowlist)
+	antigravityV1Beta.Use(groupStreamOnly)
 	antigravityV1Beta.Use(requireGroupGoogle)
 	{
 		antigravityV1Beta.GET("/models", h.Gateway.GeminiV1BetaListModels)
@@ -549,12 +556,16 @@ func compositeTargetPlatformMiddleware(resolver *service.CompositeRouteResolver)
 		resolver = service.NewCompositeRouteResolver(nil)
 	}
 	return func(c *gin.Context) {
+		done := requesttiming.Observe(c.Request.Context(), "composite_routing")
+		defer done()
 		apiKey, ok := middleware.GetAPIKeyFromContext(c)
 		if !ok || apiKey == nil || apiKey.Group == nil || apiKey.Group.Platform != service.PlatformComposite {
+			done()
 			c.Next()
 			return
 		}
 		if c.Request == nil || c.Request.Method == http.MethodGet {
+			done()
 			c.Next()
 			return
 		}
@@ -596,6 +607,7 @@ func compositeTargetPlatformMiddleware(resolver *service.CompositeRouteResolver)
 			}
 		}
 		requestmodel.ResetRequestBody(c.Request, body)
+		done()
 		c.Next()
 	}
 }

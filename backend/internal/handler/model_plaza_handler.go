@@ -132,6 +132,7 @@ func (h *ModelPlazaHandler) Get(c *gin.Context) {
 	var allowedGroups map[int64]struct{}
 	var restrictPublicGroups bool
 	var userRates map[int64]float64
+	var deniedModels map[int64][]string
 	if authed {
 		allowedGroups, restrictPublicGroups, err = h.apiKeyService.GetUserGroupVisibility(c.Request.Context(), subject.UserID)
 		if err != nil {
@@ -145,13 +146,19 @@ func (h *ModelPlazaHandler) Get(c *gin.Context) {
 			slog.Warn("model_plaza_user_rates_failed", "error", err, "user_id", subject.UserID)
 			userRates = nil
 		}
+		deniedModels, err = h.apiKeyService.GetUserGroupDeniedModels(c.Request.Context(), subject.UserID)
+		if err != nil {
+			// 广场只做展示，真正的准入在网关；拿不到时照常展示，不影响请求时的拒绝。
+			slog.Warn("model_plaza_user_denied_models_failed", "error", err, "user_id", subject.UserID)
+			deniedModels = nil
+		}
 	}
 
 	visible := filterPlazaVisibleGroups(groups, allowedGroups, restrictPublicGroups)
 
 	out := make([]modelPlazaGroup, 0, len(visible))
 	for i := range visible {
-		out = append(out, toModelPlazaGroupDTO(&visible[i], userRates))
+		out = append(out, toModelPlazaGroupDTO(&visible[i], userRates, deniedModels[visible[i].ID]))
 	}
 	response.Success(c, modelPlazaResponse{
 		Description: rt.Description,
@@ -183,11 +190,14 @@ func filterPlazaVisibleGroups(
 	return visible
 }
 
-// toModelPlazaGroupDTO 将 service 层广场分组映射为白名单 DTO,并合并用户专属倍率。
-func toModelPlazaGroupDTO(g *service.PlazaGroup, userRates map[int64]float64) modelPlazaGroup {
+// toModelPlazaGroupDTO 将 service 层广场分组映射为白名单 DTO,合并用户专属倍率并隐藏该用户被禁用的模型。
+func toModelPlazaGroupDTO(g *service.PlazaGroup, userRates map[int64]float64, deniedModels []string) modelPlazaGroup {
 	models := make([]modelPlazaModel, 0, len(g.Models))
 	for i := range g.Models {
 		m := &g.Models[i]
+		if service.UserGroupDeniesModel(deniedModels, m.Name) {
+			continue
+		}
 		models = append(models, modelPlazaModel{
 			Name:             m.Name,
 			Platform:         m.Platform,

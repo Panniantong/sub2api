@@ -53,6 +53,9 @@ type APIKeyAuthUserSnapshot struct {
 	// UserGroupRPMOverride 该 API Key 对应的 (user, group) 专属 RPM 覆盖值。
 	// nil = 无 override（回退到 group/user 级）；0 = 不限流；>0 = 专属上限。
 	UserGroupRPMOverride *int `json:"user_group_rpm_override,omitempty"`
+
+	// UserGroupDeniedModels 该 API Key 对应的 (user, group) 禁用模型；准入与模型列表据此拒绝 / 过滤。
+	UserGroupDeniedModels []string `json:"user_group_denied_models,omitempty"`
 }
 
 // APIKeyAuthGroupSnapshot 分组快照
@@ -90,6 +93,7 @@ type APIKeyAuthGroupSnapshot struct {
 	ClaudeCodeOnly                  bool                          `json:"claude_code_only"`
 	FallbackGroupID                 *int64                        `json:"fallback_group_id,omitempty"`
 	FallbackGroupIDOnInvalidRequest *int64                        `json:"fallback_group_id_on_invalid_request,omitempty"`
+	StreamOnly                      bool                          `json:"stream_only"`
 
 	// Model routing is used by gateway account selection, so it must be part of auth cache snapshot.
 	// Only anthropic groups use these fields; others may leave them empty.

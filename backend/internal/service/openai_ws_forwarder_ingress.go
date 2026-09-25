@@ -847,7 +847,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				)
 				return nil, err
 			}
-			if err := s.applyOpenAICodexTicket(factoryCtx, latest, firstRoutingFields[0].String(), headers); err != nil {
+			if err := s.applyOpenAICodexTicket(factoryCtx, latest, firstRoutingFields[0].String(), headers, "websocket"); err != nil {
 				s.invalidateOpenAIWSTurnStateAfterAdmissionFailure(
 					factoryCtx,
 					groupID,

@@ -2,8 +2,10 @@ export interface CountryFilter {
   mode: 'off' | 'exclude' | 'include'
   codes: string[]
   allow_unknown: boolean
+  dynamic_provider_managed?: boolean
 }
 export interface CountryNode {
+  dynamic?: boolean
   display_name?: string
   name: string
   state: string
