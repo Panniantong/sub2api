@@ -38,7 +38,10 @@ func TestUpdateExtraCodexDisplaySnapshotsAvoidSchedulerOutbox(t *testing.T) {
 				}
 				payload, err := json.Marshal(updates)
 				require.NoError(t, err)
-				mock.ExpectExec(regexp.QuoteMeta("UPDATE accounts SET extra = COALESCE(extra, '{}'::jsonb) || $1::jsonb, updated_at = NOW() WHERE id = $2 AND deleted_at IS NULL")).
+				// Match the single-UPDATE shape without pinning the exact column
+				// list: GPT House builds add rate_limited_at/rate_limit_reset_at
+				// CASE clauses to UpdateExtra (yield-429), upstream does not.
+				mock.ExpectExec(`UPDATE accounts SET extra = COALESCE\(extra, '\{\}'::jsonb\) \|\| \$1::jsonb, .*WHERE id = \$2 AND deleted_at IS NULL`).
 					WithArgs(string(payload), int64(27)).WillReturnResult(sqlmock.NewResult(0, 1))
 				if tc.schedulingChange {
 					mock.ExpectExec(regexp.QuoteMeta("INSERT INTO scheduler_outbox")).
