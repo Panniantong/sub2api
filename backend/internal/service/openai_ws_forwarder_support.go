@@ -627,6 +627,9 @@ func (s *OpenAIGatewayService) resolveAccountByPreviousResponseIDForCapability(
 			_ = store.DeleteResponseAccount(ctx, derefGroupID(groupID), responseID)
 			return 0, nil, "", nil
 		}
+		if s.openAICookieSchedulingBlockReason(ctx, latest) != "" {
+			return 0, nil, "", nil
+		}
 		account = latest
 	}
 	if requireCompact && openAICompactSupportTier(account) == 0 {

@@ -715,10 +715,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			zap.Float64("load_skew", scheduleDecision.LoadSkew),
 		)
 		account := selection.Account
-		if previousResponseID != "" && requestPlatform == service.PlatformOpenAI && !account.IsOpenAIApiKey() {
-			// The public Responses HTTP API supports previous_response_id on API-key
-			// accounts. OAuth/SetupToken upstreams do not, so keep searching instead
-			// of silently deleting continuation state from a mixed account pool.
+		if previousResponseID != "" && requestPlatform == service.PlatformOpenAI && !h.gatewayService.SupportsOpenAIHTTPContinuation(account) {
+			// Native HTTP OAuth upstreams do not support continuation. Cookie-bound
+			// WSv2 accounts do, even when the client entered through HTTP/SSE.
 			failedAccountIDs[account.ID] = struct{}{}
 			if selection.ReleaseFunc != nil {
 				selection.ReleaseFunc()
@@ -730,7 +729,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				Scope:            service.GatewayFailureScopeRequest,
 				Reason:           service.OpenAIHTTPContinuationUnsupportedReason,
 				ClientStatusCode: http.StatusBadRequest,
-				ClientMessage:    "previous_response_id requires an OpenAI API-key account for HTTP requests",
+				ClientMessage:    "previous_response_id requires an OpenAI API-key account or a Cookie-bound WSv2 account for HTTP requests",
 			}
 			reqLog.Debug("openai.account_skipped_http_continuation_unsupported",
 				zap.Int64("account_id", account.ID),

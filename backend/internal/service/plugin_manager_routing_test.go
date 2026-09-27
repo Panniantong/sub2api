@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -15,15 +17,75 @@ import (
 type pluginRoutingHTTPUpstream struct {
 	doCalls        int
 	doWithTLSCalls int
+	lastRequest    *http.Request
 }
 
-func (u *pluginRoutingHTTPUpstream) Do(*http.Request, string, int64, int) (*http.Response, error) {
+func (u *pluginRoutingHTTPUpstream) Do(request *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
 	u.doCalls++
+	u.lastRequest = request
 	return &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     make(http.Header),
 		Body:       io.NopCloser(strings.NewReader("legacy")),
 	}, nil
+}
+
+func TestOpenAIGatewayFinalOutboundBindingReplacesAllHeaderCasings(t *testing.T) {
+	ticket := "gAAAAA" + strings.Repeat("x", 326)
+	account := &Account{
+		ID:          11,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Extra: map[string]any{
+			openAICodexTicketExtraKey:    &openAICodexTicket{State: ticket, ExpiresAt: time.Now().Add(time.Hour)},
+			openAICodexCookieExtraKey:    "bound=cookie",
+			openAICodexSessionIDExtraKey: "bound-session",
+		},
+	}
+	upstream := &pluginRoutingHTTPUpstream{}
+	service := &OpenAIGatewayService{
+		httpUpstream: upstream,
+		cfg: &config.Config{Gateway: config.GatewayConfig{
+			OpenAICodexTicket: config.OpenAICodexTicketConfig{Enabled: true},
+		}},
+	}
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", nil)
+	require.NoError(t, err)
+	request.Header = http.Header{
+		"cookie":             {"client=lower"},
+		"Cookie":             {"client=canonical"},
+		"x-codex-turn-state": {"client-lower"},
+		"X-Codex-Turn-State": {"client-canonical"},
+		"session_id":         {"client-lower"},
+		"Session_id":         {"client-canonical"},
+		"session-id":         {"client-hyphen-lower"},
+		"Session-Id":         {"client-hyphen-canonical"},
+	}
+
+	response, err := service.doOpenAIUpstream(request, "", account)
+	require.NoError(t, err)
+	require.NotNil(t, response)
+	_ = response.Body.Close()
+	require.Same(t, request, upstream.lastRequest)
+	require.Equal(t, ticket, request.Header.Get(openAICodexTurnStateHeader))
+	require.Equal(t, "bound=cookie; client=canonical", request.Header.Get("Cookie"))
+	require.Equal(t, "bound-session", request.Header.Get("session_id"))
+	require.Equal(t, "bound-session", request.Header.Get("session-id"))
+	require.Equal(t, 1, countHeaderKeysEqualFold(request.Header, "Cookie"))
+	require.Equal(t, 1, countHeaderKeysEqualFold(request.Header, openAICodexTurnStateHeader))
+	require.Equal(t, 1, countHeaderKeysEqualFold(request.Header, "session_id"))
+	require.Equal(t, 1, countHeaderKeysEqualFold(request.Header, "session-id"))
+}
+
+func countHeaderKeysEqualFold(headers http.Header, name string) int {
+	count := 0
+	for key := range headers {
+		if strings.EqualFold(key, name) {
+			count++
+		}
+	}
+	return count
 }
 
 func (u *pluginRoutingHTTPUpstream) DoWithTLS(

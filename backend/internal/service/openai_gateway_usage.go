@@ -30,6 +30,10 @@ type OpenAIRecordUsageInput struct {
 	UserAgent          string // 请求的 User-Agent
 	IPAddress          string // 请求的客户端 IP 地址
 	SessionID          string // 客户端显式会话标识（session_id / X-Session-Id 等请求头），仅用于用量行会话关联
+	RequestState       string
+	ResponseState      string
+	RequestCookie      string
+	RequestHeaders     string
 	RequestPayloadHash string
 	APIKeyService      APIKeyQuotaUpdater
 	QuotaPlatform      string // user×platform quota platform resolved by the handler before async billing.
@@ -65,6 +69,9 @@ type CyberPolicyUsageInput struct {
 	UserAgent          string
 	IPAddress          string
 	SessionID          string
+	RequestState       string
+	ResponseState      string
+	RequestCookie      string
 	RequestPayloadHash string
 	APIKeyService      APIKeyQuotaUpdater
 	NativeCompactionV2 bool
@@ -468,7 +475,41 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	}
 
 	// 添加 SessionID（客户端显式会话标识；缺失/无效时保持 nil）
-	usageLog.SessionID = optionalTrimmedStringPtr(input.SessionID)
+	boundSessionID := strings.TrimSpace(input.SessionID)
+	if account != nil && account.IsOpenAIOAuthLike() {
+		if accountSessionID := strings.TrimSpace(account.GetOpenAISessionID()); accountSessionID != "" {
+			boundSessionID = accountSessionID
+		}
+	}
+	usageLog.SessionID = optionalTrimmedStringPtr(boundSessionID)
+	requestState := input.RequestState
+	if strings.TrimSpace(requestState) == "" {
+		requestState = result.RequestState
+	}
+	responseState := input.ResponseState
+	if strings.TrimSpace(responseState) == "" {
+		responseState = result.ResponseState
+	}
+	requestCookie := input.RequestCookie
+	if strings.TrimSpace(requestCookie) == "" {
+		requestCookie = result.RequestCookie
+	}
+	usageLog.RequestState = optionalTrimmedStringPtr(requestState)
+	usageLog.ResponseState = optionalTrimmedStringPtr(responseState)
+	usageLog.RequestCookie = optionalTrimmedStringPtr(requestCookie)
+	requestHeaders := input.RequestHeaders
+	if strings.TrimSpace(requestHeaders) == "" {
+		requestHeaders = result.RequestHeaders
+	}
+	usageLog.RequestHeaders = optionalTrimmedStringPtr(requestHeaders)
+	// Record the actual upstream response, including expired/deleted cookies and
+	// duplicate Set-Cookie values. Never substitute the account-bound cookie jar.
+	responseHeaders := result.UpstreamHeaders
+	if len(responseHeaders) == 0 {
+		responseHeaders = result.ResponseHeaders
+	}
+	usageLog.ResponseCookie = optionalTrimmedStringPtr(strings.Join(responseHeaders.Values("Set-Cookie"), "\n"))
+	usageLog.ResponseHeaders = optionalTrimmedStringPtr(serializeOpenAIHeaders(responseHeaders))
 
 	if apiKey.GroupID != nil {
 		usageLog.GroupID = apiKey.GroupID

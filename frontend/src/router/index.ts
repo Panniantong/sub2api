@@ -598,6 +598,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/intelligence-monitor',
+    name: 'AdminIntelligenceMonitor',
+    component: () => import('@/views/admin/IntelligenceMonitorView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true, title: '智力监控' }
+  },
+  {
+    path: '/admin/cookie-library',
+    name: 'AdminCookieLibrary',
+    component: () => import('@/views/admin/CookieLibraryView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true, title: 'Cookie 库' }
+  },
+  {
     path: '/admin/risk-control',
     name: 'AdminRiskControl',
     component: () => import('@/views/admin/RiskControlView.vue'),

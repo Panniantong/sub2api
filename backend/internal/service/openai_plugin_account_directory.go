@@ -156,6 +156,7 @@ func (s *OpenAIGatewayService) ResolvePluginOutboundIdentity(ctx context.Context
 	}
 	ensureCodexIdentityHeaders(headers)
 	enforceCodexIdentityHeaders(headers)
+	s.applyOpenAIAccountBoundState(account, headers)
 	return &PluginOutboundIdentity{
 		AccountID:   account.ID,
 		Platform:    account.Platform,

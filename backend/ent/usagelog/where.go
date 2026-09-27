@@ -1935,6 +1935,16 @@ func IPAddressContainsFold(v string) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldContainsFold(FieldIPAddress, v))
 }
 
+// RequestDebugIsNil applies the IsNil predicate on the "request_debug" field.
+func RequestDebugIsNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIsNull(FieldRequestDebug))
+}
+
+// RequestDebugNotNil applies the NotNil predicate on the "request_debug" field.
+func RequestDebugNotNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotNull(FieldRequestDebug))
+}
+
 // ImageCountEQ applies the EQ predicate on the "image_count" field.
 func ImageCountEQ(v int) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldEQ(FieldImageCount, v))

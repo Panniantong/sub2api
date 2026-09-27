@@ -420,6 +420,9 @@ func redactAccountManagedExtra(extra map[string]any) map[string]any {
 			service.OllamaCloudUsageSnapshotExtraKey:
 			continue
 		default:
+			if service.IsOpenAICodexTicketPrivateExtraKey(key) {
+				continue
+			}
 			redacted[key] = value
 		}
 	}
@@ -459,7 +462,9 @@ func AccountListItemFromAccount(a *Account) *AccountListItem {
 		ID: a.ID, Name: a.Name, Notes: a.Notes, Platform: a.Platform, Type: a.Type,
 		Credentials: a.Credentials, CredentialsStatus: a.CredentialsStatus, Extra: a.Extra,
 		OllamaCloudUsage: a.OllamaCloudUsage,
-		ProxyID:          a.ProxyID, ProxyFallbackOriginID: a.ProxyFallbackOriginID, ProxyFallbackOriginName: a.ProxyFallbackOriginName,
+		CodexTurnTickets: a.CodexTurnTickets, CodexTurnTicketHistory: a.CodexTurnTicketHistory,
+		CookieBinding: a.CookieBinding, WSConnections: a.WSConnections,
+		ProxyID: a.ProxyID, ProxyFallbackOriginID: a.ProxyFallbackOriginID, ProxyFallbackOriginName: a.ProxyFallbackOriginName,
 		Concurrency: a.Concurrency, LoadFactor: a.LoadFactor, Priority: a.Priority, RateMultiplier: a.RateMultiplier,
 		Status: a.Status, ErrorMessage: a.ErrorMessage, LastUsedAt: a.LastUsedAt, ExpiresAt: a.ExpiresAt,
 		AutoPauseOnExpired: a.AutoPauseOnExpired, CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt,
@@ -729,6 +734,9 @@ func usageLogFromServiceUser(l *service.UsageLog) UsageLog {
 		UserAgent:                 l.UserAgent,
 		IPAddress:                 l.IPAddress,
 		SessionID:                 l.SessionID,
+		RequestState:              l.RequestState,
+		ResponseState:             l.ResponseState,
+		RequestCookie:             l.RequestCookie,
 		CacheTTLOverridden:        l.CacheTTLOverridden,
 		BillingMode:               l.BillingMode,
 		CreatedAt:                 l.CreatedAt,
@@ -759,6 +767,9 @@ func UsageLogFromServiceAdmin(l *service.UsageLog) *AdminUsageLog {
 	usageLog.UpstreamEndpoint = l.UpstreamEndpoint
 	return &AdminUsageLog{
 		UsageLog:                usageLog,
+		RequestHeaders:          l.RequestHeaders,
+		ResponseCookie:          l.ResponseCookie,
+		ResponseHeaders:         l.ResponseHeaders,
 		UpstreamModel:           l.UpstreamModel,
 		UpstreamReasoningEffort: adminUpstreamReasoningEffort(l),
 		UpstreamResponseModel:   l.UpstreamResponseModel,

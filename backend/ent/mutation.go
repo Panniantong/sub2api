@@ -44579,6 +44579,7 @@ type UsageLogMutation struct {
 	addfirst_token_ms            *int
 	user_agent                   *string
 	ip_address                   *string
+	request_debug                *map[string]string
 	image_count                  *int
 	addimage_count               *int
 	image_size                   *string
@@ -46562,6 +46563,55 @@ func (m *UsageLogMutation) ResetIPAddress() {
 	delete(m.clearedFields, usagelog.FieldIPAddress)
 }
 
+// SetRequestDebug sets the "request_debug" field.
+func (m *UsageLogMutation) SetRequestDebug(value map[string]string) {
+	m.request_debug = &value
+}
+
+// RequestDebug returns the value of the "request_debug" field in the mutation.
+func (m *UsageLogMutation) RequestDebug() (r map[string]string, exists bool) {
+	v := m.request_debug
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRequestDebug returns the old "request_debug" field's value of the UsageLog entity.
+// If the UsageLog object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UsageLogMutation) OldRequestDebug(ctx context.Context) (v map[string]string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRequestDebug is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRequestDebug requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRequestDebug: %w", err)
+	}
+	return oldValue.RequestDebug, nil
+}
+
+// ClearRequestDebug clears the value of the "request_debug" field.
+func (m *UsageLogMutation) ClearRequestDebug() {
+	m.request_debug = nil
+	m.clearedFields[usagelog.FieldRequestDebug] = struct{}{}
+}
+
+// RequestDebugCleared returns if the "request_debug" field was cleared in this mutation.
+func (m *UsageLogMutation) RequestDebugCleared() bool {
+	_, ok := m.clearedFields[usagelog.FieldRequestDebug]
+	return ok
+}
+
+// ResetRequestDebug resets all changes to the "request_debug" field.
+func (m *UsageLogMutation) ResetRequestDebug() {
+	m.request_debug = nil
+	delete(m.clearedFields, usagelog.FieldRequestDebug)
+}
+
 // SetImageCount sets the "image_count" field.
 func (m *UsageLogMutation) SetImageCount(i int) {
 	m.image_count = &i
@@ -47279,7 +47329,7 @@ func (m *UsageLogMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *UsageLogMutation) Fields() []string {
-	fields := make([]string, 0, 47)
+	fields := make([]string, 0, 48)
 	if m.user != nil {
 		fields = append(fields, usagelog.FieldUserID)
 	}
@@ -47387,6 +47437,9 @@ func (m *UsageLogMutation) Fields() []string {
 	}
 	if m.ip_address != nil {
 		fields = append(fields, usagelog.FieldIPAddress)
+	}
+	if m.request_debug != nil {
+		fields = append(fields, usagelog.FieldRequestDebug)
 	}
 	if m.image_count != nil {
 		fields = append(fields, usagelog.FieldImageCount)
@@ -47501,6 +47554,8 @@ func (m *UsageLogMutation) Field(name string) (ent.Value, bool) {
 		return m.UserAgent()
 	case usagelog.FieldIPAddress:
 		return m.IPAddress()
+	case usagelog.FieldRequestDebug:
+		return m.RequestDebug()
 	case usagelog.FieldImageCount:
 		return m.ImageCount()
 	case usagelog.FieldImageSize:
@@ -47604,6 +47659,8 @@ func (m *UsageLogMutation) OldField(ctx context.Context, name string) (ent.Value
 		return m.OldUserAgent(ctx)
 	case usagelog.FieldIPAddress:
 		return m.OldIPAddress(ctx)
+	case usagelog.FieldRequestDebug:
+		return m.OldRequestDebug(ctx)
 	case usagelog.FieldImageCount:
 		return m.OldImageCount(ctx)
 	case usagelog.FieldImageSize:
@@ -47886,6 +47943,13 @@ func (m *UsageLogMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetIPAddress(v)
+		return nil
+	case usagelog.FieldRequestDebug:
+		v, ok := value.(map[string]string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRequestDebug(v)
 		return nil
 	case usagelog.FieldImageCount:
 		v, ok := value.(int)
@@ -48294,6 +48358,9 @@ func (m *UsageLogMutation) ClearedFields() []string {
 	if m.FieldCleared(usagelog.FieldIPAddress) {
 		fields = append(fields, usagelog.FieldIPAddress)
 	}
+	if m.FieldCleared(usagelog.FieldRequestDebug) {
+		fields = append(fields, usagelog.FieldRequestDebug)
+	}
 	if m.FieldCleared(usagelog.FieldImageSize) {
 		fields = append(fields, usagelog.FieldImageSize)
 	}
@@ -48373,6 +48440,9 @@ func (m *UsageLogMutation) ClearField(name string) error {
 		return nil
 	case usagelog.FieldIPAddress:
 		m.ClearIPAddress()
+		return nil
+	case usagelog.FieldRequestDebug:
+		m.ClearRequestDebug()
 		return nil
 	case usagelog.FieldImageSize:
 		m.ClearImageSize()
@@ -48510,6 +48580,9 @@ func (m *UsageLogMutation) ResetField(name string) error {
 		return nil
 	case usagelog.FieldIPAddress:
 		m.ResetIPAddress()
+		return nil
+	case usagelog.FieldRequestDebug:
+		m.ResetRequestDebug()
 		return nil
 	case usagelog.FieldImageCount:
 		m.ResetImageCount()

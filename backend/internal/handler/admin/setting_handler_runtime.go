@@ -102,6 +102,146 @@ func (h *SettingHandler) UpdateOverloadCooldownSettings(c *gin.Context) {
 	})
 }
 
+func (h *SettingHandler) GetOpenAICodexTicketSettings(c *gin.Context) {
+	settings, err := h.settingService.GetOpenAICodexTicketSettings(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, dto.OpenAICodexTicketSettings{
+		Enabled:                      settings.Enabled,
+		Model:                        settings.Model,
+		TTLSeconds:                   settings.TTLSeconds,
+		RefreshBeforeSeconds:         settings.RefreshBeforeSeconds,
+		RetryIntervalSeconds:         settings.RetryIntervalSeconds,
+		HarvestProxyURL:              settings.HarvestProxyURL,
+		CookieHostWhitelist:          settings.CookieHostWhitelist,
+		CookieHarvestProxyURLs:       settings.CookieHarvestProxyURLs,
+		OverrideTurnState:            settings.OverrideTurnState,
+		CookieWSConnections:          settings.CookieWSConnections,
+		CookieWSConnectionTTLSeconds: settings.CookieWSConnectionTTLSeconds,
+		CookieWSHostCooldownSeconds:  settings.CookieWSHostCooldownSeconds,
+		RelayEnabled:                 settings.RelayEnabled,
+		RelayURL:                     settings.RelayURL,
+		RelayKey:                     settings.RelayKey,
+		RelayMode:                    settings.RelayMode,
+		RelayTimeoutSeconds:          settings.RelayTimeoutSeconds,
+		RelayAllowMint:               settings.RelayAllowMint,
+	})
+}
+
+type UpdateOpenAICodexTicketSettingsRequest struct {
+	Enabled                      bool     `json:"enabled"`
+	Model                        string   `json:"model"`
+	TTLSeconds                   int      `json:"ttl_seconds"`
+	RefreshBeforeSeconds         int      `json:"refresh_before_seconds"`
+	RetryIntervalSeconds         int      `json:"retry_interval_seconds"`
+	HarvestProxyURL              string   `json:"harvest_proxy_url"`
+	CookieHostWhitelist          []string `json:"cookie_host_whitelist"`
+	CookieHarvestProxyURLs       []string `json:"cookie_harvest_proxy_urls"`
+	OverrideTurnState            bool     `json:"override_turn_state"`
+	CookieWSConnections          int      `json:"cookie_ws_connections"`
+	CookieWSConnectionTTLSeconds int      `json:"cookie_ws_connection_ttl_seconds"`
+	CookieWSHostCooldownSeconds  int      `json:"cookie_ws_host_cooldown_seconds"`
+	RelayEnabled                 bool     `json:"relay_enabled"`
+	RelayURL                     string   `json:"relay_url"`
+	RelayKey                     string   `json:"relay_key"`
+	RelayMode                    string   `json:"relay_mode"`
+	RelayTimeoutSeconds          int      `json:"relay_timeout_seconds"`
+	RelayAllowMint               bool     `json:"relay_allow_mint"`
+}
+
+func (h *SettingHandler) UpdateOpenAICodexTicketSettings(c *gin.Context) {
+	var req UpdateOpenAICodexTicketSettingsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	settings := &service.OpenAICodexTicketSettings{
+		Enabled:                      req.Enabled,
+		Model:                        req.Model,
+		TTLSeconds:                   req.TTLSeconds,
+		RefreshBeforeSeconds:         req.RefreshBeforeSeconds,
+		RetryIntervalSeconds:         req.RetryIntervalSeconds,
+		HarvestProxyURL:              req.HarvestProxyURL,
+		CookieHostWhitelist:          req.CookieHostWhitelist,
+		CookieHarvestProxyURLs:       req.CookieHarvestProxyURLs,
+		OverrideTurnState:            req.OverrideTurnState,
+		CookieWSConnections:          req.CookieWSConnections,
+		CookieWSConnectionTTLSeconds: req.CookieWSConnectionTTLSeconds,
+		CookieWSHostCooldownSeconds:  req.CookieWSHostCooldownSeconds,
+		RelayEnabled:                 req.RelayEnabled,
+		RelayURL:                     req.RelayURL,
+		RelayKey:                     req.RelayKey,
+		RelayMode:                    req.RelayMode,
+		RelayTimeoutSeconds:          req.RelayTimeoutSeconds,
+		RelayAllowMint:               req.RelayAllowMint,
+	}
+	if err := h.settingService.SetOpenAICodexTicketSettings(c.Request.Context(), settings); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	response.Success(c, dto.OpenAICodexTicketSettings{
+		Enabled:                      settings.Enabled,
+		Model:                        settings.Model,
+		TTLSeconds:                   settings.TTLSeconds,
+		RefreshBeforeSeconds:         settings.RefreshBeforeSeconds,
+		RetryIntervalSeconds:         settings.RetryIntervalSeconds,
+		HarvestProxyURL:              settings.HarvestProxyURL,
+		CookieHostWhitelist:          settings.CookieHostWhitelist,
+		CookieHarvestProxyURLs:       settings.CookieHarvestProxyURLs,
+		OverrideTurnState:            settings.OverrideTurnState,
+		CookieWSConnections:          settings.CookieWSConnections,
+		CookieWSConnectionTTLSeconds: settings.CookieWSConnectionTTLSeconds,
+		CookieWSHostCooldownSeconds:  settings.CookieWSHostCooldownSeconds,
+		RelayEnabled:                 settings.RelayEnabled,
+		RelayURL:                     settings.RelayURL,
+		RelayKey:                     settings.RelayKey,
+		RelayMode:                    settings.RelayMode,
+		RelayTimeoutSeconds:          settings.RelayTimeoutSeconds,
+		RelayAllowMint:               settings.RelayAllowMint,
+	})
+}
+
+func (h *SettingHandler) GetOpenAICodexCookieLibrary(c *gin.Context) {
+	entries, err := h.settingService.GetOpenAICodexCookieLibrary(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	out := make([]dto.OpenAICodexCookieLibraryEntry, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, dto.OpenAICodexCookieLibraryEntry{Host: entry.Host, Cookie: entry.Cookie, Payload: entry.Payload, CapturedAt: entry.CapturedAt, ExpiresAt: entry.ExpiresAt})
+	}
+	response.Success(c, out)
+}
+
+type UpdateOpenAICodexCookieLibraryRequest struct {
+	Entries []dto.OpenAICodexCookieLibraryEntry `json:"entries"`
+}
+
+func (h *SettingHandler) UpdateOpenAICodexCookieLibrary(c *gin.Context) {
+	var req UpdateOpenAICodexCookieLibraryRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	entries := make([]service.OpenAICodexCookieLibraryEntry, 0, len(req.Entries))
+	for _, entry := range req.Entries {
+		entries = append(entries, service.OpenAICodexCookieLibraryEntry{Host: entry.Host, Cookie: entry.Cookie, Payload: entry.Payload, CapturedAt: entry.CapturedAt, ExpiresAt: entry.ExpiresAt})
+	}
+	updated, err := h.settingService.SetOpenAICodexCookieLibrary(c.Request.Context(), entries)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	out := make([]dto.OpenAICodexCookieLibraryEntry, 0, len(updated))
+	for _, entry := range updated {
+		out = append(out, dto.OpenAICodexCookieLibraryEntry{Host: entry.Host, Cookie: entry.Cookie, Payload: entry.Payload, CapturedAt: entry.CapturedAt, ExpiresAt: entry.ExpiresAt})
+	}
+	response.Success(c, out)
+}
+
 // GetRateLimit429CooldownSettings 获取429默认回避配置
 // GET /api/v1/admin/settings/rate-limit-429-cooldown
 func (h *SettingHandler) GetRateLimit429CooldownSettings(c *gin.Context) {

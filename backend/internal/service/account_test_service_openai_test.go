@@ -165,6 +165,42 @@ func TestAccountTestService_OpenAIOAuthTestNormalizesGPT56Alias(t *testing.T) {
 	require.Equal(t, "gpt-5.6-sol", gjson.GetBytes(body, "model").String())
 }
 
+func TestAccountTestService_OpenAIOAuthTestOverridesBoundTicketCookieAndSession(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := newTestContext()
+
+	resp := newJSONResponse(http.StatusOK, "")
+	resp.Body = io.NopCloser(strings.NewReader(`data: {"type":"response.completed"}
+
+`))
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{resp}}
+	gateway := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{
+		OpenAICodexTicket: config.OpenAICodexTicketConfig{Enabled: true},
+	}}}
+	svc := &AccountTestService{httpUpstream: upstream, openaiGatewayService: gateway}
+	ticket := "gAAAAA" + strings.Repeat("x", 326)
+	account := &Account{
+		ID:          90,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{"access_token": "test-token"},
+		Extra: map[string]any{
+			openAICodexTicketExtraKey:    &openAICodexTicket{State: ticket, ExpiresAt: time.Now().Add(time.Hour)},
+			openAICodexCookieExtraKey:    "bound=cookie",
+			openAICodexSessionIDExtraKey: "bound-session",
+		},
+	}
+
+	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")
+	require.NoError(t, err)
+	require.Len(t, upstream.requests, 1)
+	req := upstream.requests[0]
+	require.Equal(t, ticket, req.Header.Get(openAICodexTurnStateHeader))
+	require.Equal(t, "bound=cookie", req.Header.Get("Cookie"))
+	require.Equal(t, "bound-session", req.Header.Get("session_id"))
+}
+
 func TestAccountTestService_OpenAIShadowUsesParentCredentialsAndShadowModel(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, recorder := newTestContext()

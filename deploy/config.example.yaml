@@ -311,6 +311,31 @@ gateway:
   # Use this to avoid compact failures when newer models are not yet supported by the compact endpoint.
   # 当 compact 端点暂未支持更新模型时，可通过这里降级规避失败。
   openai_compact_model: "gpt-5.5"
+  # ChatGPT OAuth x-codex-turn-state ticket capture/reuse.
+  # A valid ticket is cached for ttl_seconds and refreshed when this many
+  # seconds remain. Tickets with length 780 are refreshed as well.
+  openai_codex_ticket:
+    # Optional __oailb JWT payload host allowlist. Empty keeps all hosts.
+    cookie_host_whitelist: []
+    cookie_harvest_proxy_urls: []
+    # Optional compatible FC relay. Mint results are still checked by the local Host validator.
+    relay_enabled: false
+    relay_url: ""
+    relay_key: ""
+    relay_mode: mint
+    relay_timeout_seconds: 75
+    relay_allow_mint: true
+    # Whether account requests should overwrite x-codex-turn-state with the bound ticket.
+    override_turn_state: true
+    enabled: false
+    ttl_seconds: 3600
+    refresh_before_seconds: 600
+    target_length: 780
+    harvest_proxy_url: ""
+    harvest_probe_interval_seconds: 5
+    harvest_attempt_timeout_seconds: 25
+    models:
+      - gpt-6-astra
   # ChatGPT Frameless Live 单会话硬上限（秒）。
   live:
     max_session_duration_seconds: 3600

@@ -18,6 +18,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -517,6 +518,12 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		usage = &OpenAIUsage{}
 	}
 
+	requestState := ""
+	requestCookie := ""
+	if resp.Request != nil && resp.Request.Header != nil {
+		requestState = strings.TrimSpace(resp.Request.Header.Get(openAICodexTurnStateHeader))
+		requestCookie = strings.TrimSpace(resp.Request.Header.Get("Cookie"))
+	}
 	forwardResult := &OpenAIForwardResult{
 		RequestID:                     resp.Header.Get("x-request-id"),
 		UpstreamHeaders:               resp.Header,
@@ -533,6 +540,10 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		OpenAIWSMode:                  false,
 		Duration:                      time.Since(startTime),
 		FirstTokenMs:                  firstTokenMs,
+		RequestState:                  requestState,
+		ResponseState:                 strings.TrimSpace(resp.Header.Get(openAICodexTurnStateHeader)),
+		RequestCookie:                 requestCookie,
+		RequestHeaders:                serializeOpenAIResponseRequestHeaders(resp),
 	}
 	if imageCount > 0 {
 		forwardResult.ImageCount = imageCount
@@ -583,11 +594,19 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	token string,
 ) (*http.Request, error) {
 	targetURL := openaiPlatformAPIURL
+	excelFullMode := account != nil && account.IsOpenAIExcelFullMode()
+	if excelFullMode {
+		targetURL = openAIExcelBasispointsURL
+		body = normalizeOpenAIExcelBasispointsRequest(body)
+	}
 	switch account.Type {
 	case AccountTypeOAuth:
+		if excelFullMode {
+			break
+		}
 		targetURL = chatgptCodexURL
 	case AccountTypeSetupToken:
-		if account.IsOpenAIOAuthLike() {
+		if account.IsOpenAIOAuthLike() && !excelFullMode {
 			targetURL = chatgptCodexURL
 		}
 	case AccountTypeAPIKey:
@@ -603,7 +622,9 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 			targetURL = buildOpenAIResponsesURLForPlatform(account.Platform, validatedURL)
 		}
 	}
-	targetURL = appendOpenAIResponsesRequestPathSuffix(targetURL, openAIResponsesRequestPathSuffix(c))
+	if !excelFullMode {
+		targetURL = appendOpenAIResponsesRequestPathSuffix(targetURL, openAIResponsesRequestPathSuffix(c))
+	}
 
 	// DeepSeek / Kimi 原生 Responses 端点为无状态实现（见 normalizeDeepSeekResponsesRequestBody）。
 	body = normalizeDeepSeekResponsesRequestBody(account, body)
@@ -645,9 +666,12 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 			req.Header.Add(key, value)
 		}
 	}
+	if excelFullMode {
+		applyOpenAIExcelBasispointsHeaders(req.Header, account, token)
+	}
 
 	// OAuth 透传到 ChatGPT internal API 时补齐必要头。
-	if account.UsesOpenAICodexProtocol() {
+	if account.UsesOpenAICodexProtocol() && !excelFullMode {
 		// Current Codex OAuth HTTP no longer negotiates the legacy Responses
 		// experiment. Passthrough may receive it from an older client, so remove
 		// only that token while preserving any independent beta negotiation.
@@ -722,6 +746,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	// 账号级请求头覆写（仅 openai api_key 账号启用时生效；OAuth 路径 no-op）
 	account.ApplyHeaderOverrides(req.Header)
 	applyOpenCodeSessionHeader(c, account, targetURL, req.Header, body)
+	s.applyOpenAIAccountBoundState(account, req.Header)
 	// x-codex-beta-features：按真实 Codex 的会话级行为补注（在账号级覆写之后，
 	// 保证不被覆盖丢失）。
 	applyOpenAICodexBetaFeatures(c, account, req.Header)
@@ -729,6 +754,122 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	logOpenAIRoutingDiagnosticsFromBody(ctx, account, "http_passthrough", req.Header, body, "not_applicable")
 
 	return req, nil
+}
+
+// normalizeOpenAIExcelBasispointsRequest adapts client tools to the Excel
+// connector's contract. Basispoints rejects a top-level tools schema, while
+// the model can still follow a compact textual directory and emit its native
+// run_officejs envelope. Input images are left untouched, so input_image data
+// URLs and URLs continue to work in Excel mode.
+func normalizeOpenAIExcelBasispointsRequest(body []byte) []byte {
+	var request map[string]any
+	if json.Unmarshal(body, &request) != nil {
+		return body
+	}
+	tools, hasTools := request["tools"]
+	if input, ok := request["input"].([]any); ok {
+		filtered := make([]any, 0, len(input))
+		for _, entry := range input {
+			item, ok := entry.(map[string]any)
+			if !ok || strings.TrimSpace(fmt.Sprint(item["type"])) != "additional_tools" {
+				filtered = append(filtered, entry)
+				continue
+			}
+			if !hasTools {
+				tools = item["tools"]
+				hasTools = tools != nil
+			}
+		}
+		request["input"] = filtered
+	}
+	if !hasTools {
+		delete(request, "tool_choice")
+		out, _ := json.Marshal(request)
+		return out
+	}
+	delete(request, "tools")
+	delete(request, "tool_choice")
+	directory := ""
+	if raw, err := json.Marshal(tools); err == nil {
+		directory = string(raw)
+	}
+	instruction := "When a client tool is needed, call run_officejs. Put a JSON object in its code field as {\"tool\":\"<client tool name>\",\"args\":{...}}. Do not execute Office code. Available client tools: " + directory
+	if existing, ok := request["instructions"].(string); ok && strings.TrimSpace(existing) != "" {
+		request["instructions"] = existing + "\n\n" + instruction
+	} else {
+		request["instructions"] = instruction
+	}
+	out, err := json.Marshal(request)
+	if err != nil {
+		return body
+	}
+	return out
+}
+
+func normalizeOpenAIExcelBasispointsResponse(body []byte) ([]byte, bool) {
+	var value any
+	if json.Unmarshal(body, &value) != nil {
+		return body, false
+	}
+	changed := false
+	var visit func(any)
+	visit = func(current any) {
+		switch item := current.(type) {
+		case map[string]any:
+			if strings.EqualFold(strings.TrimSpace(fmt.Sprint(item["type"])), "function_call") && strings.EqualFold(strings.TrimSpace(fmt.Sprint(item["name"])), "run_officejs") {
+				if rawArgs, ok := item["arguments"].(string); ok {
+					var args map[string]any
+					if json.Unmarshal([]byte(rawArgs), &args) == nil {
+						if code, ok := args["code"].(string); ok {
+							var payload map[string]any
+							if json.Unmarshal([]byte(code), &payload) == nil {
+								if tool, ok := payload["tool"].(string); ok && strings.TrimSpace(tool) != "" {
+									item["name"] = tool
+									if encoded, err := json.Marshal(payload["args"]); err == nil {
+										item["arguments"] = string(encoded)
+									}
+									changed = true
+								}
+							}
+						}
+					}
+				}
+			}
+			for _, child := range item {
+				visit(child)
+			}
+		case []any:
+			for _, child := range item {
+				visit(child)
+			}
+		}
+	}
+	visit(value)
+	if !changed {
+		return body, false
+	}
+	out, err := json.Marshal(value)
+	if err != nil {
+		return body, false
+	}
+	return out, true
+}
+
+func applyOpenAIExcelBasispointsHeaders(headers http.Header, account *Account, token string) {
+	if headers == nil || account == nil {
+		return
+	}
+	accountID := strings.TrimSpace(account.GetCredential("chatgpt_account_id"))
+	if accountID == "" {
+		if claims, err := openai.DecodeIDToken(token); err == nil && claims != nil && claims.OpenAIAuth != nil {
+			accountID = strings.TrimSpace(claims.OpenAIAuth.ChatGPTAccountID)
+		}
+	}
+	if accountID != "" {
+		headers.Set("chatgpt-account-id", accountID)
+		headers.Set("x-openai-account-id", accountID)
+	}
+	headers.Set("x-basispoints-auth-mode", "chatgpt")
 }
 
 func stripOpenAILegacyResponsesBeta(headers http.Header) {
@@ -1993,6 +2134,13 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 		if data, ok := extractOpenAISSEDataLine(line); ok {
 			dataBytes := []byte(data)
 			trimmedData := strings.TrimSpace(data)
+			if account != nil && account.IsOpenAIExcelFullMode() {
+				if normalized, changed := normalizeOpenAIExcelBasispointsResponse(dataBytes); changed {
+					dataBytes = normalized
+					trimmedData = strings.TrimSpace(string(normalized))
+					line = "data: " + string(normalized)
+				}
+			}
 			rawEventType := effectiveOpenAISSEEventType(dataBytes, pendingSSEEventType)
 			observer.ObserveOpenAI(dataBytes, rawEventType)
 			if needModelReplace {
@@ -2312,6 +2460,11 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 	}
 	if originalModel != "" && mappedModel != "" && originalModel != mappedModel {
 		body = s.replaceModelInResponseBody(body, mappedModel, originalModel)
+	}
+	if account != nil && account.IsOpenAIExcelFullMode() {
+		if normalized, changed := normalizeOpenAIExcelBasispointsResponse(body); changed {
+			body = normalized
+		}
 	}
 	body, err = restoreOpenAIResponsesNamespacePayload(c, body)
 	if err != nil {

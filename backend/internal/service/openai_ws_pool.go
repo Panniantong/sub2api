@@ -308,16 +308,22 @@ type openAIWSConn struct {
 	createdAtNano atomic.Int64
 	lastUsedNano  atomic.Int64
 	prewarmed     atomic.Bool
+	maxAge        time.Duration
 }
 
-func newOpenAIWSConn(id string, _ int64, ws openAIWSClientConn, handshakeHeaders http.Header) *openAIWSConn {
+func newOpenAIWSConn(id string, _ int64, ws openAIWSClientConn, handshakeHeaders http.Header, maxAges ...time.Duration) *openAIWSConn {
 	now := time.Now()
+	maxAge := openAIWSConnMaxAge
+	if len(maxAges) > 0 && maxAges[0] > 0 {
+		maxAge = maxAges[0]
+	}
 	conn := &openAIWSConn{
 		id:               id,
 		ws:               ws,
 		handshakeHeaders: cloneHeader(handshakeHeaders),
 		leaseCh:          make(chan struct{}, 1),
 		closedCh:         make(chan struct{}),
+		maxAge:           maxAge,
 	}
 	conn.leaseCh <- struct{}{}
 	conn.createdAtNano.Store(now.UnixNano())
@@ -327,6 +333,13 @@ func newOpenAIWSConn(id string, _ int64, ws openAIWSClientConn, handshakeHeaders
 		go conn.runReaderLoop()
 	}
 	return conn
+}
+
+func (c *openAIWSConn) configuredMaxAge() time.Duration {
+	if c == nil || c.maxAge <= 0 {
+		return openAIWSConnMaxAge
+	}
+	return c.maxAge
 }
 
 func (c *openAIWSConn) runReaderLoop() {
@@ -365,6 +378,9 @@ func (c *openAIWSConn) runReaderLoop() {
 				(*evict)()
 			}
 			return
+		}
+		if !c.isLeased() && effectiveOpenAISSEEventType(payload, "") == "codex.rate_limits" {
+			continue
 		}
 		select {
 		case c.readerLoopResults <- payload:
@@ -416,13 +432,16 @@ func (c *openAIWSConn) leaseTokenUsable() bool {
 		return false
 	default:
 	}
-	if c.readerLoopPending() {
+	for c.readerLoopPending() {
 		// 只记事件类型，不记报文原文，避免模型输出进日志。
 		eventType := ""
 		select {
 		case payload := <-c.readerLoopResults:
 			eventType = effectiveOpenAISSEEventType(payload, "")
 		default:
+		}
+		if eventType == "codex.rate_limits" {
+			continue
 		}
 		logOpenAIWSModeWarn(
 			"conn_idle_dirty_discard conn_id=%s idle_ms=%d upstream_pings=%d event=%s",
@@ -791,18 +810,20 @@ func (c *openAIWSConn) markPrewarmed() {
 }
 
 type openAIWSAccountPool struct {
-	mu            sync.Mutex
-	conns         map[string]*openAIWSConn
-	pinnedConns   map[string]int
-	changedCh     chan struct{}
-	creating      int
-	generation    uint64
-	lastCleanupAt time.Time
-	lastAcquire   *openAIWSAcquireRequest
-	prewarmActive bool
-	prewarmUntil  time.Time
-	prewarmFails  int
-	prewarmFailAt time.Time
+	cookieBindingError string
+	cookieBatch        *openAICookieWSBatch
+	mu                 sync.Mutex
+	conns              map[string]*openAIWSConn
+	pinnedConns        map[string]int
+	changedCh          chan struct{}
+	creating           int
+	generation         uint64
+	lastCleanupAt      time.Time
+	lastAcquire        *openAIWSAcquireRequest
+	prewarmActive      bool
+	prewarmUntil       time.Time
+	prewarmFails       int
+	prewarmFailAt      time.Time
 }
 
 func (ap *openAIWSAccountPool) changeChannelLocked() chan struct{} {
@@ -847,7 +868,8 @@ type openAIWSPoolMetrics struct {
 }
 
 type openAIWSConnPool struct {
-	cfg *config.Config
+	cfg            *config.Config
+	settingService *SettingService
 	// 通过接口解耦底层 WS 客户端实现，默认使用 coder/websocket。
 	clientDialer openAIWSClientDialer
 
@@ -861,11 +883,16 @@ type openAIWSConnPool struct {
 	closeOnce    sync.Once
 }
 
-func newOpenAIWSConnPool(cfg *config.Config) *openAIWSConnPool {
+func newOpenAIWSConnPool(cfg *config.Config, settings ...*SettingService) *openAIWSConnPool {
+	var settingService *SettingService
+	if len(settings) > 0 {
+		settingService = settings[0]
+	}
 	pool := &openAIWSConnPool{
-		cfg:          cfg,
-		clientDialer: newDefaultOpenAIWSClientDialer(),
-		workerStopCh: make(chan struct{}),
+		cfg:            cfg,
+		settingService: settingService,
+		clientDialer:   newDefaultOpenAIWSClientDialer(),
+		workerStopCh:   make(chan struct{}),
 	}
 	pool.startBackgroundWorkers()
 	return pool
@@ -922,6 +949,9 @@ func (p *openAIWSConnPool) Close() {
 				return true
 			}
 			ap.mu.Lock()
+			if ap.cookieBatch != nil {
+				ap.cookieBatch.cancel()
+			}
 			for _, conn := range ap.conns {
 				if conn != nil && !conn.isLeased() {
 					conn.close()
@@ -1111,6 +1141,9 @@ func (p *openAIWSConnPool) Acquire(ctx context.Context, req openAIWSAcquireReque
 		p.metrics.acquireTotal.Add(1)
 	}
 	queueWait := &openAIWSAcquireQueueWait{}
+	if p != nil && req.Account != nil && (openAICodexCookieHostFromAccount(req.Account) != "" || p.hasCookieWSBatch(req.Account.ID)) {
+		return p.acquireCookieWS(ctx, req)
+	}
 	lease, err := p.acquire(ctx, cloneOpenAIWSAcquireRequest(req), 0, queueWait)
 	if lease != nil && queueWait.rewoken {
 		// 广播重选经 tryAcquire 拿令牌，不像排队分支那样在取得令牌后检查取消，
@@ -1644,8 +1677,6 @@ func (p *openAIWSConnPool) cleanupAccountLocked(ap *openAIWSAccountPool, now tim
 	if ap == nil {
 		return nil
 	}
-	maxAge := p.maxConnAge()
-
 	evicted := make([]*openAIWSConn, 0)
 	for id, conn := range ap.conns {
 		if conn == nil {
@@ -1677,12 +1708,18 @@ func (p *openAIWSConnPool) cleanupAccountLocked(ap *openAIWSAccountPool, now tim
 			p.metrics.scaleDownTotal.Add(1)
 			continue
 		}
-		if maxAge > 0 && !conn.isLeased() && conn.age(now) > maxAge {
-			delete(ap.conns, id)
-			if len(ap.pinnedConns) > 0 {
-				delete(ap.pinnedConns, id)
+		// Cookie-bound batches are prebuilt after Host validation and remain
+		// reusable for the batch lifetime; generic max-age recycling would cause
+		// an unexpected reconnect while the binding is still valid.
+		cookieBound := ap.cookieBatch != nil && ap.cookieBatch.expires.After(now)
+		if !cookieBound {
+			if maxAge := conn.configuredMaxAge(); maxAge > 0 && !conn.isLeased() && conn.age(now) > maxAge {
+				delete(ap.conns, id)
+				if len(ap.pinnedConns) > 0 {
+					delete(ap.pinnedConns, id)
+				}
+				evicted = append(evicted, conn)
 			}
-			evicted = append(evicted, conn)
 		}
 	}
 
@@ -1690,6 +1727,20 @@ func (p *openAIWSConnPool) cleanupAccountLocked(ap *openAIWSAccountPool, now tim
 		maxConns = p.maxConnsHardCap()
 	}
 	maxIdle := p.maxIdlePerAccount()
+	if ap.cookieBatch != nil {
+		maxIdle = ap.cookieBatch.target
+		maxConns = ap.cookieBatch.target
+	}
+	if ap.lastAcquire != nil && ap.lastAcquire.Account != nil {
+		if openAICodexCookieHostFromAccount(ap.lastAcquire.Account) != "" {
+			if count, _ := p.cookieBoundWSSettings(); count == 0 {
+				maxIdle = 0
+			}
+		}
+		if target := p.cookieBoundWSConnectionCount(ap.lastAcquire.Account); target > 0 {
+			maxIdle = target
+		}
+	}
 	if maxIdle < 0 || maxIdle > maxConns {
 		maxIdle = maxConns
 	}
@@ -1830,6 +1881,71 @@ func (p *openAIWSConnPool) AccountPoolLoad(accountID int64) (inflight int, waite
 	return inflight, waiters, len(ap.conns)
 }
 
+type OpenAIWSAccountStatus struct {
+	Host            string     `json:"host,omitempty"`
+	Target          int        `json:"target,omitempty"`
+	State           string     `json:"state,omitempty"`
+	ProbeState      string     `json:"probe_state,omitempty"`
+	ProbeResponseID string     `json:"probe_response_id,omitempty"`
+	LastError       string     `json:"last_error,omitempty"`
+	ExpiresAt       *time.Time `json:"expires_at,omitempty"`
+	Total           int        `json:"total"`
+	Idle            int        `json:"idle"`
+	InUse           int        `json:"in_use"`
+	Connecting      int        `json:"connecting"`
+}
+
+// Snapshot only counts established live connections; configuration is never
+// substituted for observed pool state. The snapshot is local to this instance.
+func (s *OpenAIGatewayService) OpenAIWSAccountStatus(accountID int64) *OpenAIWSAccountStatus {
+	status := &OpenAIWSAccountStatus{}
+	if s == nil {
+		return status
+	}
+	pool := s.getOpenAIWSConnPool()
+	ap, ok := pool.getAccountPool(accountID)
+	if !ok || ap == nil {
+		return status
+	}
+	ap.mu.Lock()
+	defer ap.mu.Unlock()
+	status.Connecting = ap.creating
+	status.LastError = ap.cookieBindingError
+	if batch := ap.cookieBatch; batch != nil {
+		status.Host, status.Target, status.LastError = batch.host, batch.target, batch.lastError
+		status.ProbeState, status.ProbeResponseID = batch.probeState, batch.probeID
+		status.ExpiresAt = &batch.expires
+		status.Connecting = batch.pending
+		status.State = "ready"
+		switch {
+		case batch.probeState == "probing":
+			status.State = "probing"
+		case batch.probeState == "failed":
+			status.State = "failed"
+		case batch.pending > 0:
+			status.State = "building"
+		}
+		if !batch.expires.After(time.Now()) {
+			status.State = "expired"
+		}
+	}
+	for _, conn := range ap.conns {
+		if conn == nil || conn.isClosed() || conn.isUnusable() || conn.readerLoopPeerClosed.Load() {
+			continue
+		}
+		status.Total++
+		if conn.isLeased() {
+			status.InUse++
+		} else {
+			status.Idle++
+		}
+	}
+	if ap.cookieBatch != nil && status.State == "ready" && status.Total < status.Target {
+		status.State = "degraded"
+	}
+	return status
+}
+
 func (p *openAIWSConnPool) ensureTargetIdleAsync(accountID int64) {
 	if p == nil || accountID <= 0 {
 		return
@@ -1844,6 +1960,9 @@ func (p *openAIWSConnPool) ensureTargetIdleAsync(accountID int64) {
 	}
 	ap.mu.Lock()
 	defer ap.mu.Unlock()
+	if ap.cookieBatch != nil {
+		return
+	}
 	if ap.lastAcquire == nil {
 		return
 	}
@@ -1889,6 +2008,19 @@ func (p *openAIWSConnPool) targetConnCountLocked(ap *openAIWSAccountPool, maxCon
 
 	if maxConns <= 0 {
 		return 0
+	}
+	if ap.lastAcquire != nil && ap.lastAcquire.Account != nil {
+		if openAICodexCookieHostFromAccount(ap.lastAcquire.Account) != "" {
+			if count, _ := p.cookieBoundWSSettings(); count == 0 {
+				return 0
+			}
+		}
+		if target := p.cookieBoundWSConnectionCount(ap.lastAcquire.Account); target > 0 {
+			if target > maxConns {
+				return maxConns
+			}
+			return target
+		}
 	}
 
 	minIdle := p.minIdlePerAccount()
@@ -2004,6 +2136,11 @@ func (p *openAIWSConnPool) ClearAccount(accountID int64) {
 		return
 	}
 	ap.mu.Lock()
+	if ap.cookieBatch != nil {
+		ap.cookieBatch.cancel()
+		ap.cookieBatch = nil
+	}
+	ap.cookieBindingError = ""
 	ap.generation++
 	conns := make([]*openAIWSConn, 0, len(ap.conns))
 	for id, conn := range ap.conns {
@@ -2049,6 +2186,9 @@ func (p *openAIWSConnPool) evictConn(accountID int64, connID string) {
 	if ok && ap != nil {
 		ap.mu.Lock()
 		if c, exists := ap.conns[connID]; exists {
+			if ap.cookieBatch != nil && c.readerLoopClosedByPeer() {
+				ap.cookieBatch.lastError = "上游关闭 WS：" + c.readerLoopError().Error()
+			}
 			conn = c
 			delete(ap.conns, connID)
 			if len(ap.pinnedConns) > 0 {
@@ -2148,7 +2288,7 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 		}
 	}
 	id := p.nextConnID(req.Account.ID)
-	pooledConn := newOpenAIWSConn(id, req.Account.ID, conn, handshakeHeaders)
+	pooledConn := newOpenAIWSConn(id, req.Account.ID, conn, handshakeHeaders, p.cookieBoundWSConnectionTTL(req.Account))
 	accountID := req.Account.ID
 	evict := func() { p.evictConn(accountID, id) }
 	pooledConn.onPeerClosed.Store(&evict)
@@ -2221,6 +2361,12 @@ func (p *openAIWSConnPool) effectiveMaxConnsByAccount(account *Account) int {
 	if hardCap <= 0 {
 		return 0
 	}
+	if target := p.cookieBoundWSConnectionCount(account); target > 0 {
+		if target > hardCap {
+			return target
+		}
+		return target
+	}
 	if p.modeRouterV2Enabled() && account != nil && account.Concurrency <= 0 {
 		return 0
 	}
@@ -2243,6 +2389,59 @@ func (p *openAIWSConnPool) effectiveMaxConnsByAccount(account *Account) int {
 		effective = hardCap
 	}
 	return effective
+}
+
+// cookieBoundWSConnectionCount returns the configured account-level pool size
+// for a bound Cookie host. Runtime settings are read through SettingService,
+// while static config remains the fallback used by tests and bootstrapping.
+func (p *openAIWSConnPool) cookieBoundWSSettings() (count int, ttl time.Duration) {
+	count = 10
+	ttl = time.Hour
+	if p != nil && p.cfg != nil {
+		cfg := OpenAICodexTicketConfigDefaults(p.cfg.Gateway.OpenAICodexTicket)
+		if cfg.CookieWSConnections > 0 {
+			count = cfg.CookieWSConnections
+		}
+		if cfg.CookieWSConnectionTTLSeconds > 0 {
+			ttl = time.Duration(cfg.CookieWSConnectionTTLSeconds) * time.Second
+		}
+	}
+	if p != nil && p.settingService != nil {
+		if settings, err := p.settingService.GetOpenAICookieSettings(context.Background()); err == nil && settings != nil {
+			if !settings.WSEnabled {
+				return 0, ttl
+			}
+			if settings.WSConnections > 0 {
+				count = settings.WSConnections
+			}
+			if settings.WSTTLSeconds > 0 {
+				ttl = time.Duration(settings.WSTTLSeconds) * time.Second
+			}
+		}
+	}
+	if count < 1 {
+		count = 1
+	}
+	if count > 64 {
+		count = 64
+	}
+	return count, ttl
+}
+
+func (p *openAIWSConnPool) cookieBoundWSConnectionCount(account *Account) int {
+	if account == nil || openAICodexCookieHostFromAccount(account) == "" {
+		return 0
+	}
+	count, _ := p.cookieBoundWSSettings()
+	return count
+}
+
+func (p *openAIWSConnPool) cookieBoundWSConnectionTTL(account *Account) time.Duration {
+	if account == nil || openAICodexCookieHostFromAccount(account) == "" {
+		return openAIWSConnMaxAge
+	}
+	_, ttl := p.cookieBoundWSSettings()
+	return ttl
 }
 
 func (p *openAIWSConnPool) minIdlePerAccount() int {

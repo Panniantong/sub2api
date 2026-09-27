@@ -1168,6 +1168,39 @@ export interface Account {
   credentials?: Record<string, unknown>
   credentials_status?: Record<string, boolean>
   ollama_cloud_usage?: OllamaCloudUsageState
+  cookie_binding?: { host: string; status: 'active' | 'expired' | 'unbound' | 'unavailable' | 'cooldown'; expires_at?: string; binding_expires_at?: string; rotation_at?: string; cookie_expires_at?: string; available_host_count?: number; ws_enabled: boolean; cooldown_host?: string; cooldown_until?: string; cooldowns?: Record<string, string>; rotation_status?: string; rotation_started_at?: string; rotation_message?: string; scheduling_guard_enabled?: boolean; scheduling_blocked?: boolean; scheduling_block_reason?: string }
+  ws_connections?: { total: number; idle: number; in_use: number; connecting: number; target?: number; host?: string; state?: string; probe_state?: string; probe_response_id?: string; last_error?: string; expires_at?: string }
+  codex_turn_tickets?: Array<{
+    ready: boolean
+    ticket?: string
+    cookie?: string
+    cookie_host?: string
+    cookie_payload?: Record<string, unknown>
+    bound_cookie_host?: string
+    ws_connection_count?: number
+    ws_started_at?: string
+    ws_expires_at?: string
+    cookie_host_cooldown_until?: string
+    session_id?: string
+    history_count?: number
+    length?: number
+    remaining_seconds: number
+    expires_at?: string
+  }>
+  codex_turn_ticket_history?: Array<{
+    ticket?: string
+    request_state?: string
+    response_state?: string
+    session_id?: string
+    cookie?: string
+    cookie_host?: string
+    cookie_payload?: Record<string, unknown>
+    response?: string
+    captured_at: string
+    expires_at?: string
+    source?: string
+    status_code?: number
+  }>
   // Extra fields including Codex usage, OpenAI compact capability, and model-level rate limits.
   extra?: (CodexUsageSnapshot & OpenAICompactState & {
     model_rate_limits?: Record<string, { rate_limited_at: string; rate_limit_reset_at: string }>
@@ -1698,6 +1731,10 @@ export interface UsageLog {
   user_id: number
   api_key_id: number
   account_id: number | null
+  session_id?: string | null
+  request_state?: string | null
+  response_state?: string | null
+  request_cookie?: string | null
   request_id: string
   model: string
   service_tier?: string | null
@@ -1774,6 +1811,13 @@ export interface AdminUsageLog extends UsageLog {
   upstream_model_mismatch?: boolean | null
   model_mapping_chain?: string | null
   upstream_request_id?: string | null
+  session_id?: string | null
+  request_state?: string | null
+  response_state?: string | null
+  request_cookie?: string | null
+  request_headers?: string | null
+  response_cookie?: string | null
+  response_headers?: string | null
 
   // 账号计费倍率（仅管理员可见）
   account_rate_multiplier?: number | null

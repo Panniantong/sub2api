@@ -130,6 +130,8 @@ type SettingService struct {
 	openAICodexUASF             singleflight.Group
 	openAICodexVersionCache     atomic.Value // *cachedOpenAICodexClientVersion
 	openAICodexVersionSF        singleflight.Group
+	openAICodexTicketCache      atomic.Value // *cachedOpenAICodexTicketSettings
+	openAICookieCache           atomic.Value // *cachedOpenAICookieSettings
 	codexRestrictionPolicyCache atomic.Value // *cachedCodexRestrictionPolicy
 	codexRestrictionPolicySF    singleflight.Group
 
@@ -153,6 +155,23 @@ type SettingService struct {
 
 	channelMonitorRuntimeListenersMu sync.Mutex
 	channelMonitorRuntimeListeners   []func()
+}
+
+// GetValue reads a raw setting value for small feature-owned JSON settings.
+// Callers should validate and version their payloads themselves.
+func (s *SettingService) GetValue(ctx context.Context, key string) (string, error) {
+	if s == nil || s.settingRepo == nil {
+		return "", errors.New("setting repository unavailable")
+	}
+	return s.settingRepo.GetValue(ctx, key)
+}
+
+// Set persists a raw setting value for small feature-owned JSON settings.
+func (s *SettingService) Set(ctx context.Context, key, value string) error {
+	if s == nil || s.settingRepo == nil {
+		return errors.New("setting repository unavailable")
+	}
+	return s.settingRepo.Set(ctx, key, value)
 }
 
 // DefaultPlatformQuotaSetting 单 platform 三档限额（nil = 沿用上层；0 = 显式禁用；>0 = 上限）

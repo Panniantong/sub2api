@@ -309,10 +309,8 @@ func TestCodexIdentityKeysPreferStrongIdentifiers(t *testing.T) {
 	if keys[len(keys)-1] != "account:acct-1" {
 		t.Fatalf("shared account key should be the last fallback: %v", keys)
 	}
-	for _, key := range keys {
-		if strings.HasPrefix(key, "email:") {
-			t.Fatalf("strong identity should not include email fallback: %v", keys)
-		}
+	if !containsCodexIdentityKey(keys, "email:same@example.com") {
+		t.Fatalf("strong identity should retain email fallback: %v", keys)
 	}
 
 	keys = buildCodexImportIdentityKeys("", "", "same@example.com", "token", "refresh")
@@ -327,9 +325,18 @@ func TestCodexIdentityKeysPreferStrongIdentifiers(t *testing.T) {
 	}
 
 	keys = buildCodexImportIdentityKeys("acct-1", "user-1", "same@example.com", "token", "")
-	if len(keys) != 1 || !strings.HasPrefix(keys[0], "access:") {
-		t.Fatalf("accessToken-only identity should use only access fingerprint: %v", keys)
+	if len(keys) != 2 || !strings.HasPrefix(keys[0], "access:") || keys[1] != "email:same@example.com" {
+		t.Fatalf("accessToken-only identity should prefer access fingerprint and retain email: %v", keys)
 	}
+}
+
+func containsCodexIdentityKey(keys []string, want string) bool {
+	for _, key := range keys {
+		if key == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestCodexAccountIndexDoesNotMatchDifferentUsersInSameChatGPTAccount(t *testing.T) {

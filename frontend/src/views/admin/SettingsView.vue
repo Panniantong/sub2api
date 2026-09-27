@@ -203,6 +203,155 @@
 
         <!-- Tab: Gateway -->
         <div v-show="activeTab === 'gateway'" class="space-y-6">
+          <div class="card">
+            <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                {{ t("admin.settings.codexTicket.title") }}
+              </h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {{ t("admin.settings.codexTicket.description") }}
+              </p>
+            </div>
+            <div class="space-y-5 p-6">
+              <div v-if="codexTicketLoading" class="flex items-center gap-2 text-gray-500">
+                <div class="h-4 w-4 animate-spin rounded-full border-b-2 border-primary-600"></div>
+                {{ t("common.loading") }}
+              </div>
+              <template v-else>
+                <div class="flex items-center justify-between gap-4">
+                  <div>
+                    <label class="font-medium text-gray-900 dark:text-white">
+                      {{ t("admin.settings.codexTicket.enabled") }}
+                    </label>
+                    <p class="text-sm text-gray-500 dark:text-gray-400">
+                      {{ t("admin.settings.codexTicket.enabledHint") }}
+                    </p>
+                  </div>
+                  <Toggle v-model="codexTicketForm.enabled" />
+                </div>
+
+                <div class="flex items-center justify-between gap-4">
+                  <div>
+                    <label class="font-medium text-gray-900 dark:text-white">
+                      {{ t("admin.settings.codexTicket.overrideTurnState") }}
+                    </label>
+                    <p class="text-sm text-gray-500 dark:text-gray-400">
+                      {{ t("admin.settings.codexTicket.overrideTurnStateHint") }}
+                    </p>
+                  </div>
+                  <Toggle v-model="codexTicketForm.override_turn_state" />
+                </div>
+
+                <div v-if="codexTicketForm.enabled" class="space-y-5 border-t border-gray-100 pt-4 dark:border-dark-700">
+                  <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        {{ t("admin.settings.codexTicket.model") }}
+                      </label>
+                      <select v-model="codexTicketForm.model" class="input w-full">
+                        <option value="gpt-6-astra">gpt-6-astra</option>
+                        <option value="gpt-6-sol">gpt-6-sol</option>
+                      </select>
+                      <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                        {{ t("admin.settings.codexTicket.modelHint") }}
+                      </p>
+                    </div>
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        {{ t("admin.settings.codexTicket.ttlSeconds") }}
+                      </label>
+                      <input v-model.number="codexTicketForm.ttl_seconds" type="number" min="60" max="86400" class="input w-full" />
+                      <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                        {{ t("admin.settings.codexTicket.ttlSecondsHint") }}
+                      </p>
+                    </div>
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        {{ t("admin.settings.codexTicket.refreshBeforeSeconds") }}
+                      </label>
+                      <input v-model.number="codexTicketForm.refresh_before_seconds" type="number" min="1" :max="Math.max(1, codexTicketForm.ttl_seconds - 1)" class="input w-full" />
+                      <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                        {{ t("admin.settings.codexTicket.refreshBeforeSecondsHint") }}
+                      </p>
+                    </div>
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        {{ t("admin.settings.codexTicket.retryIntervalSeconds") }}
+                      </label>
+                      <input v-model.number="codexTicketForm.retry_interval_seconds" type="number" min="1" max="300" class="input w-full" />
+                      <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                        {{ t("admin.settings.codexTicket.retryIntervalSecondsHint") }}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.codexTicket.proxy") }}
+                    </label>
+                    <input
+                      v-model="codexTicketForm.harvest_proxy_url"
+                      type="text"
+                      class="input w-full font-mono text-sm"
+                      :placeholder="t('admin.settings.codexTicket.proxyPlaceholder')"
+                    />
+                    <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                      {{ t("admin.settings.codexTicket.proxyHint") }}
+                    </p>
+                  </div>
+
+                  <div class="rounded border border-gray-200 p-4 dark:border-dark-700">
+                    <div class="mb-3 flex items-center justify-between gap-4">
+                      <div>
+                        <label class="font-medium text-gray-900 dark:text-white">FC Relay</label>
+                        <p class="text-xs text-gray-500 dark:text-gray-400">Use the compatible relay for minting Cookie/ticket data. Results still pass Host validation.</p>
+                      </div>
+                      <Toggle v-model="codexTicketForm.relay_enabled" />
+                    </div>
+                    <div v-if="codexTicketForm.relay_enabled" class="grid gap-4 sm:grid-cols-2">
+                      <div>
+                        <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">Relay URL</label>
+                        <input v-model="codexTicketForm.relay_url" type="url" class="input w-full font-mono text-sm" placeholder="https://relay.example.com" />
+                      </div>
+                      <div>
+                        <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">Relay key</label>
+                        <input v-model="codexTicketForm.relay_key" type="password" class="input w-full font-mono text-sm" autocomplete="new-password" />
+                      </div>
+                      <div>
+                        <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">Mode</label>
+                        <select v-model="codexTicketForm.relay_mode" class="input w-full">
+                          <option value="mint">mint</option>
+                          <option value="transparent">transparent (fallback only)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">Timeout (seconds)</label>
+                        <input v-model.number="codexTicketForm.relay_timeout_seconds" type="number" min="1" max="180" class="input w-full" />
+                      </div>
+                    </div>
+                  </div>
+
+                </div>
+
+                <div class="flex justify-end border-t border-gray-100 pt-4 dark:border-dark-700">
+                  <button type="button" class="btn btn-primary btn-sm" :disabled="codexTicketSaving" @click="saveCodexTicketSettings">
+                    {{ codexTicketSaving ? t("common.saving") : t("common.save") }}
+                  </button>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Cookie 库</h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Cookie 获取已独立管理，包括代理池、刷新间隔、Host 白名单、WS 开关和获取日志。</p>
+            </div>
+            <div class="space-y-3 p-6">
+              <router-link to="/admin/cookie-library" class="btn btn-primary btn-sm">打开 Cookie 库</router-link>
+            </div>
+          </div>
+
           <!-- Overload Cooldown (529) Settings -->
           <div class="card">
             <div
@@ -9043,6 +9192,29 @@ const overloadCooldownForm = reactive({
   cooldown_minutes: 10,
 });
 
+const codexTicketLoading = ref(true);
+const codexTicketSaving = ref(false);
+const codexTicketForm = reactive({
+  enabled: false,
+  model: "gpt-6-astra",
+  ttl_seconds: 3600,
+  refresh_before_seconds: 600,
+  retry_interval_seconds: 5,
+  harvest_proxy_url: "",
+  cookie_host_whitelist_text: "",
+  cookie_harvest_proxy_urls_text: "",
+  override_turn_state: true,
+  cookie_ws_connections: 10,
+  cookie_ws_connection_ttl_seconds: 3600,
+  cookie_ws_host_cooldown_seconds: 14400,
+  relay_enabled: false,
+  relay_url: "",
+  relay_key: "",
+  relay_mode: "mint" as "mint" | "transparent",
+  relay_timeout_seconds: 75,
+  relay_allow_mint: true,
+});
+
 // Rate Limit Cooldown (429) 状态
 const rateLimit429CooldownLoading = ref(true);
 const rateLimit429CooldownSaving = ref(false);
@@ -11907,6 +12079,71 @@ async function loadOverloadCooldownSettings() {
   }
 }
 
+async function loadCodexTicketSettings() {
+  codexTicketLoading.value = true;
+  try {
+    const settings = await adminAPI.settings.getOpenAICodexTicketSettings();
+    Object.assign(codexTicketForm, settings, {
+      cookie_host_whitelist_text: (settings.cookie_host_whitelist || []).join("\n"),
+      cookie_harvest_proxy_urls_text: (settings.cookie_harvest_proxy_urls || []).join("\n"),
+    });
+  } catch (_error: unknown) {
+    // Keep deployment defaults when runtime settings cannot be loaded.
+  } finally {
+    codexTicketLoading.value = false;
+  }
+}
+
+async function saveCodexTicketSettings() {
+  if (codexTicketForm.ttl_seconds < 60 || codexTicketForm.ttl_seconds > 86400) {
+    appStore.showError(t("admin.settings.codexTicket.ttlRangeError"));
+    return;
+  }
+  if (codexTicketForm.refresh_before_seconds < 1 || codexTicketForm.refresh_before_seconds >= codexTicketForm.ttl_seconds) {
+    appStore.showError(t("admin.settings.codexTicket.refreshRangeError"));
+    return;
+  }
+  if (codexTicketForm.retry_interval_seconds < 1 || codexTicketForm.retry_interval_seconds > 300) {
+    appStore.showError(t("admin.settings.codexTicket.retryIntervalRangeError"));
+    return;
+  }
+  codexTicketSaving.value = true;
+  try {
+    const updated = await adminAPI.settings.updateOpenAICodexTicketSettings({
+      enabled: codexTicketForm.enabled,
+      model: codexTicketForm.model,
+      ttl_seconds: codexTicketForm.ttl_seconds,
+      refresh_before_seconds: codexTicketForm.refresh_before_seconds,
+      retry_interval_seconds: codexTicketForm.retry_interval_seconds,
+      harvest_proxy_url: codexTicketForm.harvest_proxy_url.trim(),
+      cookie_host_whitelist: codexTicketForm.cookie_host_whitelist_text
+        .split(/[\n,;]+/)
+        .map((host) => host.trim())
+        .filter(Boolean),
+      cookie_harvest_proxy_urls: codexTicketForm.cookie_harvest_proxy_urls_text
+        .split(/[\n,;]+/)
+        .map((proxy) => proxy.trim())
+        .filter(Boolean),
+      override_turn_state: codexTicketForm.override_turn_state,
+      cookie_ws_connections: codexTicketForm.cookie_ws_connections,
+      cookie_ws_connection_ttl_seconds: codexTicketForm.cookie_ws_connection_ttl_seconds,
+      cookie_ws_host_cooldown_seconds: codexTicketForm.cookie_ws_host_cooldown_seconds,
+      relay_enabled: codexTicketForm.relay_enabled,
+      relay_url: codexTicketForm.relay_url.trim(),
+      relay_key: codexTicketForm.relay_key,
+      relay_mode: codexTicketForm.relay_mode,
+      relay_timeout_seconds: codexTicketForm.relay_timeout_seconds,
+      relay_allow_mint: codexTicketForm.relay_allow_mint,
+    });
+    Object.assign(codexTicketForm, updated);
+    appStore.showSuccess(t("admin.settings.codexTicket.saved"));
+  } catch (error: unknown) {
+    appStore.showError(extractApiErrorMessage(error, t("admin.settings.codexTicket.saveFailed")));
+  } finally {
+    codexTicketSaving.value = false;
+  }
+}
+
 async function saveOverloadCooldownSettings() {
   overloadCooldownSaving.value = true;
   try {
@@ -12645,6 +12882,7 @@ onMounted(() => {
   loadUpstreamBillingProbeSettings();
   loadOllamaCloudUsageSettings();
   loadOverloadCooldownSettings();
+  loadCodexTicketSettings();
   loadRateLimit429CooldownSettings();
   loadPanelRateLimitSettings();
   loadStreamTimeoutSettings();

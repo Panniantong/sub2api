@@ -66,6 +66,10 @@ type Account struct {
 	GroupIDs      []int64
 	Groups        []*Group
 
+	// Request-local candidate Cookie used by Host validation only. Never
+	// persisted or exposed to scheduler snapshots as a confirmed binding.
+	openaiCookieValidationCookie string
+
 	// model_mapping 热路径缓存（非持久化字段）
 	modelMappingCache               map[string]string
 	modelMappingCacheReady          bool
@@ -1818,9 +1822,14 @@ func (a *Account) GetOpenAIDeviceID() string {
 }
 
 func (a *Account) GetOpenAISessionID() string {
-	if !a.IsOpenAIOAuth() {
+	if !a.IsOpenAIOAuthLike() {
 		return ""
 	}
+	if value := strings.TrimSpace(a.GetExtraString("session_id")); value != "" {
+		return value
+	}
+	// Keep compatibility with older records written before the account field
+	// was standardized to session_id.
 	return strings.TrimSpace(a.GetExtraString("openai_session_id"))
 }
 
@@ -2105,6 +2114,17 @@ func (a *Account) IsOpenAIPassthroughEnabled() bool {
 		return enabled
 	}
 	return false
+}
+
+// IsOpenAIExcelFullMode enables the opt-in ChatGPT Excel/Basispoints
+// compatibility transport for this account. It is deliberately separate from
+// passthrough so existing accounts keep the normal upstream URL and body.
+func (a *Account) IsOpenAIExcelFullMode() bool {
+	if a == nil || !a.IsOpenAI() || a.Extra == nil {
+		return false
+	}
+	enabled, _ := a.Extra["openai_excel_full_mode"].(bool)
+	return enabled && a.IsOpenAIOAuthLike()
 }
 
 // IsOpenAIResponsesWebSocketV2Enabled 返回 OpenAI 账号是否开启 Responses WebSocket v2。

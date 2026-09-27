@@ -1689,6 +1689,9 @@ func (s *OpenAIGatewayService) filterOpenAIAccountsBySchedulingThreshold(ctx con
 }
 
 func (s *OpenAIGatewayService) isOpenAIAccountBlockedBySchedulingThreshold(ctx context.Context, account *Account) bool {
+	if s.openAICookieSchedulingBlockReason(ctx, account) != "" {
+		return true
+	}
 	if s == nil || s.rateLimitService == nil || account == nil {
 		return false
 	}

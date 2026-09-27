@@ -86,6 +86,8 @@ const (
 	FieldUserAgent = "user_agent"
 	// FieldIPAddress holds the string denoting the ip_address field in the database.
 	FieldIPAddress = "ip_address"
+	// FieldRequestDebug holds the string denoting the request_debug field in the database.
+	FieldRequestDebug = "request_debug"
 	// FieldImageCount holds the string denoting the image_count field in the database.
 	FieldImageCount = "image_count"
 	// FieldImageSize holds the string denoting the image_size field in the database.
@@ -196,6 +198,7 @@ var Columns = []string{
 	FieldFirstTokenMs,
 	FieldUserAgent,
 	FieldIPAddress,
+	FieldRequestDebug,
 	FieldImageCount,
 	FieldImageSize,
 	FieldImageInputSize,

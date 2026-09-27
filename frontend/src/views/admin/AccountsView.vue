@@ -322,9 +322,26 @@
               :batched-usage-error="usageBatchErrorByAccountId[String(row.id)] ?? null"
               :batched-usage-loading="usageBatchLoadingByAccountId[String(row.id)] === true"
               :request-batched-usage="isDesktopViewport ? queueBatchedUsage : null"
+              :cookie-hosts="cookieHosts"
               @account-updated="handleAccountUpdated"
               @usage-loaded="handleAccountUsageLoaded(row.id, $event)"
             />
+          </template>
+          <template #cell-cookie_host="{ row }">
+            <div v-if="row.cookie_binding?.host || row.cookie_binding?.rotation_status === 'running' || row.cookie_binding?.rotation_status === 'waiting'" class="min-w-[10rem] max-w-[16rem] text-xs">
+              <div v-if="row.cookie_binding?.host" class="truncate font-mono text-gray-700 dark:text-gray-300" :title="row.cookie_binding.host">{{ row.cookie_binding.host }}</div>
+              <span v-if="row.cookie_binding?.host" :class="cookieHostRemaining(row) > 0 ? 'text-emerald-600' : 'text-red-600'">绑定剩余 {{ cookieHostRemaining(row) }}s</span>
+              <span v-else class="text-gray-500">未绑定 Cookie Host</span>
+              <button
+                v-if="row.cookie_binding.rotation_at || row.cookie_binding.rotation_status"
+                type="button"
+                class="block max-w-full truncate text-left text-gray-500 hover:text-primary-600 dark:hover:text-primary-400"
+                :class="row.cookie_binding.rotation_status === 'running' || cookieHostRotationDue(row) ? 'text-amber-600 dark:text-amber-400' : ''"
+                @click="openCookieRotationLogs(row)"
+              >{{ rotationLabel(row) }}</button>
+              <span v-if="row.cookie_binding.available_host_count !== undefined" class="block text-gray-500">可绑定 Host {{ row.cookie_binding.available_host_count }}</span>
+            </div>
+            <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
           </template>
           <template #cell-proxy="{ row }">
             <div class="flex flex-col gap-1">
@@ -335,6 +352,16 @@
                 </span>
               </div>
               <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
+              <select
+                class="input mt-1 min-w-[12rem] max-w-full py-1 text-xs"
+                :value="row.proxy_id ?? ''"
+                :disabled="switchingProxyAccountId === row.id"
+                aria-label="切换账号代理"
+                @change.stop="switchAccountProxy(row, $event)"
+              >
+                <option value="">直连（无代理）</option>
+                <option v-for="proxy in proxies" :key="proxy.id" :value="proxy.id">{{ proxy.name }} ({{ proxy.host }}:{{ proxy.port }})</option>
+              </select>
               <div v-if="row.proxy && row.proxy.expires_at" class="flex items-center gap-2 text-xs">
                 <span class="text-gray-600 dark:text-gray-300">{{ formatDateTime(row.proxy.expires_at) }}</span>
                 <span :class="proxyExpiryBadge(row.proxy)">{{ proxyExpiryText(row.proxy) }}</span>
@@ -454,9 +481,31 @@
     <EditAccountModal :show="showEdit" :account="edAcc" :proxies="proxies" :groups="groups" @close="showEdit = false" @updated="handleAccountUpdated" />
     <ReAuthAccountModal :show="showReAuth" :account="reAuthAcc" @close="closeReAuthModal" @reauthorized="handleAccountUpdated" />
     <AccountTestModal :show="showTest" :account="testingAcc" @close="closeTestModal" />
+    <AccountIntelligenceTestModal :show="showIntelligenceTest" :account="intelligenceAcc" @close="closeIntelligenceTestModal" />
     <AccountStatsModal :show="showStats" :account="statsAcc" @close="closeStatsModal" />
+    <Teleport to="body">
+      <div v-if="rotationLogAccount" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4" @click.self="closeCookieRotationLogs">
+        <section class="flex max-h-[80vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg bg-white shadow-xl dark:bg-dark-800">
+          <header class="flex items-center justify-between border-b border-gray-200 px-4 py-3 dark:border-dark-700">
+            <div>
+              <h2 class="font-semibold text-gray-900 dark:text-white">Cookie Host 轮换实时日志</h2>
+              <p class="mt-1 text-xs text-gray-500">{{ rotationLogAccount.name }} #{{ rotationLogAccount.id }} · 仅展示当前账号，最新 100 条</p>
+            </div>
+            <button type="button" class="text-gray-500 hover:text-gray-900 dark:hover:text-white" @click="closeCookieRotationLogs">关闭</button>
+          </header>
+          <div class="flex items-center justify-between border-b border-gray-100 px-4 py-2 text-xs dark:border-dark-700">
+            <span :class="rotationLogLoading ? 'text-amber-600' : 'text-emerald-600'">{{ rotationLogLoading ? '正在刷新…' : '实时连接中' }}</span>
+            <button type="button" class="text-primary-600 hover:underline" @click="loadCookieRotationLogs">立即刷新</button>
+          </div>
+          <div class="min-h-0 flex-1 overflow-y-auto bg-[#0b1220] px-4 py-3 font-mono text-xs leading-6 text-gray-200">
+            <div v-for="log in rotationLogs" :key="log.id" :class="rotationLogTone(log)">[{{ formatDateTime(log.created_at) }}] [{{ log.stage || log.binding_status || 'rotation' }}] {{ log.message }}<span v-if="log.host"> · {{ log.host }}</span></div>
+            <div v-if="!rotationLogs.length" class="text-gray-500">暂无该账号的轮换日志，等待下一次轮换尝试…</div>
+          </div>
+        </section>
+      </div>
+    </Teleport>
     <ScheduledTestsPanel :show="showSchedulePanel" :account-id="scheduleAcc?.id ?? null" :model-options="scheduleModelOptions" @close="closeSchedulePanel" />
-    <AccountActionMenu :show="menu.show" :account="menu.acc" :anchor-rect="menu.anchorRect" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @duplicate="handleDuplicateAccount" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @create-spark-shadow="handleCreateSparkShadow" />
+    <AccountActionMenu :show="menu.show" :account="menu.acc" :anchor-rect="menu.anchorRect" @close="menu.show = false" @test="handleTest" @intelligence-test="handleIntelligenceTest" @stats="handleViewStats" @schedule="handleSchedule" @duplicate="handleDuplicateAccount" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @create-spark-shadow="handleCreateSparkShadow" />
     <SyncFromCrsModal :show="showSync" @close="showSync = false" @synced="reload" />
     <ImportDataModal :show="showImportData" @close="showImportData = false" @imported="handleDataImported" />
     <BulkEditAccountModal
@@ -511,6 +560,7 @@ import AccountActionMenu from '@/components/admin/account/AccountActionMenu.vue'
 import ImportDataModal from '@/components/admin/account/ImportDataModal.vue'
 import ReAuthAccountModal from '@/components/admin/account/ReAuthAccountModal.vue'
 import AccountTestModal from '@/components/admin/account/AccountTestModal.vue'
+import AccountIntelligenceTestModal from '@/components/admin/account/AccountIntelligenceTestModal.vue'
 import AccountStatsModal from '@/components/admin/account/AccountStatsModal.vue'
 import ScheduledTestsPanel from '@/components/admin/account/ScheduledTestsPanel.vue'
 import type { SelectOption } from '@/components/common/Select.vue'
@@ -533,12 +583,14 @@ import { sanitizeUrl } from '@/utils/url'
 import { getFloatingPanelPosition } from '@/utils/floatingPanel'
 import { formatMultiplier } from '@/utils/formatters'
 import type { Account, AccountListItem, AccountPlatform, AccountSchedulerGroupScore, AccountType, AccountUsageInfo, Proxy as AccountProxy, AdminGroup, WindowStats, ClaudeModel, UpstreamBillingProbeSnapshot } from '@/types'
+import * as cookiesAPI from '@/api/admin/cookies'
 
 const { t } = useI18n()
 const appStore = useAppStore()
 const authStore = useAuthStore()
 
 const proxies = ref<AccountProxy[]>([])
+const cookieHosts = ref<string[]>([])
 const groups = ref<AdminGroup[]>([])
 const groupsByID = computed(() => new Map(groups.value.map(group => [group.id, group])))
 const accountGroupsForRow = (account: Pick<AccountListItem, 'group_ids'>): AdminGroup[] => {
@@ -600,6 +652,8 @@ const showDeleteDialog = ref(false)
 const showCreateShadowDialog = ref(false)
 const showReAuth = ref(false)
 const showTest = ref(false)
+const showIntelligenceTest = ref(false)
+const intelligenceAcc = ref<Account | null>(null)
 const showStats = ref(false)
 const showErrorPassthrough = ref(false)
 const showTLSFingerprintProfiles = ref(false)
@@ -619,10 +673,17 @@ const exportingData = ref(false)
 const probingUpstreamBilling = reactive(new Set<number>())
 const upstreamBillingProbeGloballyEnabled = ref<boolean | undefined>(undefined)
 const upstreamBillingNow = ref(Date.now())
+const cookieBindingNow = ref(Date.now())
+const rotationLogAccount = ref<AccountListItem | null>(null)
+const rotationLogs = ref<cookiesAPI.CookieLog[]>([])
+const rotationLogLoading = ref(false)
 const upstreamBillingRateETag = ref<string | null>(null)
 const upstreamBillingRateRefreshing = ref(false)
 let upstreamBillingRateAbortController: AbortController | null = null
 useIntervalFn(() => { upstreamBillingNow.value = Date.now() }, 60_000)
+useIntervalFn(() => { cookieBindingNow.value = Date.now() }, 1_000)
+const { pause: pauseCookieRotationLogPoll, resume: resumeCookieRotationLogPoll } = useIntervalFn(() => { void loadCookieRotationLogs() }, 1_000, { immediate: false })
+const switchingProxyAccountId = ref<number | null>(null)
 
 // Account tools dropdown
 const showAccountToolsDropdown = ref(false)
@@ -1795,6 +1856,7 @@ const allColumns = computed(() => {
   }
   c.push({ key: 'usage', label: t('admin.accounts.columns.usageWindows'), sortable: false })
   c.push(
+    { key: 'cookie_host', label: 'Cookie Host', sortable: false },
     { key: 'proxy', label: t('admin.accounts.columns.proxy'), sortable: false },
     { key: 'priority', label: t('admin.accounts.columns.priority'), sortable: true },
     { key: 'scheduler_score', label: t('admin.accounts.columns.schedulerScore'), sortable: false },
@@ -2252,6 +2314,71 @@ const handleAccountUpdated = (updatedAccount: Account) => {
   patchAccountInList(updatedAccount)
   enterAutoRefreshSilentWindow()
 }
+const cookieHostRemaining = (account: Pick<AccountListItem, 'cookie_binding'>): number => {
+  const expiresAt = account.cookie_binding?.binding_expires_at
+  if (!expiresAt) return 0
+  return Math.max(0, Math.floor((new Date(expiresAt).getTime() - cookieBindingNow.value) / 1000))
+}
+const rotationLabel = (account: Pick<AccountListItem, 'cookie_binding'>): string => {
+	if (account.cookie_binding?.rotation_status === 'running') return '正在轮换 · 查看实时日志'
+	if (account.cookie_binding?.rotation_status === 'waiting') return '轮换中 · 等待下次尝试 · 查看实时日志'
+	const value = account.cookie_binding?.rotation_at
+  if (!value) return ''
+  const seconds = Math.max(0, Math.floor((new Date(value).getTime() - cookieBindingNow.value) / 1000))
+  return seconds > 0 ? `${seconds}s 后开始轮换` : '正在轮换'
+}
+const cookieHostRotationDue = (account: Pick<AccountListItem, 'cookie_binding'>): boolean => {
+	const value = account.cookie_binding?.rotation_at
+	return Boolean(value && new Date(value).getTime() <= cookieBindingNow.value)
+}
+const rotationLogTone = (log: cookiesAPI.CookieLog): string => {
+	if ((log.stage || '').includes('failed') || log.stage === 'validation_rejected') return 'text-red-300'
+	if ((log.stage || '').includes('succeeded') || log.stage === 'host_bound') return 'text-emerald-300'
+	if (log.stage === 'rotation_waiting') return 'text-amber-300'
+	return 'text-sky-200'
+}
+const loadCookieRotationLogs = async () => {
+	if (!rotationLogAccount.value || rotationLogLoading.value) return
+	rotationLogLoading.value = true
+	try {
+		const result = await cookiesAPI.getValidationLogs({ account_id: rotationLogAccount.value.id, page: 1, page_size: 100 })
+		rotationLogs.value = (result.items || []).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()).slice(0, 100)
+	} catch (error) {
+		console.error('Failed to load cookie rotation logs:', error)
+	} finally {
+		rotationLogLoading.value = false
+	}
+}
+const openCookieRotationLogs = (account: AccountListItem) => {
+	rotationLogAccount.value = account
+	rotationLogs.value = []
+	void loadCookieRotationLogs()
+	resumeCookieRotationLogPoll()
+}
+const closeCookieRotationLogs = () => {
+	pauseCookieRotationLogPoll()
+	rotationLogAccount.value = null
+	rotationLogs.value = []
+}
+const switchAccountProxy = async (account: AccountListItem, event: Event) => {
+  const target = event.target as HTMLSelectElement
+  const raw = target.value.trim()
+  const proxyID = raw === '' ? 0 : Number(raw)
+  if (raw !== '' && (!Number.isInteger(proxyID) || proxyID < 1)) return
+  if ((account.proxy_id ?? 0) === proxyID) return
+  switchingProxyAccountId.value = account.id
+  try {
+    const updated = await adminAPI.accounts.update(account.id, { proxy_id: proxyID })
+    patchAccountInList(updated)
+    appStore.showSuccess('账号代理已切换')
+    enterAutoRefreshSilentWindow()
+  } catch (error) {
+    target.value = account.proxy_id == null ? '' : String(account.proxy_id)
+    appStore.showError(extractApiErrorMessage(error, '切换账号代理失败'))
+  } finally {
+    switchingProxyAccountId.value = null
+  }
+}
 const formatExportTimestamp = () => {
   const now = new Date()
   const pad2 = (value: number) => String(value).padStart(2, '0')
@@ -2316,6 +2443,13 @@ const handleTest = async (a: AccountListItem) => {
   testingAcc.value = account
   showTest.value = true
 }
+const handleIntelligenceTest = async (a: AccountListItem) => {
+  const account = await loadAccountDetails(a)
+  if (!account) return
+  intelligenceAcc.value = account
+  showIntelligenceTest.value = true
+}
+const closeIntelligenceTestModal = () => { showIntelligenceTest.value = false; intelligenceAcc.value = null }
 const handleViewStats = async (a: AccountListItem) => {
   const account = await loadAccountDetails(a)
   if (!account) return
@@ -2534,9 +2668,10 @@ onMounted(async () => {
 
   load()
   loadUpstreamBillingProbeGlobalState()
-  const [proxiesResult, groupsResult] = await Promise.allSettled([
+  const [proxiesResult, groupsResult, cookieLibraryResult] = await Promise.allSettled([
     adminAPI.proxies.getAll(),
-    adminAPI.groups.getAll()
+    adminAPI.groups.getAll(),
+    cookiesAPI.getLibrary()
   ])
   if (proxiesResult.status === 'fulfilled') {
     proxies.value = proxiesResult.value
@@ -2547,6 +2682,11 @@ onMounted(async () => {
     groups.value = groupsResult.value
   } else {
     console.error('Failed to load groups:', groupsResult.reason)
+  }
+  if (cookieLibraryResult.status === 'fulfilled') {
+    cookieHosts.value = (cookieLibraryResult.value || []).map(entry => entry.host).filter(Boolean)
+  } else {
+    console.error('Failed to load cookie library:', cookieLibraryResult.reason)
   }
   window.addEventListener('scroll', handleScroll, true)
   window.addEventListener('resize', handleViewportResize)

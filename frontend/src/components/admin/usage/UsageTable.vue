@@ -304,10 +304,109 @@
           <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
         </template>
 
+        <template #cell-request_state="{ row }">
+          <button
+            v-if="row.request_state"
+            type="button"
+            class="inline-flex items-center rounded border px-2 py-1 font-mono text-[10px] font-medium"
+            :class="stateBadgeClass(row.request_state)"
+            :title="`${t('admin.usage.requestState')} (${row.request_state.length})`"
+            @click="openStateDetails('request', row.request_state)"
+          >
+            {{ t('admin.usage.requestState') }} · {{ row.request_state.length }}
+          </button>
+          <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
+        </template>
+
+        <template #cell-response_state="{ row }">
+          <button
+            v-if="row.response_state"
+            type="button"
+            class="inline-flex items-center rounded border px-2 py-1 font-mono text-[10px] font-medium"
+            :class="stateBadgeClass(row.response_state)"
+            :title="`${t('admin.usage.responseState')} (${row.response_state.length})`"
+            @click="openStateDetails('response', row.response_state)"
+          >
+            {{ t('admin.usage.responseState') }} · {{ row.response_state.length }}
+          </button>
+          <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
+        </template>
+
+        <template #cell-request_cookie="{ row }">
+          <button
+            v-if="row.request_cookie"
+            type="button"
+            class="inline-flex items-center rounded border border-sky-200 bg-sky-50 px-2 py-1 text-[10px] font-medium text-sky-700 hover:bg-sky-100 dark:border-sky-500/40 dark:bg-sky-500/10 dark:text-sky-300"
+            @click="openCookieDetails(row.request_cookie)"
+          >{{ cookieHost(row.request_cookie) || t('admin.usage.requestCookie') }} · {{ row.request_cookie.length }}</button>
+          <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
+        </template>
+
+        <template #cell-response_cookie="{ row }">
+          <button
+            v-if="row.response_cookie"
+            type="button"
+            class="inline-flex items-center rounded border border-sky-200 bg-sky-50 px-2 py-1 text-[10px] font-medium text-sky-700 hover:bg-sky-100 dark:border-sky-500/40 dark:bg-sky-500/10 dark:text-sky-300"
+            @click="openCookieDetails(row.response_cookie, 'responseCookie')"
+          >{{ cookieHost(row.response_cookie) || t('admin.usage.responseCookie') }} · {{ row.response_cookie.length }}</button>
+          <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
+        </template>
+
+        <template #cell-session_id="{ row }">
+          <button
+            v-if="row.session_id"
+            type="button"
+            class="inline-flex items-center rounded border border-sky-200 bg-sky-50 px-2 py-1 text-[10px] font-medium text-sky-700 hover:bg-sky-100 dark:border-sky-500/40 dark:bg-sky-500/10 dark:text-sky-300"
+            @click="openStateDetails('session', row.session_id)"
+          >{{ t('admin.usage.sessionId') }} · {{ row.session_id.length }}</button>
+          <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
+        </template>
+
+        <template #cell-request_headers="{ row }">
+          <button
+            v-if="row.request_headers"
+            type="button"
+            class="inline-flex items-center rounded border border-violet-200 bg-violet-50 px-2 py-1 text-[10px] font-medium text-violet-700 hover:bg-violet-100 dark:border-violet-500/40 dark:bg-violet-500/10 dark:text-violet-300"
+            @click="openStateDetails('headers', row.request_headers)"
+          >{{ t('admin.usage.requestHeaders') }}</button>
+          <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
+        </template>
+
+        <template #cell-response_headers="{ row }">
+          <button
+            v-if="row.response_headers"
+            type="button"
+            class="inline-flex items-center rounded border border-violet-200 bg-violet-50 px-2 py-1 text-[10px] font-medium text-violet-700 hover:bg-violet-100 dark:border-violet-500/40 dark:bg-violet-500/10 dark:text-violet-300"
+            @click="openStateDetails('responseHeaders', row.response_headers)"
+          >{{ t('admin.usage.responseHeaders') }}</button>
+          <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
+        </template>
+
         <template #empty><EmptyState :message="t('usage.noRecords')" /></template>
       </DataTable>
     </div>
   </div>
+
+  <BaseDialog
+    :show="stateDetails !== null"
+    :title="stateDetails ? detailTitle(stateDetails.kind) : t('admin.usage.stateDetails')"
+    width="wide"
+    @close="stateDetails = null"
+  >
+    <div v-if="stateDetails" class="space-y-3">
+      <div class="flex flex-wrap items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
+        <span class="font-medium">{{ detailTitle(stateDetails.kind) }}</span>
+        <span v-if="stateDetails.kind === 'request' || stateDetails.kind === 'response'" class="inline-flex items-center rounded border px-2 py-0.5 font-mono text-xs" :class="stateBadgeClass(stateDetails.value)">
+          {{ stateDetails.value.length }}
+        </span>
+      </div>
+      <pre class="max-h-[60vh] overflow-auto whitespace-pre-wrap break-all rounded border border-gray-200 bg-gray-50 p-3 font-mono text-xs leading-5 text-gray-800 dark:border-dark-600 dark:bg-dark-900 dark:text-gray-200">{{ stateDetails.kind === 'headers' || stateDetails.kind === 'responseHeaders' ? formatRequestHeaders(stateDetails.value) : stateDetails.value }}</pre>
+      <template v-if="stateDetails.payload">
+        <div class="text-sm font-medium text-gray-600 dark:text-gray-300">__oailb payload</div>
+        <pre class="max-h-[40vh] overflow-auto whitespace-pre-wrap break-all rounded border border-gray-200 bg-gray-50 p-3 font-mono text-xs leading-5 text-gray-800 dark:border-dark-600 dark:bg-dark-900 dark:text-gray-200">{{ JSON.stringify(stateDetails.payload, null, 2) }}</pre>
+      </template>
+    </div>
+  </BaseDialog>
 
   <!-- Token Tooltip Portal -->
   <Teleport to="body">
@@ -579,6 +678,7 @@ function accountBilled(row: { total_cost?: number | null; account_stats_cost?: n
 
 
 import DataTable from '@/components/common/DataTable.vue'
+import BaseDialog from '@/components/common/BaseDialog.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import IpGeoCell from '@/components/common/IpGeoCell.vue'
 import Icon from '@/components/icons/Icon.vue'
@@ -619,6 +719,61 @@ const copiedRequestId = ref<string | null>(null)
 const showAccountBilling = props.showAccountBilling
 const showUpstreamEndpoint = props.showUpstreamEndpoint
 const ipGeoBatchLoading = ref(false)
+
+type StateDetailKind = 'request' | 'response' | 'cookie' | 'responseCookie' | 'session' | 'headers' | 'responseHeaders'
+const stateDetails = ref<{ kind: StateDetailKind; value: string; payload?: Record<string, unknown> | null } | null>(null)
+
+const stateBadgeClass = (state: string): string => state.length === 780
+  ? 'border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-500/40 dark:bg-emerald-500/10 dark:text-emerald-300'
+  : 'border-red-300 bg-red-50 text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300'
+
+const detailTitle = (kind: StateDetailKind): string => {
+  if (kind === 'request') return t('admin.usage.requestState')
+  if (kind === 'response') return t('admin.usage.responseState')
+  if (kind === 'cookie') return t('admin.usage.requestCookie')
+  if (kind === 'responseCookie') return t('admin.usage.responseCookie')
+  if (kind === 'headers') return t('admin.usage.requestHeaders')
+  if (kind === 'responseHeaders') return t('admin.usage.responseHeaders')
+  return t('admin.usage.sessionId')
+}
+
+const formatRequestHeaders = (value: string): string => {
+  try {
+    return JSON.stringify(JSON.parse(value), null, 2)
+  } catch {
+    return value
+  }
+}
+
+const cookiePayload = (value: string): Record<string, unknown> | null => {
+  const raw = value.split(/[;\r\n]+/).map((part) => part.trim()).find((part) => part.toLowerCase().startsWith('__oailb='))
+  const token = raw?.slice(raw.indexOf('=') + 1).trim() || ''
+  const encoded = token.split('.')[1]
+  if (!encoded) return null
+  try {
+    const normalized = encoded.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - encoded.length % 4) % 4)
+    const binary = atob(normalized)
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+    const parsed = JSON.parse(new TextDecoder().decode(bytes))
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null
+  } catch {
+    return null
+  }
+}
+
+const cookieHost = (value: string): string => {
+  const host = cookiePayload(value)?.host
+  return typeof host === 'string' ? host : ''
+}
+
+const openCookieDetails = (value: string, kind: 'cookie' | 'responseCookie' = 'cookie') => {
+  const payload = cookiePayload(value)
+  stateDetails.value = { kind, value, payload }
+}
+
+const openStateDetails = (kind: StateDetailKind, value: string) => {
+  stateDetails.value = { kind, value }
+}
 
 const showIpGeoToolbar = computed(() => props.columns.some((col) => col.key === 'ip_address'))
 

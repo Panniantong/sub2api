@@ -115,9 +115,14 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	}
 
 	wsDecision := s.getOpenAIWSProtocolResolver().Resolve(account)
-	forceHTTPBridge := account.Platform == PlatformGrok ||
+	forceHTTPBridge := account.Platform == PlatformGrok || wsDecision.Reason == "cookie_ws_disabled" ||
 		(s.pluginManager != nil && s.pluginManager.ShouldRouteOpenAIOAuth(account))
 	modeRouterV2Enabled := s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.ModeRouterV2Enabled
+	// A bound Cookie always uses its fixed account pool, including when the
+	// account previously selected dedicated or passthrough transport.
+	if openAICodexCookieHostFromAccount(account) != "" {
+		modeRouterV2Enabled = false
+	}
 	ingressMode := OpenAIWSIngressModeCtxPool
 	if modeRouterV2Enabled && !forceHTTPBridge {
 		ingressMode = account.ResolveOpenAIResponsesWebSocketV2Mode(s.cfg.Gateway.OpenAIWS.IngressModeDefault)
@@ -1023,7 +1028,6 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			if normalized, changed := normalizeCompletedImageGenerationStatus(upstreamMessage); changed {
 				upstreamMessage = normalized
 			}
-
 			eventType, eventResponseID, _ := parseOpenAIWSEventEnvelope(upstreamMessage)
 			responseModelObserver.ObserveOpenAI(upstreamMessage, eventType)
 			if responseID == "" && eventResponseID != "" {

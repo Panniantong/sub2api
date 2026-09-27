@@ -209,8 +209,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		HeadersFactory: func(factoryCtx context.Context, headers http.Header) (http.Header, error) {
 			return s.refreshOpenAIAgentIdentityHeaders(factoryCtx, account, headers)
 		},
-		PreferredConnID: preferredConnID,
-		ForceNewConn:    forceNewConn,
+		PreferredConnID:    preferredConnID,
+		ForceNewConn:       forceNewConn,
+		ForcePreferredConn: openAICodexCookieHostFromAccount(account) != "" && previousResponseID != "",
 		ProxyURL: func() string {
 			if account.ProxyID != nil && account.Proxy != nil {
 				return account.Proxy.URL()
@@ -476,6 +477,15 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		if clientDisconnected {
 			return
 		}
+		// A WS text frame may contain pretty-printed JSON (notably error
+		// events). SSE data must occupy one line, otherwise the client only
+		// receives the opening brace and cannot parse the terminal/error event.
+		if bytes.IndexAny(message, "\r\n") >= 0 {
+			var compact bytes.Buffer
+			if err := json.Compact(&compact, message); err == nil {
+				message = compact.Bytes()
+			}
+		}
 		frame := make([]byte, 0, len(message)+8)
 		frame = append(frame, "data: "...)
 		frame = append(frame, message...)
@@ -512,6 +522,18 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 				clientDisconnected,
 			)
 		}
+	}
+	emitStreamFailure := func(message string) {
+		if !reqStream || !wroteDownstream || clientDisconnected {
+			return
+		}
+		payload, _ := json.Marshal(map[string]any{
+			"type": "error",
+			"error": map[string]string{
+				"type": "server_error", "code": "upstream_stream_incomplete", "message": message,
+			},
+		})
+		emitStreamMessage(payload, true)
 	}
 
 	// Keep per-read timeouts unchanged for connected clients. Once a client
@@ -572,6 +594,10 @@ readLoop:
 			if !wroteDownstream {
 				return nil, wrapOpenAIWSFallback("invalid_event_json", errors.New("upstream websocket returned malformed Responses event JSON"))
 			}
+			// Once downstream output has been written, do not append a synthetic
+			// SSE error frame. The caller receives the terminal Go error and the
+			// already-emitted stream remains valid up to the malformed upstream
+			// event.
 			return nil, errors.New("upstream websocket returned malformed Responses event JSON after downstream output")
 		}
 		if readErr != nil {
@@ -603,12 +629,12 @@ readLoop:
 				return nil, wrapOpenAIWSFallback(classifyOpenAIWSReadFallbackReason(readErr), readErr)
 			}
 			setOpsUpstreamError(c, 0, sanitizeUpstreamErrorMessage(readErr.Error()), "")
+			emitStreamFailure("Upstream WebSocket closed before the response completed; please retry the request.")
 			return nil, fmt.Errorf("openai ws read event: %w", readErr)
 		}
 		if normalized, changed := normalizeCompletedImageGenerationStatus(message); changed {
 			message = normalized
 		}
-
 		eventType, eventResponseID, responseField := parseOpenAIWSEventEnvelope(message)
 		if eventType == "" {
 			continue
@@ -620,7 +646,9 @@ readLoop:
 		}
 		lastEventType = eventType
 
-		if responseID == "" && eventResponseID != "" {
+		if id := strings.TrimSpace(responseField.Get("id").String()); id != "" {
+			responseID = id
+		} else if responseID == "" && eventResponseID != "" {
 			responseID = eventResponseID
 		}
 
@@ -739,6 +767,17 @@ readLoop:
 			return nil, fmt.Errorf("openai ws error event: %s", errMsg)
 		}
 
+		if isTerminalEvent && responseID != "" && stateStore != nil {
+			// Publish both ownership and connection affinity BEFORE the terminal
+			// frame. Clients may submit their next turn as soon as it is flushed.
+			// The HTTP binding helper also survives cancellation after completion.
+			stateStore.BindResponseConn(responseID, lease.ConnID(), s.openAIWSResponseStickyTTL())
+			if storeDisabled && sessionHash != "" {
+				stateStore.BindSessionConn(groupID, sessionHash, lease.ConnID(), s.openAIWSSessionStickyTTL())
+			}
+			s.bindHTTPResponseAccount(ctx, c, account, responseID)
+		}
+
 		if reqStream {
 			// 在首个 token 前先缓冲事件（如 response.created），
 			// 以便上游早期断连时仍可安全回退到 HTTP，不给下游发送半截流。
@@ -819,14 +858,6 @@ readLoop:
 		flushStreamWriter(true)
 	}
 
-	if responseID != "" && stateStore != nil {
-		ttl := s.openAIWSResponseStickyTTL()
-		logOpenAIWSBindResponseAccountWarn(groupID, account.ID, responseID, stateStore.BindResponseAccount(ctx, groupID, responseID, account.ID, ttl))
-		stateStore.BindResponseConn(responseID, lease.ConnID(), ttl)
-	}
-	if stateStore != nil && storeDisabled && sessionHash != "" {
-		stateStore.BindSessionConn(groupID, sessionHash, lease.ConnID(), s.openAIWSSessionStickyTTL())
-	}
 	firstTokenMsValue := -1
 	if firstTokenMs != nil {
 		firstTokenMsValue = *firstTokenMs

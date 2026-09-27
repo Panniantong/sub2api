@@ -3131,6 +3131,27 @@ func TestOpenAIBuildUpstreamRequestOpenAIPassthroughPreservesCompactPath(t *test
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(req.Context()))
 }
 
+func TestOpenAIExcelFullModeUsesBasispointsWhenHTTPIsSelected(t *testing.T) {
+	account := &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Extra:    map[string]any{"openai_excel_full_mode": true},
+	}
+	require.True(t, account.IsOpenAIExcelFullMode())
+	require.True(t, shouldUseOpenAIExcelFullMode(account, OpenAIUpstreamTransportHTTPSSE))
+	require.False(t, shouldUseOpenAIExcelFullMode(account, OpenAIUpstreamTransportResponsesWebsocketV2), "WS must have higher priority than Excel mode")
+
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader([]byte(`{"model":"gpt-5.5","input":[]}`)))
+
+	svc := &OpenAIGatewayService{}
+	req, err := svc.buildUpstreamRequestOpenAIPassthrough(c.Request.Context(), c, account, []byte(`{"model":"gpt-5.5","input":[]}`), "token")
+	require.NoError(t, err)
+	require.Equal(t, openAIExcelBasispointsURL, req.URL.String())
+}
+
 func TestOpenAIBuildUpstreamRequestOpenAIPassthroughPreservesExplicitAPIKeyBetaHeader(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()

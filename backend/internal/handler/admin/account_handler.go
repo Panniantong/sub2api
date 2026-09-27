@@ -2,6 +2,7 @@
 package admin
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -11,6 +12,7 @@ import (
 	"log"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,6 +33,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -65,7 +68,18 @@ type AccountHandler struct {
 	grokImportProber        grokImportProber
 	upstreamBillingProbe    *service.UpstreamBillingProbeService
 	ollamaCloudUsage        *service.OllamaCloudUsageService
+	settingService          *service.SettingService
+	openaiGatewayService    *service.OpenAIGatewayService
 	cfg                     *config.Config
+}
+
+// SetSettingService enables account responses to resolve the current bound
+// Cookie from the host-keyed Cookie library.
+func (h *AccountHandler) SetSettingService(settings *service.SettingService) {
+	if h != nil {
+		h.settingService = settings
+		h.startIntelligenceMonitor()
+	}
 }
 
 // SetUpstreamBillingProbeService attaches the optional remote billing probe service.
@@ -337,6 +351,7 @@ const accountListGroupUngroupedQueryValue = "ungrouped"
 
 func (h *AccountHandler) accountResponseFromService(account *service.Account) *dto.Account {
 	out := dto.AccountFromService(account)
+	h.enrichCodexTicketStatus(account, out)
 	if h != nil && h.ollamaCloudUsage != nil && out != nil {
 		h.ollamaCloudUsage.EnrichState(out.OllamaCloudUsage)
 	}
@@ -345,13 +360,36 @@ func (h *AccountHandler) accountResponseFromService(account *service.Account) *d
 
 func (h *AccountHandler) accountListResponseFromService(account *service.Account) *dto.Account {
 	out := dto.AccountFromServiceShallow(account)
+	h.enrichCodexTicketStatus(account, out)
 	if out != nil && account != nil {
+		out.CodexTurnTicketHistory = nil
 		out.Proxy = dto.ProxyFromService(account.Proxy)
 	}
 	if h != nil && h.ollamaCloudUsage != nil && out != nil {
 		h.ollamaCloudUsage.EnrichState(out.OllamaCloudUsage)
 	}
 	return out
+}
+
+func (h *AccountHandler) enrichCodexTicketStatus(account *service.Account, out *dto.Account) {
+	if h == nil || h.cfg == nil || out == nil {
+		return
+	}
+	out.CodexTurnTickets = service.OpenAICodexTicketStatuses(account, h.cfg.Gateway.OpenAICodexTicket, time.Now())
+	if h.settingService != nil {
+		out.CookieBinding = h.settingService.OpenAICookieBinding(context.Background(), account)
+	}
+	if account != nil && account.Platform == service.PlatformOpenAI && h.openaiGatewayService != nil {
+		out.WSConnections = h.openaiGatewayService.OpenAIWSAccountStatus(account.ID)
+	}
+	if h.settingService != nil && len(out.CodexTurnTickets) > 0 && out.CodexTurnTickets[0].BoundCookieHost != "" {
+		if entry, err := h.settingService.LookupOpenAICodexCookie(context.Background(), out.CodexTurnTickets[0].BoundCookieHost); err == nil && entry != nil {
+			out.CodexTurnTickets[0].Cookie = entry.Cookie
+			out.CodexTurnTickets[0].CookieHost = entry.Host
+			out.CodexTurnTickets[0].CookiePayload = entry.Payload
+		}
+	}
+	out.CodexTurnTicketHistory = service.OpenAICodexTicketHistories(account)
 }
 
 func (h *AccountHandler) isSimpleMode() bool {
@@ -1012,9 +1050,23 @@ func (h *AccountHandler) Create(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-
 	// 确定是否跳过混合渠道检查
 	skipCheck := req.ConfirmMixedChannelRisk != nil && *req.ConfirmMixedChannelRisk
+	if req.Extra != nil && h.settingService != nil {
+		if host, ok := req.Extra["codex_cookie_host"].(string); ok && strings.TrimSpace(host) != "" {
+			host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+			entry, err := h.settingService.LookupOpenAICodexCookie(c.Request.Context(), host)
+			if err != nil {
+				response.ErrorFrom(c, err)
+				return
+			}
+			if entry == nil {
+				response.BadRequest(c, "所选 Host 的 Cookie 已过期或不存在，请刷新后重新选择")
+				return
+			}
+			req.Extra["codex_cookie_host"] = host
+		}
+	}
 
 	// 捕获闭包内创建的账号引用，用于创建成功后触发异步探测。
 	// 幂等重放时闭包不会执行 → createdAccount 为 nil → 不重复调度。
@@ -1153,6 +1205,61 @@ func (h *AccountHandler) Update(c *gin.Context) {
 	// 确定是否跳过混合渠道检查
 	skipCheck := req.ConfirmMixedChannelRisk != nil && *req.ConfirmMixedChannelRisk
 
+	// Unbinding a Cookie Host starts the account's four-hour host cooldown.
+	// Keep the old host visible in runtime status so it remains selectable with
+	// an explicit cooldown label in the account list.
+	var unboundCookieHost string
+	var unboundCookieHostCooldownSeconds int
+	cookieWSAlreadyScheduled := false
+	if req.Extra != nil && h.settingService != nil {
+		if previous, previousErr := h.adminService.GetAccount(c.Request.Context(), accountID); previousErr == nil && previous != nil {
+			previousHost := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(previous.GetExtraString("codex_cookie_host")), "."))
+			nextHost, _ := req.Extra["codex_cookie_host"].(string)
+			if previousHost != "" && strings.TrimSpace(nextHost) == "" {
+				cooldownSeconds := 4 * 60 * 60
+				if settings, settingsErr := h.settingService.GetOpenAICookieSettings(c.Request.Context()); settingsErr == nil && settings.WSHostCooldownSeconds > 0 {
+					cooldownSeconds = settings.WSHostCooldownSeconds
+				}
+				unboundCookieHost = previousHost
+				unboundCookieHostCooldownSeconds = cooldownSeconds
+			}
+		}
+	}
+
+	if req.Extra != nil && h.settingService != nil {
+		if host, ok := req.Extra["codex_cookie_host"].(string); ok && strings.TrimSpace(host) != "" {
+			host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+			entry, lookupErr := h.settingService.LookupOpenAICodexCookie(c.Request.Context(), host)
+			if lookupErr != nil {
+				response.ErrorFrom(c, lookupErr)
+				return
+			}
+			if entry == nil {
+				response.BadRequest(c, "所选 Host 的 Cookie 已过期或不存在，请刷新后重新选择")
+				return
+			}
+			if h.openaiGatewayService != nil {
+				if current, currentErr := h.adminService.GetAccount(c.Request.Context(), accountID); currentErr == nil && current != nil &&
+					strings.ToLower(strings.TrimSuffix(strings.TrimSpace(current.GetExtraString("codex_cookie_host")), ".")) != host {
+					result, validationErr := h.openaiGatewayService.ValidateAndBindOpenAICookieHost(c.Request.Context(), current, host)
+					if validationErr != nil {
+						response.BadRequest(c, validationErr.Error())
+						return
+					}
+					if result != "yes" && result != "disabled" {
+						response.BadRequest(c, "Host 验证未通过，未绑定账号；请查看自动验证日志或选择其他 Host")
+						return
+					}
+					if result == "disabled" {
+						h.openaiGatewayService.LogOpenAICookieHostBinding(c.Request.Context(), current, host, "bound_without_validation", "自动验证未启用，Host 已按手动选择绑定并准备建立 WS", true)
+					} else if result == "yes" {
+						cookieWSAlreadyScheduled = true
+					}
+				}
+			}
+			req.Extra["codex_cookie_host"] = host
+		}
+	}
 	account, err := h.adminService.UpdateAccount(c.Request.Context(), accountID, &service.UpdateAccountInput{
 		Name:                  req.Name,
 		Notes:                 req.Notes,
@@ -1190,8 +1297,20 @@ func (h *AccountHandler) Update(c *gin.Context) {
 
 	// OpenAI APIKey: credentials 修改后重新探测上游能力（base_url/api_key 可能变更）。
 	// 异步执行，探测失败不影响账号更新响应。
+	if unboundCookieHost != "" && h.openaiGatewayService != nil {
+		if cooldownErr := h.openaiGatewayService.MarkOpenAICookieHostCooldown(c.Request.Context(), account, unboundCookieHost, unboundCookieHostCooldownSeconds); cooldownErr != nil {
+			slog.Warn("cookie_host_cooldown_persist_failed", "account_id", account.ID, "host", unboundCookieHost, "error", cooldownErr)
+		} else {
+			h.openaiGatewayService.LogOpenAICookieHostBinding(c.Request.Context(), account, unboundCookieHost, "cooldown", "Host 已解绑并进入账号级冷静期", false)
+		}
+	}
 	if len(req.Credentials) > 0 {
 		h.scheduleOpenAIResponsesProbe(account)
+	}
+	if req.Extra != nil && h.openaiGatewayService != nil && !cookieWSAlreadyScheduled {
+		if err := h.openaiGatewayService.ScheduleCookieWSBinding(c.Request.Context(), account); err != nil {
+			slog.Warn("cookie_ws_binding_start_failed", "account_id", account.ID, "error", err)
+		}
 	}
 
 	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
@@ -1251,6 +1370,111 @@ type TestAccountRequest struct {
 	AudioDataURL string `json:"audio_data_url"`
 }
 
+// IntelligenceTestRequest selects one of the fixed administrator intelligence
+// probes. It is deliberately separate from the general account test payload.
+type IntelligenceTestRequest struct {
+	Case    string `json:"case"`
+	Prompt  string `json:"prompt"`
+	ModelID string `json:"model_id"`
+}
+
+const intelligenceTestResultsSettingKey = "openai_intelligence_test_results"
+
+type intelligenceTestResult struct {
+	ID          string              `json:"id"`
+	AccountID   int64               `json:"account_id"`
+	AccountName string              `json:"account_name"`
+	Case        string              `json:"case"`
+	Title       string              `json:"title,omitempty"`
+	Prompt      string              `json:"prompt"`
+	ModelID     string              `json:"model_id"`
+	Status      string              `json:"status"`
+	CookieHost  string              `json:"cookie_host,omitempty"`
+	Output      string              `json:"output,omitempty"`
+	HTML        string              `json:"html,omitempty"`
+	Error       string              `json:"error,omitempty"`
+	StartedAt   string              `json:"started_at"`
+	FinishedAt  string              `json:"finished_at,omitempty"`
+	Events      []service.TestEvent `json:"events,omitempty"`
+}
+
+var intelligenceTestResultsMu sync.Mutex
+
+func (h *AccountHandler) loadIntelligenceTestResults(ctx context.Context) []intelligenceTestResult {
+	if h == nil || h.settingService == nil {
+		return []intelligenceTestResult{}
+	}
+	raw, err := h.settingService.GetValue(ctx, intelligenceTestResultsSettingKey)
+	if err != nil || strings.TrimSpace(raw) == "" {
+		return []intelligenceTestResult{}
+	}
+	var results []intelligenceTestResult
+	if json.Unmarshal([]byte(raw), &results) != nil {
+		return []intelligenceTestResult{}
+	}
+	return results
+}
+
+func (h *AccountHandler) saveIntelligenceTestResults(ctx context.Context, results []intelligenceTestResult) {
+	if h == nil || h.settingService == nil {
+		return
+	}
+	if len(results) > 300 {
+		results = results[:300]
+	}
+	raw, err := json.Marshal(results)
+	if err == nil {
+		_ = h.settingService.Set(ctx, intelligenceTestResultsSettingKey, string(raw))
+	}
+}
+
+func (h *AccountHandler) updateIntelligenceTestResult(ctx context.Context, result intelligenceTestResult) {
+	intelligenceTestResultsMu.Lock()
+	defer intelligenceTestResultsMu.Unlock()
+	results := h.loadIntelligenceTestResults(ctx)
+	for i := range results {
+		if results[i].ID == result.ID {
+			results[i] = result
+			h.saveIntelligenceTestResults(ctx, results)
+			return
+		}
+	}
+	h.saveIntelligenceTestResults(ctx, append([]intelligenceTestResult{result}, results...))
+}
+
+func parseIntelligenceTestResult(body string, result *intelligenceTestResult) {
+	for scanner := bufio.NewScanner(strings.NewReader(body)); scanner.Scan(); {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		var event service.TestEvent
+		if json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:"))), &event) != nil {
+			continue
+		}
+		result.Events = append(result.Events, event)
+		if event.CookieHost != "" {
+			result.CookieHost = event.CookieHost
+		}
+		if event.Type == "content" {
+			result.Output += event.Text
+		}
+		if event.Type == "html" {
+			result.HTML = event.Text
+		}
+		if event.Type == "error" {
+			result.Error = event.Error
+			result.Status = "error"
+		}
+		if event.Type == "test_complete" && event.Success {
+			result.Status = "success"
+		}
+	}
+	if result.HTML == "" && result.Case == service.IntelligenceTestHTML {
+		result.HTML = service.ExtractIntelligenceHTML(result.Output)
+	}
+}
+
 type SyncFromCRSRequest struct {
 	BaseURL            string   `json:"base_url" binding:"required"`
 	Username           string   `json:"username" binding:"required"`
@@ -1294,6 +1518,87 @@ func (h *AccountHandler) Test(c *gin.Context) {
 			_ = c.Error(err)
 		}
 	}
+}
+
+// IntelligenceTest starts an asynchronous intelligence test. The response is
+// persisted by the server so the UI can close/reopen and query the result.
+// POST /api/v1/admin/accounts/:id/intelligence-test
+func (h *AccountHandler) IntelligenceTest(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+	var req IntelligenceTestRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if h.accountTestService == nil || h.settingService == nil {
+		response.Error(c, http.StatusServiceUnavailable, "Account test service unavailable")
+		return
+	}
+	account, err := h.adminService.GetAccount(c.Request.Context(), accountID)
+	if err != nil || account == nil {
+		response.BadRequest(c, "Account not found")
+		return
+	}
+	modelID := strings.TrimSpace(req.ModelID)
+	if modelID == "" {
+		modelID = "gpt-6-astra"
+	}
+	result := intelligenceTestResult{
+		ID: uuid.NewString(), AccountID: accountID, AccountName: account.Name,
+		Case: strings.TrimSpace(req.Case), Prompt: req.Prompt, ModelID: modelID,
+		Status: "running", CookieHost: account.GetExtraString("codex_cookie_host"),
+		StartedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if result.Case == "" {
+		result.Case = service.IntelligenceTestHostValidate
+	}
+	h.updateIntelligenceTestResult(c.Request.Context(), result)
+	go h.runIntelligenceTest(result)
+	c.JSON(http.StatusAccepted, result)
+}
+
+// GetIntelligenceTestResults returns the latest persisted tests for one account.
+// GET /api/v1/admin/accounts/:id/intelligence-test/results
+func (h *AccountHandler) GetIntelligenceTestResults(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+	intelligenceTestResultsMu.Lock()
+	results := h.loadIntelligenceTestResults(c.Request.Context())
+	intelligenceTestResultsMu.Unlock()
+	filtered := make([]intelligenceTestResult, 0)
+	for _, result := range results {
+		if result.AccountID == accountID {
+			filtered = append(filtered, result)
+		}
+	}
+	c.JSON(http.StatusOK, filtered)
+}
+
+func (h *AccountHandler) runIntelligenceTest(result intelligenceTestResult) {
+	recorder := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(recorder)
+	ginCtx.Request = httptest.NewRequest(http.MethodPost, "/admin/accounts/intelligence-test", nil).WithContext(context.Background())
+	err := h.accountTestService.IntelligenceTestAccount(ginCtx, result.AccountID, result.Case, result.Prompt, result.ModelID)
+	parseIntelligenceTestResult(recorder.Body.String(), &result)
+	if err != nil && result.Error == "" {
+		result.Error = err.Error()
+	}
+	if result.Status == "running" {
+		if result.Error != "" {
+			result.Status = "error"
+		} else {
+			result.Status = "success"
+		}
+	}
+	result.FinishedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	h.updateIntelligenceTestResult(context.Background(), result)
 }
 
 // RecoverState handles unified recovery of recoverable account runtime state.

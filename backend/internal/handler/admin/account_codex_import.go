@@ -890,7 +890,11 @@ func buildCodexImportIdentityKeys(accountID, userID, email, accessToken, refresh
 	accessToken = strings.TrimSpace(accessToken)
 	refreshToken = strings.TrimSpace(refreshToken)
 	if refreshToken == "" && accessToken != "" {
-		return []string{"access:" + codexTokenFingerprint(accessToken)}
+		keys := []string{"access:" + codexTokenFingerprint(accessToken)}
+		if normalizedEmail := strings.ToLower(strings.TrimSpace(email)); normalizedEmail != "" {
+			keys = append(keys, "email:"+normalizedEmail)
+		}
+		return keys
 	}
 	return buildCodexStoredIdentityKeys(accountID, userID, email, accessToken)
 }
@@ -918,10 +922,11 @@ func buildCodexStoredIdentityKeys(accountID, userID, email, accessToken string) 
 	if userID != "" {
 		keys = append(keys, "user:"+userID)
 	}
-	if accountID == "" && userID == "" {
-		if email = strings.ToLower(strings.TrimSpace(email)); email != "" {
-			keys = append(keys, "email:"+email)
-		}
+	if email = strings.ToLower(strings.TrimSpace(email)); email != "" {
+		// Email is a stable, lower-priority account identity. Keep it after
+		// user/access keys so strong identifiers still win, while re-imports
+		// with rotated account IDs can retain the existing account record.
+		keys = append(keys, "email:"+email)
 	}
 	if accessToken != "" {
 		keys = append(keys, "access:"+codexTokenFingerprint(accessToken))

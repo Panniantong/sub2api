@@ -1779,6 +1779,11 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	if req.RequirePrivacySet && !account.IsPrivacySet() {
 		return false, "privacy_not_set"
 	}
+	if s != nil && s.service != nil {
+		if reason := s.service.openAICookieSchedulingBlockReason(ctx, account); reason != "" {
+			return false, reason
+		}
+	}
 	if s != nil && s.service != nil && s.service.isOpenAIAccountRequestRuntimeBlocked(account, req.RequestedModel) {
 		return false, "runtime_blocked"
 	}

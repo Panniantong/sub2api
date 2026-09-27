@@ -45,6 +45,7 @@ func RegisterAdminRoutes(
 
 		// 账号管理
 		registerAccountRoutes(admin, h, stepUpAuth)
+		registerIntelligenceMonitorRoutes(admin, h)
 
 		// 公告管理
 		registerAnnouncementRoutes(admin, h)
@@ -130,6 +131,17 @@ func RegisterAdminRoutes(
 
 		// 操作审计日志
 		registerAuditLogRoutes(admin, h, stepUpAuth)
+	}
+}
+
+func registerIntelligenceMonitorRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	monitor := admin.Group("/intelligence-monitor")
+	{
+		monitor.GET("/config", h.Admin.Account.GetIntelligenceMonitorConfig)
+		monitor.PUT("/config", h.Admin.Account.UpdateIntelligenceMonitorConfig)
+		monitor.GET("/results", h.Admin.Account.GetIntelligenceMonitorResults)
+		monitor.GET("/runtime", h.Admin.Account.GetIntelligenceMonitorRuntime)
+		monitor.POST("/run", h.Admin.Account.RunIntelligenceMonitor)
 	}
 }
 
@@ -383,6 +395,8 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAu
 		accounts.POST("/:id/ollama-cloud-usage/refresh", h.Admin.Account.RefreshOllamaCloudUsage)
 		accounts.DELETE("/:id", h.Admin.Account.Delete)
 		accounts.POST("/:id/test", h.Admin.Account.Test)
+		accounts.POST("/:id/intelligence-test", h.Admin.Account.IntelligenceTest)
+		accounts.GET("/:id/intelligence-test/results", h.Admin.Account.GetIntelligenceTestResults)
 		accounts.POST("/:id/recover-state", h.Admin.Account.RecoverState)
 		accounts.POST("/:id/refresh", h.Admin.Account.Refresh)
 		accounts.POST("/:id/apply-oauth-credentials", h.Admin.Account.ApplyOAuthCredentials)
@@ -575,6 +589,16 @@ func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		// 529过载冷却配置
 		adminSettings.GET("/overload-cooldown", h.Admin.Setting.GetOverloadCooldownSettings)
 		adminSettings.PUT("/overload-cooldown", h.Admin.Setting.UpdateOverloadCooldownSettings)
+		adminSettings.GET("/openai-codex-ticket", h.Admin.Setting.GetOpenAICodexTicketSettings)
+		adminSettings.PUT("/openai-codex-ticket", h.Admin.Setting.UpdateOpenAICodexTicketSettings)
+		adminSettings.GET("/openai-codex-cookie-library", h.Admin.Setting.GetOpenAICodexCookieLibrary)
+		adminSettings.GET("/cookie", h.Admin.Setting.GetCookieSettings)
+		adminSettings.PUT("/cookie", h.Admin.Setting.UpdateCookieSettings)
+		adminSettings.GET("/cookie/logs", h.Admin.Setting.GetCookieLogs)
+		adminSettings.GET("/cookie/validation-logs", h.Admin.Setting.GetCookieValidationLogs)
+		adminSettings.GET("/cookie/proxy-host-memories", h.Admin.Setting.GetCookieProxyHostMemories)
+		adminSettings.POST("/cookie/proxy-host-memories/reset", h.Admin.Setting.ResetCookieProxyHostMemory)
+		adminSettings.PUT("/openai-codex-cookie-library", h.Admin.Setting.UpdateOpenAICodexCookieLibrary)
 		// 429默认回避配置
 		adminSettings.GET("/rate-limit-429-cooldown", h.Admin.Setting.GetRateLimit429CooldownSettings)
 		adminSettings.PUT("/rate-limit-429-cooldown", h.Admin.Setting.UpdateRateLimit429CooldownSettings)

@@ -69,3 +69,14 @@ func resolveOpenAIWSDecisionByClientTransport(
 	}
 	return decision
 }
+
+// SupportsOpenAIHTTPContinuation follows the actual upstream transport, not
+// just the downstream HTTP entrypoint. Cookie-bound accounts forward HTTP
+// requests through their fixed WSv2 pool and retain connection-local state.
+func (s *OpenAIGatewayService) SupportsOpenAIHTTPContinuation(account *Account) bool {
+	if s == nil || account == nil {
+		return false
+	}
+	return account.IsOpenAIApiKey() || (openAICodexCookieHostFromAccount(account) != "" &&
+		s.getOpenAIWSProtocolResolver().Resolve(account).Transport == OpenAIUpstreamTransportResponsesWebsocketV2)
+}

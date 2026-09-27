@@ -1,5 +1,19 @@
 <template>
-  <div ref="rootRef" v-if="showUsageWindows">
+  <div ref="rootRef" v-if="showUsageWindows || account.ws_connections">
+    <div v-if="account.ws_connections" class="mb-1 max-w-full text-xs text-gray-600 dark:text-gray-300" title="本服务实例当前连接池快照，随账号列表刷新">
+      <span class="font-medium text-gray-700 dark:text-gray-200">WS</span>
+      WS 实际连接：{{ account.ws_connections.total }}（空闲 {{ account.ws_connections.idle }} / 使用中 {{ account.ws_connections.in_use }}）
+      <span v-if="account.ws_connections.connecting"> · 建立中 {{ account.ws_connections.connecting }}</span>
+      <span v-if="account.ws_connections.target"> / 目标 {{ account.ws_connections.target }}</span>
+      <span v-if="account.ws_connections.state"> · {{ { probing: '探测中', building: '建池中', ready: '就绪', degraded: '连接不足', failed: '失败', expired: '已过期' }[account.ws_connections.state] || account.ws_connections.state }}</span>
+      <span v-if="account.ws_connections.probe_state === 'probing'" class="block text-amber-600">Astra 上下文预热中</span>
+      <span v-else-if="account.ws_connections.probe_state === 'ready'" class="block text-emerald-600">Astra 上下文已就绪</span>
+      <span v-else-if="account.ws_connections.probe_state === 'failed'" class="block text-red-600">Astra 上下文预热失败</span>
+      <span v-if="account.ws_connections.state === 'expired'" class="block text-red-600">连接池已过期，请重新绑定</span>
+      <span v-else-if="account.ws_connections.state === 'failed'" class="block text-red-600">连接池建立失败，请重新绑定</span>
+      <span v-if="account.ws_connections.state === 'degraded'" class="block text-amber-600">池内连接不足，不自动补建</span>
+      <span v-if="account.ws_connections.last_error" class="block max-w-xs break-all text-red-600">{{ account.ws_connections.last_error }}</span>
+    </div>
     <!-- Anthropic OAuth and Setup Token accounts: fetch real usage data -->
     <template
       v-if="
@@ -117,7 +131,49 @@
     </template>
 
     <!-- OpenAI OAuth accounts: single source from /usage API -->
-    <template v-else-if="account.platform === 'openai' && account.type === 'oauth'">
+    <template v-else-if="account.platform === 'openai' && (account.type === 'oauth' || account.type === 'setup-token')">
+      <div v-if="account.cookie_binding" class="mb-2 max-w-full space-y-1 text-xs">
+        <div class="flex items-center gap-2" @click.stop>
+          <span class="shrink-0 text-gray-500">Cookie Host</span>
+          <select
+            class="input min-w-0 flex-1 px-1.5 py-0.5 text-xs"
+            :value="selectedCookieHost"
+            :disabled="cookieHostSaving"
+            @change="handleCookieHostChange"
+          >
+            <option value="">未绑定</option>
+            <option v-for="host in cookieHosts" :key="host" :value="host">{{ host }}{{ cookieHostCooldownLabel(host) }}</option>
+          </select>
+          <span v-if="cookieHostSaving" class="text-gray-400">保存中</span>
+        </div>
+        <span v-if="cookieHostError" class="block text-red-600">{{ cookieHostError }}</span>
+        <span v-if="account.cookie_binding.cooldown_host && account.cookie_binding.cooldown_until" class="block text-amber-600">Host 冷静中：{{ account.cookie_binding.cooldown_host }}，至 {{ new Date(account.cookie_binding.cooldown_until).toLocaleString() }}（仍可选择）</span>
+        <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+          <span v-if="account.cookie_binding.binding_expires_at" :class="bindingRemaining(account) > 0 ? 'text-emerald-600' : 'text-red-600'">绑定剩余 {{ bindingRemaining(account) }}s</span>
+          <button v-if="account.cookie_binding.rotation_at && bindingRotationLabel(account) === '正在轮换'" type="button" class="text-amber-600 underline hover:text-amber-700" title="查看当前轮换验证日志" @click.stop="openCookieValidationLogs">正在轮换</button>
+          <span v-else-if="account.cookie_binding.rotation_at" class="text-gray-500">{{ bindingRotationLabel(account) }}</span>
+          <span v-if="account.cookie_binding.available_host_count !== undefined" class="text-gray-500">可绑定 Host {{ account.cookie_binding.available_host_count }}</span>
+          <span v-if="cookieSchedulingBlockLabel" class="rounded bg-amber-50 px-1.5 py-0.5 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300" title="轮换分组调度保护；有效绑定恢复后自动解除，不改变账号可调度开关">暂不调度 · {{ cookieSchedulingBlockLabel }}</span>
+          <span v-else :class="account.cookie_binding.status === 'active' ? 'text-emerald-600' : 'text-gray-500'">{{ { active: '绑定有效', expired: 'Cookie 已过期或不存在，绑定不生效', unbound: '未绑定', unavailable: 'Cookie 状态读取失败', cooldown: 'Host 冷静中' }[account.cookie_binding.status] }}</span>
+          <span class="text-gray-500">WS {{ account.cookie_binding.ws_enabled ? '已启用' : '已关闭' }}</span>
+          <button type="button" class="text-blue-600 hover:underline dark:text-blue-400" @click.stop="openCookieValidationLogs">Host 验证日志</button>
+        </div>
+      </div>
+      <div v-if="account.codex_turn_tickets?.length || account.extra?.session_id || account.codex_turn_ticket_history?.length" class="mb-1 max-w-full text-[10px] leading-4 text-gray-500 dark:text-gray-400">
+        <span class="font-medium text-gray-700 dark:text-gray-200">票</span>
+        <span v-for="ticket in account.codex_turn_tickets" :key="ticket.expires_at || ticket.length" class="ml-1">
+          <span :class="ticket.ready ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-400'">
+            {{ ticket.length ? `${ticket.length} / ${formatTicketRemaining(ticket.remaining_seconds)}` : '未就绪' }}
+          </span>
+        </span>
+        <button
+          v-if="account.codex_turn_ticket_history?.length || account.codex_turn_tickets?.some(ticket => ticket.ticket || ticket.cookie || ticket.history_count)"
+          type="button"
+          class="ml-2 text-blue-600 hover:underline dark:text-blue-400"
+          title="查看历史打票日志"
+          @click="openTicketHistory"
+        >历史</button>
+      </div>
       <div v-if="hasOpenAIUsageFallback" class="space-y-1">
         <UsageProgressBar
           v-if="usageInfo?.five_hour"
@@ -569,7 +625,6 @@
       <div class="text-xs text-gray-400">-</div>
     </template>
   </div>
-
   <!-- Non-OAuth/Setup-Token accounts -->
   <div ref="rootRef" v-else>
     <!-- Gemini API Key accounts: show quota info -->
@@ -644,6 +699,113 @@
       >-</div>
     </div>
   </div>
+  <BaseDialog :show="showCookieValidationLogs" :title="`Host 验证日志 · ${account.name}`" width="extra-wide" @close="showCookieValidationLogs = false">
+    <div class="space-y-3">
+      <div class="flex items-center justify-between gap-3">
+        <p class="text-xs text-gray-500">仅记录实际发起的绑定尝试；已绑定账号和冷静期内的自动扫描不会生成日志。</p>
+        <button type="button" class="btn btn-secondary btn-sm" :disabled="cookieValidationLoading" @click="loadCookieValidationLogs">刷新</button>
+      </div>
+      <div v-if="cookieValidationLoading" class="py-8 text-center text-sm text-gray-500">加载中...</div>
+      <div v-else-if="cookieValidationError" class="py-6 text-sm text-red-500">{{ cookieValidationError }}</div>
+      <div v-else-if="cookieValidationAttempts.length" class="max-h-[60vh] space-y-3 overflow-y-auto pr-1">
+        <article v-for="attempt in cookieValidationAttempts" :key="attempt.id" class="rounded border border-gray-200 p-3 dark:border-dark-600">
+          <div class="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+            <span class="break-all font-mono font-medium">{{ attempt.host || '未知 Host' }}</span>
+            <span class="text-gray-500">{{ formatValidationTime(attempt.startedAt) }}</span>
+          </div>
+          <ol class="space-y-2 border-l border-gray-200 pl-4 dark:border-dark-600">
+            <li v-for="log in attempt.logs" :key="log.id" class="relative text-xs">
+              <span class="absolute -left-[19px] top-1 h-2 w-2 rounded-full" :class="validationStageDot(log.stage)" />
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="font-medium">{{ validationStageLabel(log.stage) }}</span>
+                <span class="text-gray-400">{{ formatValidationTime(log.created_at) }}</span>
+                <span v-if="log.status_code" class="text-gray-400">HTTP {{ log.status_code }}</span>
+              </div>
+              <p class="mt-0.5 text-gray-600 dark:text-gray-300">{{ log.message }}</p>
+              <details v-if="log.validation_response" class="mt-1">
+                <summary class="cursor-pointer text-blue-600 dark:text-blue-400">查看验证响应</summary>
+                <pre class="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-gray-50 p-2 font-mono text-[10px] dark:bg-dark-800">{{ log.validation_response }}</pre>
+              </details>
+            </li>
+          </ol>
+        </article>
+      </div>
+      <div v-else class="py-8 text-center text-sm text-gray-500">暂无 Host 验证日志</div>
+      <Pagination
+        v-if="cookieValidationTotal > 0"
+        :page="cookieValidationPage"
+        :page-size="cookieValidationPageSize"
+        :total="cookieValidationTotal"
+        :show-page-size-selector="false"
+        @update:page="changeCookieValidationPage"
+      />
+    </div>
+  </BaseDialog>
+  <BaseDialog :show="showTicketHistory" title="打票历史" width="extra-wide" @close="showTicketHistory = false">
+    <div v-if="ticketHistoryLoading" class="py-8 text-center text-sm text-gray-500">加载中...</div>
+    <div v-else-if="ticketHistoryError" class="py-6 text-sm text-red-500">{{ ticketHistoryError }}</div>
+    <div v-else-if="ticketHistory.length || account.codex_turn_tickets?.some(ticket => ticket.ticket || ticket.cookie) || currentTicketSessionID || currentTicketCookie" class="max-h-[60vh] space-y-3 overflow-y-auto">
+      <div v-if="currentTicketSessionID || currentTicketCookie" class="rounded border border-emerald-200 p-3 text-xs dark:border-emerald-800">
+        <div class="mb-2 font-medium">当前账号绑定值</div>
+        <div v-if="currentTicketSessionID" class="mb-2 break-all font-mono"><span class="font-medium font-sans">session_id:</span> {{ currentTicketSessionID }}</div>
+        <div v-if="currentTicketCookie" class="break-all font-mono"><span class="font-medium font-sans">Cookie:</span> {{ currentTicketCookie }}</div>
+        <div v-if="currentTicketCookieHost" class="mt-1 break-all font-mono"><span class="font-medium font-sans">Cookie host:</span> {{ currentTicketCookieHost }}</div>
+        <button v-if="currentTicketCookiePayload" type="button" class="mt-1 rounded border px-2 py-1 text-[10px] text-blue-600 hover:underline" @click="openCookiePayload(currentTicketCookiePayload)">查看 Cookie payload</button>
+        <div v-if="cookiePayloadExpiration(currentTicketCookiePayload) !== null" class="mt-1 font-mono">Cookie exp: {{ cookiePayloadExpiration(currentTicketCookiePayload) }}（剩余 {{ cookiePayloadRemainingSeconds(currentTicketCookiePayload) }}s）</div>
+      </div>
+      <div v-for="ticket in account.codex_turn_tickets || []" :key="`current-${ticket.expires_at || ticket.length}`" class="rounded border border-blue-200 p-3 text-xs dark:border-blue-800">
+        <div class="mb-2 font-medium">当前票据</div>
+        <div v-if="ticket.ticket" class="break-all font-mono">{{ ticket.ticket }}</div>
+      </div>
+      <div v-for="(item, index) in ticketHistory" :key="`${item.captured_at}-${index}`" class="rounded border border-gray-200 p-3 text-xs dark:border-dark-600">
+        <div class="mb-2 flex flex-wrap gap-3 text-gray-500 dark:text-gray-400">
+          <span>{{ item.captured_at }}</span>
+          <span>{{ item.source || '-' }}</span>
+          <span>HTTP {{ item.status_code || '-' }}</span>
+        </div>
+        <div class="mb-2 flex flex-wrap gap-2">
+          <button v-if="item.request_state" type="button" class="rounded border px-2 py-1 font-mono text-[10px] font-medium" :class="stateBadgeClass(item.request_state)" @click="openStateDetails(item, 'request')">request state · {{ item.request_state.length }}</button>
+          <button v-if="item.response_state || item.ticket" type="button" class="rounded border px-2 py-1 font-mono text-[10px] font-medium" :class="stateBadgeClass(item.response_state || item.ticket)" @click="openStateDetails(item, 'response')">response state · {{ (item.response_state || item.ticket || '').length }}</button>
+        </div>
+        <div v-if="item.session_id" class="mb-2 break-all"><span class="font-medium">session_id:</span> {{ item.session_id }}</div>
+        <div v-if="item.cookie" class="mb-2 break-all font-mono"><span class="font-medium font-sans">Cookie:</span> {{ item.cookie }}</div>
+        <div v-if="item.cookie_host" class="mb-2 break-all font-mono"><span class="font-medium font-sans">Cookie host:</span> {{ item.cookie_host }}</div>
+        <button v-if="item.cookie_payload" type="button" class="mb-2 rounded border px-2 py-1 text-[10px] text-blue-600 hover:underline" @click="openCookiePayload(item.cookie_payload)">查看 Cookie payload</button>
+        <div v-if="cookiePayloadExpiration(item.cookie_payload) !== null" class="mb-2 font-mono">Cookie exp: {{ cookiePayloadExpiration(item.cookie_payload) }}（剩余 {{ cookiePayloadRemainingSeconds(item.cookie_payload) }}s）</div>
+        <div v-if="item.ticket" class="break-all font-mono"><span class="font-medium font-sans">ticket:</span> {{ item.ticket }}</div>
+        <button
+          v-if="item.response"
+          type="button"
+          class="mt-2 rounded border border-violet-200 bg-violet-50 px-2 py-1 text-[10px] font-medium text-violet-700 hover:bg-violet-100 dark:border-violet-700 dark:bg-violet-900/20 dark:text-violet-300"
+          @click="openResponseDetails(item)"
+        >查看完整响应</button>
+      </div>
+    </div>
+    <div v-else class="text-sm text-gray-500">暂无打票记录</div>
+  </BaseDialog>
+  <BaseDialog :show="showResponseDetails" title="打票完整响应" width="extra-wide" @close="showResponseDetails = false">
+    <div v-if="responseDetails" class="space-y-3 text-sm">
+      <div class="flex flex-wrap gap-3 text-gray-500 dark:text-gray-400">
+        <span>{{ responseDetails.item.captured_at }}</span>
+        <span>{{ responseDetails.item.source || '-' }}</span>
+        <span>HTTP {{ responseDetails.item.status_code || '-' }}</span>
+      </div>
+      <pre class="max-h-[65vh] overflow-auto whitespace-pre-wrap break-all rounded border border-gray-200 bg-gray-50 p-3 font-mono text-xs leading-5 text-gray-800 dark:border-dark-600 dark:bg-dark-900 dark:text-gray-200">{{ responseDetails.value }}</pre>
+    </div>
+  </BaseDialog>
+  <BaseDialog :show="showCookiePayload" title="Cookie payload" width="wide" @close="showCookiePayload = false">
+    <pre v-if="cookiePayloadDetails" class="max-h-[60vh] overflow-auto whitespace-pre-wrap break-all rounded bg-gray-50 p-3 font-mono text-xs dark:bg-dark-800">{{ JSON.stringify(cookiePayloadDetails, null, 2) }}</pre>
+  </BaseDialog>
+  <BaseDialog :show="showStateDetails" :title="stateDetails?.kind === 'request' ? 'Request state' : 'Response state'" width="wide" @close="showStateDetails = false">
+    <div v-if="stateDetails" class="space-y-3 text-sm">
+      <div class="flex flex-wrap gap-3 text-gray-500 dark:text-gray-400">
+        <span>{{ stateDetails.item.captured_at }}</span><span>{{ stateDetails.item.source || '-' }}</span><span>HTTP {{ stateDetails.item.status_code || '-' }}</span>
+        <span :class="stateDetails.value.length === 780 ? 'text-emerald-600' : 'text-red-600'">{{ stateDetails.value.length === 780 ? '780 valid' : `${stateDetails.value.length} non-780` }}</span>
+      </div>
+      <pre class="max-h-[45vh] overflow-auto whitespace-pre-wrap break-all rounded bg-gray-50 p-3 font-mono text-xs dark:bg-dark-800">{{ stateDetails.value || '-' }}</pre>
+      <div v-if="stateDetails.item.session_id" class="break-all font-mono text-xs">session_id: {{ stateDetails.item.session_id }}</div>
+    </div>
+  </BaseDialog>
 </template>
 
 <script setup lang="ts">
@@ -660,8 +822,184 @@ import OpenAIQuotaResetCell from './OpenAIQuotaResetCell.vue'
 import GrokQuotaProbeCell from './GrokQuotaProbeCell.vue'
 import CNProviderQuotaCell from './CNProviderQuotaCell.vue'
 import CNProviderBalanceCell from './CNProviderBalanceCell.vue'
+import BaseDialog from '@/components/common/BaseDialog.vue'
+import Pagination from '@/components/common/Pagination.vue'
 import OllamaCloudUsageCell from './OllamaCloudUsageCell.vue'
 import { cnQuotaCellVisible as cnQuotaCellVisibleFn, cnBalanceCellVisible as cnBalanceCellVisibleFn } from './credentialsBuilder'
+import * as cookieAPI from '@/api/admin/cookies'
+import type { CookieLog } from '@/api/admin/cookies'
+
+const showCookieValidationLogs = ref(false)
+const cookieValidationLogs = ref<CookieLog[]>([])
+const cookieValidationLoading = ref(false)
+const cookieValidationError = ref('')
+const cookieValidationPage = ref(1)
+const cookieValidationPageSize = 10
+const cookieValidationTotal = ref(0)
+const cookieValidationAttempts = computed(() => {
+  const attempts = new Map<string, CookieLog[]>()
+  for (const log of cookieValidationLogs.value) {
+    const id = log.attempt_id || log.id
+    const values = attempts.get(id) || []
+    values.push(log)
+    attempts.set(id, values)
+  }
+  return Array.from(attempts.entries()).map(([id, values]) => {
+    const logs = [...values].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+    return { id, logs, host: logs[0]?.host || '', startedAt: logs[0]?.created_at || '' }
+  })
+})
+const validationStageLabels: Record<string, string> = {
+  host_selected: '准备绑定 Host',
+  host_cookie_bound: 'Host Cookie 已绑定',
+  validation_started: '开始验证提示词',
+  validation_succeeded: '验证成功',
+  validation_rejected: '验证未通过',
+  validation_failed: '验证失败',
+  host_bound: 'Host 已绑定',
+  host_bind_failed: 'Host 绑定失败',
+  ws_build_started: '开始构建 WS',
+  ws_build_succeeded: 'WS 构建成功',
+  ws_build_failed: 'WS 构建失败',
+  ws_build_skipped: 'WS 构建已跳过'
+}
+const validationStageLabel = (stage?: string) => validationStageLabels[stage || ''] || '历史记录'
+const validationStageDot = (stage?: string) => {
+  if (stage === 'validation_rejected' || stage === 'validation_failed' || stage === 'host_bind_failed' || stage === 'ws_build_failed') return 'bg-red-500'
+  if (stage === 'validation_succeeded' || stage === 'host_bound' || stage === 'ws_build_succeeded') return 'bg-emerald-500'
+  return 'bg-blue-500'
+}
+const formatValidationTime = (value: string) => value ? new Date(value).toLocaleString() : '-'
+const cookieRequestError = (error: unknown, fallback: string) => {
+  if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') return error.message
+  return fallback
+}
+const loadCookieValidationLogs = async () => {
+  cookieValidationLoading.value = true
+  cookieValidationError.value = ''
+  try {
+    const result = await cookieAPI.getValidationLogs({ account_id: props.account.id, page: cookieValidationPage.value, page_size: cookieValidationPageSize })
+    cookieValidationLogs.value = result.items || []
+    cookieValidationTotal.value = result.total || 0
+  } catch (error) {
+    cookieValidationError.value = cookieRequestError(error, '加载 Host 验证日志失败')
+  } finally {
+    cookieValidationLoading.value = false
+  }
+}
+const openCookieValidationLogs = () => {
+  showCookieValidationLogs.value = true
+  cookieValidationPage.value = 1
+  void loadCookieValidationLogs()
+}
+const changeCookieValidationPage = (page: number) => {
+  cookieValidationPage.value = page
+  void loadCookieValidationLogs()
+}
+
+const showTicketHistory = ref(false)
+const ticketHistory = ref<NonNullable<Account['codex_turn_ticket_history']>>([])
+const ticketHistoryLoading = ref(false)
+const ticketHistoryError = ref('')
+const currentTicketSessionID = ref('')
+const currentTicketCookie = ref('')
+const currentTicketCookieHost = ref('')
+const currentTicketCookiePayload = ref<Record<string, unknown> | null>(null)
+const showStateDetails = ref(false)
+const stateDetails = ref<{ item: NonNullable<Account['codex_turn_ticket_history']>[number]; kind: 'request' | 'response'; value: string } | null>(null)
+const showResponseDetails = ref(false)
+const responseDetails = ref<{ item: NonNullable<Account['codex_turn_ticket_history']>[number]; value: string } | null>(null)
+const showCookiePayload = ref(false)
+const cookiePayloadDetails = ref<Record<string, unknown> | null>(null)
+const stateBadgeClass = (state?: string) => state && state.length === 780
+  ? 'border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+  : 'border-red-300 bg-red-50 text-red-700 dark:border-red-700 dark:bg-red-900/30 dark:text-red-300'
+const openStateDetails = (item: NonNullable<Account['codex_turn_ticket_history']>[number], kind: 'request' | 'response') => {
+  stateDetails.value = { item, kind, value: kind === 'request' ? (item.request_state || '') : (item.response_state || item.ticket || '') }
+  showStateDetails.value = true
+}
+const openResponseDetails = (item: NonNullable<Account['codex_turn_ticket_history']>[number]) => {
+  if (!item.response) return
+  let value = item.response
+  try {
+    value = JSON.stringify(JSON.parse(item.response), null, 2)
+  } catch {
+    // Keep the original response when it is not JSON.
+  }
+  responseDetails.value = { item, value }
+  showResponseDetails.value = true
+}
+const openCookiePayload = (payload?: Record<string, unknown>) => {
+  if (!payload) return
+  cookiePayloadDetails.value = payload
+  showCookiePayload.value = true
+}
+const cookiePayloadExpiration = (payload?: Record<string, unknown> | null): number | null => {
+  const exp = Number(payload?.exp)
+  return Number.isFinite(exp) && exp > 0 ? Math.floor(exp) : null
+}
+const cookiePayloadRemainingSeconds = (payload?: Record<string, unknown> | null): number => {
+  const exp = cookiePayloadExpiration(payload)
+  return exp === null ? 0 : Math.max(0, exp - Math.floor(Date.now() / 1000))
+}
+const cookieBindingNow = ref(Date.now())
+let cookieBindingTimer: ReturnType<typeof setInterval> | undefined
+watch(() => !!props.account.cookie_binding, (enabled) => {
+  if (cookieBindingTimer) clearInterval(cookieBindingTimer)
+  cookieBindingTimer = undefined
+  cookieBindingNow.value = Date.now()
+  if (enabled) cookieBindingTimer = setInterval(() => { cookieBindingNow.value = Date.now() }, 1000)
+}, { immediate: true })
+onBeforeUnmount(() => { if (cookieBindingTimer) clearInterval(cookieBindingTimer) })
+const cookieSchedulingBlockLabel = computed(() => {
+  const binding = props.account.cookie_binding
+  if (!binding?.scheduling_guard_enabled) return ''
+  const reasons: Record<string, string> = {
+    cookie_host_unbound: '未绑定 Cookie Host',
+    cookie_host_binding_expired: 'Host 绑定已超时',
+    cookie_host_binding_invalid: 'Host 绑定有效期缺失或无效'
+  }
+  if (binding.scheduling_blocked) return reasons[binding.scheduling_block_reason || ''] || '等待有效 Host 绑定'
+  if (!binding.host) return reasons.cookie_host_unbound
+  const expiresAt = Date.parse(binding.binding_expires_at || '')
+  if (!Number.isFinite(expiresAt)) return reasons.cookie_host_binding_invalid
+  return expiresAt <= cookieBindingNow.value ? reasons.cookie_host_binding_expired : ''
+})
+const bindingRemaining = (account: Account): number => {
+  const value = account.cookie_binding?.binding_expires_at
+  if (!value) return 0
+  return Math.max(0, Math.ceil((new Date(value).getTime() - cookieBindingNow.value) / 1000))
+}
+const bindingRotationLabel = (account: Account): string => {
+  const value = account.cookie_binding?.rotation_at
+  if (!value) return ''
+  const seconds = Math.max(0, Math.ceil((new Date(value).getTime() - cookieBindingNow.value) / 1000))
+  return seconds > 0 ? `${seconds}s 后开始轮换` : '正在轮换'
+}
+
+const openTicketHistory = async () => {
+  showTicketHistory.value = true
+  ticketHistory.value = props.account.codex_turn_ticket_history || []
+  currentTicketSessionID.value = String(props.account.extra?.session_id || '')
+  currentTicketCookie.value = String(props.account.codex_turn_tickets?.[0]?.cookie || '')
+  currentTicketCookieHost.value = String(props.account.codex_turn_tickets?.[0]?.cookie_host || '')
+  currentTicketCookiePayload.value = props.account.codex_turn_tickets?.[0]?.cookie_payload || null
+  ticketHistoryError.value = ''
+  ticketHistoryLoading.value = true
+  try {
+    const detail = await adminAPI.accounts.getById(props.account.id)
+    ticketHistory.value = detail.codex_turn_ticket_history || []
+    currentTicketSessionID.value = String(detail.extra?.session_id || '')
+    currentTicketCookie.value = String(detail.codex_turn_tickets?.[0]?.cookie || '')
+    currentTicketCookieHost.value = String(detail.codex_turn_tickets?.[0]?.cookie_host || '')
+    currentTicketCookiePayload.value = detail.codex_turn_tickets?.[0]?.cookie_payload || null
+  } catch (error) {
+    ticketHistoryError.value = '加载打票历史失败'
+    console.error('Failed to load Codex ticket history:', error)
+  } finally {
+    ticketHistoryLoading.value = false
+  }
+}
 
 // Module-level cache shared across all AccountUsageCell instances
 const _usageCache = new Map<number, { data: AccountUsageInfo; ts: number }>()
@@ -677,6 +1015,7 @@ const props = withDefaults(
     batchedUsageError?: string | null
     batchedUsageLoading?: boolean
     requestBatchedUsage?: ((account: Account, options?: { force?: boolean }) => void) | null
+    cookieHosts?: string[]
   }>(),
   {
     todayStats: null,
@@ -685,7 +1024,8 @@ const props = withDefaults(
     batchedUsage: null,
     batchedUsageError: null,
     batchedUsageLoading: false,
-    requestBatchedUsage: null
+    requestBatchedUsage: null,
+    cookieHosts: () => []
   }
 )
 
@@ -693,6 +1033,39 @@ const emit = defineEmits<{
   'account-updated': [account: Account]
   'usage-loaded': [usage: AccountUsageInfo]
 }>()
+
+const cookieHostSaving = ref(false)
+const cookieHostError = ref('')
+const selectedCookieHost = computed(() => {
+  const value = props.account.extra?.codex_cookie_host
+  return typeof value === 'string' ? value : (props.account.cookie_binding?.host || '')
+})
+const cookieHosts = computed(() => {
+  const values = new Set(props.cookieHosts || [])
+  if (selectedCookieHost.value) values.add(selectedCookieHost.value)
+  return Array.from(values).sort()
+})
+const cookieHostCooldownLabel = (host: string) => {
+  const raw = props.account.cookie_binding?.cooldowns?.[host]
+  if (!raw) return ''
+  const remaining = Math.max(0, Math.ceil((new Date(raw).getTime() - Date.now()) / 1000))
+  return remaining > 0 ? `（此账号冷静至 ${new Date(raw).toLocaleString()}）` : ''
+}
+const handleCookieHostChange = async (event: Event) => {
+  const host = String((event.target as HTMLSelectElement).value || '').trim().toLowerCase()
+  if (host === selectedCookieHost.value) return
+  cookieHostSaving.value = true
+  cookieHostError.value = ''
+  try {
+    const updated = await adminAPI.accounts.update(props.account.id, { extra: host ? { codex_cookie_host: host } : {} })
+    emit('account-updated', updated)
+  } catch (error) {
+    console.error('Failed to update cookie host binding:', error)
+    cookieHostError.value = cookieRequestError(error, 'Cookie Host 更新失败')
+  } finally {
+    cookieHostSaving.value = false
+  }
+}
 
 const { t } = useI18n()
 const desktopViewportQuery = '(min-width: 768px)'
@@ -786,6 +1159,11 @@ const hasOpenAIUsageFallback = computed(() => {
   if (props.account.platform !== 'openai' || props.account.type !== 'oauth') return false
   return !!usageInfo.value?.five_hour || !!usageInfo.value?.seven_day
 })
+
+const formatTicketRemaining = (seconds: number) => {
+  const total = Math.max(0, Math.floor(seconds || 0))
+  return `${Math.floor(total / 60)}m${String(total % 60).padStart(2, '0')}s`
+}
 
 const openAISevenDayEstimatedTotalCost = computed(() => {
   const sevenDay = usageInfo.value?.seven_day

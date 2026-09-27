@@ -1769,7 +1769,52 @@
         </div>
       </div>
 
+      <div
+        v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'setup-token')"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="flex items-center justify-between">
+          <div>
+            <label class="input-label mb-0">Excel 满血模式</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">开启后此账号的 Responses 请求走 bps.openai.com，兼容图片输入和客户端工具目录；新建和导入账号默认关闭。</p>
+          </div>
+          <button type="button" @click="excelFullModeEnabled = !excelFullModeEnabled" :class="['relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2', excelFullModeEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600']">
+            <span :class="['pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out', excelFullModeEnabled ? 'translate-x-5' : 'translate-x-0']" />
+          </button>
+        </div>
+      </div>
+
       <!-- OpenAI Codex namespace 工具摊平（兼容开关，仅 OAuth） -->
+      <div v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'setup-token')" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <label class="input-label mb-0">Cookie 绑定</label>
+        <p v-if="account.ws_connections" class="mt-2 text-xs">WS 实际连接：{{ account.ws_connections.total }}，空闲 {{ account.ws_connections.idle }}，使用中 {{ account.ws_connections.in_use }}，建立中 {{ account.ws_connections.connecting }}</p>
+        <div class="mt-3">
+          <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">绑定 Cookie host</label>
+          <div class="flex gap-2">
+            <select v-model="codexCookieHost" class="input w-full font-mono text-sm" :disabled="cookieHostsLoading">
+              <option value="">不绑定</option>
+              <option v-if="codexCookieHost && !cookieHostOptions.some(entry => entry.host === codexCookieHost)" :value="codexCookieHost" disabled>{{ codexCookieHost }}（已失效，请重新选择）</option>
+              <option v-for="entry in cookieHostOptions" :key="entry.host" :value="entry.host">{{ entry.host }} · 剩余 {{ Math.max(0, Math.floor((new Date(entry.expires_at).getTime() - Date.now()) / 1000)) }}s{{ cookieHostCooldownLabel(entry.host) }}</option>
+            </select>
+            <button type="button" class="btn btn-secondary btn-sm whitespace-nowrap" :disabled="cookieHostsLoading" @click="loadCookieHosts">{{ cookieHostsLoading ? '加载中' : '刷新 Host' }}</button>
+          </div>
+          <p v-if="cookieHostsError" class="mt-1 text-xs text-red-600">{{ cookieHostsError }}</p>
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">保存新绑定后立即按配置数量建连（需启用 Cookie WS）。普通请求仅复用已有连接，断线不自动补建；需要新建时先解绑再绑定。<router-link to="/admin/cookie-library" class="text-blue-600 hover:underline">查看 Cookie 库 / WS 配置</router-link></p>
+        </div>
+        <div class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+          <p class="font-medium">打票</p>
+          <span v-for="ticket in account.codex_turn_tickets || []" :key="ticket.expires_at || ticket.length" class="mr-3">
+            {{ ticket.length ? `长度 ${ticket.length}，剩余 ${formatTicketRemaining(ticket.remaining_seconds)}` : '未就绪' }}
+          </span>
+          <span v-if="account.extra?.session_id" class="block mt-1" :title="String(account.extra.session_id)">session_id: {{ String(account.extra.session_id).slice(0, 16) }}{{ String(account.extra.session_id).length > 16 ? '...' : '' }}</span>
+          <template v-for="ticket in account.codex_turn_tickets || []" :key="`ticket-${ticket.expires_at || ticket.length}`">
+            <span v-if="ticket.ticket" class="mt-1 block break-all font-mono" :title="ticket.ticket">ticket: {{ ticket.ticket }}</span>
+          <span v-if="ticket.cookie" class="mt-1 block break-all font-mono">Cookie: {{ ticket.cookie }}</span>
+            <span v-if="ticket.bound_cookie_host" class="mt-1 block break-all font-mono">绑定 Cookie host: {{ ticket.bound_cookie_host }}</span>
+          </template>
+        </div>
+      </div>
+
       <div
         v-if="account?.platform === 'openai' && account?.type === 'oauth'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
@@ -3512,6 +3557,7 @@ const customBaseUrl = ref('')
 
 // OpenAI 自动透传开关（OAuth/API Key）
 const openaiPassthroughEnabled = ref(false)
+const excelFullModeEnabled = ref(false)
 // OpenAI Codex namespace 工具摊平兼容开关（仅 OAuth），缺省关闭即原样保留
 const openaiFlattenNamespacesEnabled = ref(false)
 const openAILongContextBillingEnabled = ref(false)
@@ -3527,8 +3573,29 @@ const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const codexCLIOnlyEnabled = ref(false)
 const codexCLIOnlyAppServerEnabled = ref(false)
+const codexCookieHost = ref('')
+const cookieHostOptions = ref<import('@/api/admin/settings').OpenAICodexCookieLibraryEntry[]>([])
+const cookieHostsLoading = ref(false)
+const cookieHostsError = ref('')
+const cookieHostCooldownLabel = (host: string) => {
+  const raw = props.account?.cookie_binding?.cooldowns?.[host]
+  if (!raw) return ''
+  const remaining = Math.max(0, Math.ceil((new Date(raw).getTime() - Date.now()) / 1000))
+  return remaining > 0 ? `（冷静中，剩余 ${remaining}s）` : ''
+}
+async function loadCookieHosts() {
+  cookieHostsLoading.value = true
+  cookieHostsError.value = ''
+  try { cookieHostOptions.value = await adminAPI.settings.getOpenAICodexCookieLibrary() }
+  catch { cookieHostsError.value = 'Cookie 库加载失败，请重试'; cookieHostOptions.value = [] }
+  finally { cookieHostsLoading.value = false }
+}
 type CodexFingerprintMode = 'off' | 'device' | 'session' | 'full'
 const codexFingerprintMode = ref<CodexFingerprintMode>('off')
+const formatTicketRemaining = (seconds: number) => {
+  const total = Math.max(0, Math.floor(seconds || 0))
+  return `${Math.floor(total / 60)}m${String(total % 60).padStart(2, '0')}s`
+}
 type CodexImageToolMode = 'inherit' | 'enabled' | 'disabled' | 'block'
 const codexImageToolMode = ref<CodexImageToolMode>('inherit')
 type AnthropicAPIKeyAuthScheme = 'x_api_key' | 'authorization_bearer'
@@ -3985,6 +4052,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 	allowOverages.value = extra?.allow_overages === true
 	upstreamRequestIdHeader.value = readUpstreamRequestIdHeader(extra)
 	openAIImagesUrlToB64JsonEnabled.value = extra?.images_url_to_b64_json === true
+	codexCookieHost.value = typeof extra?.codex_cookie_host === 'string' ? extra.codex_cookie_host : ''
 	autoPause5hThreshold.value = typeof extra?.auto_pause_5h_threshold === 'number' ? extra.auto_pause_5h_threshold * 100 : null
 	autoPause7dThreshold.value = typeof extra?.auto_pause_7d_threshold === 'number' ? extra.auto_pause_7d_threshold * 100 : null
 	autoPause5hDisabled.value = extra?.auto_pause_5h_disabled === true
@@ -4000,6 +4068,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 
   // Load OpenAI passthrough toggle (OpenAI OAuth/SetupToken/API Key)
   openaiPassthroughEnabled.value = false
+  excelFullModeEnabled.value = false
   openaiFlattenNamespacesEnabled.value = false
   openAILongContextBillingEnabled.value = false
   editPlanType.value = ''
@@ -4018,6 +4087,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   webSearchEmulationMode.value = 'default'
   if (newAccount.platform === 'openai' && (newAccount.type === 'oauth' || newAccount.type === 'setup-token' || newAccount.type === 'apikey')) {
     openaiPassthroughEnabled.value = extra?.openai_passthrough === true || extra?.openai_oauth_passthrough === true
+    excelFullModeEnabled.value = extra?.openai_excel_full_mode === true
     openaiFlattenNamespacesEnabled.value =
       newAccount.type === 'oauth' && extra?.openai_responses_flatten_namespaces === true
     const longContextBillingValue = extra?.openai_long_context_billing_enabled
@@ -4387,6 +4457,7 @@ watch(
     if (!wasShow || newAccount !== previousAccount) {
       syncFormFromAccount(newAccount)
       loadTLSProfiles()
+      if (newAccount.platform === 'openai') void loadCookieHosts()
     }
   },
   { immediate: true }
@@ -5507,6 +5578,11 @@ const handleSubmit = async () => {
         delete newExtra.openai_passthrough
         delete newExtra.openai_oauth_passthrough
       }
+      if (props.account.type === 'oauth' || props.account.type === 'setup-token') {
+        newExtra.openai_excel_full_mode = excelFullModeEnabled.value
+      } else {
+        delete newExtra.openai_excel_full_mode
+      }
       // 缺省即保留 namespace，不写空值，避免 extra 里堆积默认项
       if (props.account.type === 'oauth' && openaiFlattenNamespacesEnabled.value) {
         newExtra.openai_responses_flatten_namespaces = true
@@ -5604,6 +5680,14 @@ const handleSubmit = async () => {
           newExtra.codex_fingerprint_mode = codexFingerprintMode.value
         } else {
           delete newExtra.codex_fingerprint_mode
+        }
+      }
+
+      if (props.account.type === 'oauth' || props.account.type === 'setup-token') {
+        if (codexCookieHost.value.trim()) {
+          newExtra.codex_cookie_host = codexCookieHost.value.trim().toLowerCase()
+        } else {
+          delete newExtra.codex_cookie_host
         }
       }
 

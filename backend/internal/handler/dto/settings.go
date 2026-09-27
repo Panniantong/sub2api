@@ -3,6 +3,7 @@ package dto
 import (
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
@@ -460,6 +461,35 @@ type OverloadCooldownSettings struct {
 type RateLimit429CooldownSettings struct {
 	Enabled         bool `json:"enabled"`
 	CooldownSeconds int  `json:"cooldown_seconds"`
+}
+
+type OpenAICodexTicketSettings struct {
+	Enabled                      bool     `json:"enabled"`
+	Model                        string   `json:"model"`
+	TTLSeconds                   int      `json:"ttl_seconds"`
+	RefreshBeforeSeconds         int      `json:"refresh_before_seconds"`
+	RetryIntervalSeconds         int      `json:"retry_interval_seconds"`
+	HarvestProxyURL              string   `json:"harvest_proxy_url"`
+	CookieHostWhitelist          []string `json:"cookie_host_whitelist"`
+	CookieHarvestProxyURLs       []string `json:"cookie_harvest_proxy_urls"`
+	OverrideTurnState            bool     `json:"override_turn_state"`
+	CookieWSConnections          int      `json:"cookie_ws_connections"`
+	CookieWSConnectionTTLSeconds int      `json:"cookie_ws_connection_ttl_seconds"`
+	CookieWSHostCooldownSeconds  int      `json:"cookie_ws_host_cooldown_seconds"`
+	RelayEnabled                 bool     `json:"relay_enabled"`
+	RelayURL                     string   `json:"relay_url"`
+	RelayKey                     string   `json:"relay_key"`
+	RelayMode                    string   `json:"relay_mode"`
+	RelayTimeoutSeconds          int      `json:"relay_timeout_seconds"`
+	RelayAllowMint               bool     `json:"relay_allow_mint"`
+}
+
+type OpenAICodexCookieLibraryEntry struct {
+	Host       string         `json:"host"`
+	Cookie     string         `json:"cookie"`
+	Payload    map[string]any `json:"payload,omitempty"`
+	CapturedAt time.Time      `json:"captured_at"`
+	ExpiresAt  time.Time      `json:"expires_at"`
 }
 
 type OpenAIImagesOAuthUnavailableCooldownSettings struct {

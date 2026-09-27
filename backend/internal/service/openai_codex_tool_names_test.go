@@ -248,3 +248,11 @@ func TestRestoreCodexToolNamesFromSSEContextUsesEventLineTypeWithoutAddingType(t
 	require.Equal(t, codexPythonToolAlias, gjson.GetBytes(restored, "metadata.name").String())
 	require.False(t, gjson.GetBytes(restored, "type").Exists())
 }
+
+func TestRestoreCodexToolNames_CustomToolCall(t *testing.T) {
+	c, _ := gin.CreateTestContext(nil)
+	setCodexToolNameReverse(c, map[string]string{"write": "write_file"})
+	payload := []byte(`{"type":"response.output_item.done","item":{"type":"custom_tool_call","name":"write"}}`)
+	restored := restoreCodexToolNamesFromContext(c, payload)
+	require.Equal(t, "write_file", gjson.GetBytes(restored, "item.name").String())
+}

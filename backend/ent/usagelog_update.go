@@ -752,6 +752,18 @@ func (_u *UsageLogUpdate) ClearIPAddress() *UsageLogUpdate {
 	return _u
 }
 
+// SetRequestDebug sets the "request_debug" field.
+func (_u *UsageLogUpdate) SetRequestDebug(v map[string]string) *UsageLogUpdate {
+	_u.mutation.SetRequestDebug(v)
+	return _u
+}
+
+// ClearRequestDebug clears the value of the "request_debug" field.
+func (_u *UsageLogUpdate) ClearRequestDebug() *UsageLogUpdate {
+	_u.mutation.ClearRequestDebug()
+	return _u
+}
+
 // SetImageCount sets the "image_count" field.
 func (_u *UsageLogUpdate) SetImageCount(v int) *UsageLogUpdate {
 	_u.mutation.ResetImageCount()
@@ -1320,6 +1332,12 @@ func (_u *UsageLogUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.IPAddressCleared() {
 		_spec.ClearField(usagelog.FieldIPAddress, field.TypeString)
+	}
+	if value, ok := _u.mutation.RequestDebug(); ok {
+		_spec.SetField(usagelog.FieldRequestDebug, field.TypeJSON, value)
+	}
+	if _u.mutation.RequestDebugCleared() {
+		_spec.ClearField(usagelog.FieldRequestDebug, field.TypeJSON)
 	}
 	if value, ok := _u.mutation.ImageCount(); ok {
 		_spec.SetField(usagelog.FieldImageCount, field.TypeInt, value)
@@ -2266,6 +2284,18 @@ func (_u *UsageLogUpdateOne) ClearIPAddress() *UsageLogUpdateOne {
 	return _u
 }
 
+// SetRequestDebug sets the "request_debug" field.
+func (_u *UsageLogUpdateOne) SetRequestDebug(v map[string]string) *UsageLogUpdateOne {
+	_u.mutation.SetRequestDebug(v)
+	return _u
+}
+
+// ClearRequestDebug clears the value of the "request_debug" field.
+func (_u *UsageLogUpdateOne) ClearRequestDebug() *UsageLogUpdateOne {
+	_u.mutation.ClearRequestDebug()
+	return _u
+}
+
 // SetImageCount sets the "image_count" field.
 func (_u *UsageLogUpdateOne) SetImageCount(v int) *UsageLogUpdateOne {
 	_u.mutation.ResetImageCount()
@@ -2864,6 +2894,12 @@ func (_u *UsageLogUpdateOne) sqlSave(ctx context.Context) (_node *UsageLog, err 
 	}
 	if _u.mutation.IPAddressCleared() {
 		_spec.ClearField(usagelog.FieldIPAddress, field.TypeString)
+	}
+	if value, ok := _u.mutation.RequestDebug(); ok {
+		_spec.SetField(usagelog.FieldRequestDebug, field.TypeJSON, value)
+	}
+	if _u.mutation.RequestDebugCleared() {
+		_spec.ClearField(usagelog.FieldRequestDebug, field.TypeJSON)
 	}
 	if value, ok := _u.mutation.ImageCount(); ok {
 		_spec.SetField(usagelog.FieldImageCount, field.TypeInt, value)

@@ -1096,9 +1096,41 @@ type GatewayConfig struct {
 	// Grok: Grok/xAI gateway scheduling and free-tier soft-gate settings.
 	Grok GatewayGrokConfig `mapstructure:"grok"`
 
+	// OpenAICodexTicket controls background capture and reuse of the
+	// x-codex-turn-state ticket for ChatGPT OAuth accounts.
+	OpenAICodexTicket OpenAICodexTicketConfig `mapstructure:"openai_codex_ticket"`
+
 	// CNProviders: 国产 OpenAI 兼容供应商（kimi/zhipu/deepseek）的余额检测配置。
 	// 仅作用于 payg（按量付费）账号：周期探测余额，低于阈值则临时停调。
 	CNProviders GatewayCNProvidersConfig `mapstructure:"cn_providers"`
+}
+
+// OpenAICodexTicketConfig controls Codex turn-state ticket capture.
+// TTLSeconds and RefreshBeforeSeconds are intentionally runtime knobs so an
+// operator can shorten the cache lifetime without changing request code.
+type OpenAICodexTicketConfig struct {
+	Enabled                          bool     `mapstructure:"enabled"`
+	TTLSeconds                       int      `mapstructure:"ttl_seconds"`
+	RefreshBeforeSeconds             int      `mapstructure:"refresh_before_seconds"`
+	TargetLength                     int      `mapstructure:"target_length"`
+	HarvestProxyURL                  string   `mapstructure:"harvest_proxy_url"`
+	HarvestProbeIntervalSeconds      int      `mapstructure:"harvest_probe_interval_seconds"`
+	HarvestAttemptTimeoutSeconds     int      `mapstructure:"harvest_attempt_timeout_seconds"`
+	Models                           []string `mapstructure:"models"`
+	CookieHostWhitelist              []string `mapstructure:"cookie_host_whitelist"`
+	CookieHarvestProxyURLs           []string `mapstructure:"cookie_harvest_proxy_urls"`
+	CookieDynamicProxyFillHostCookie bool     `mapstructure:"cookie_dynamic_proxy_fill_host_cookie"`
+	CookieProxyLearningAttempts      int      `mapstructure:"cookie_proxy_learning_attempts"`
+	OverrideTurnState                bool     `mapstructure:"override_turn_state"`
+	CookieWSConnections              int      `mapstructure:"cookie_ws_connections"`
+	CookieWSConnectionTTLSeconds     int      `mapstructure:"cookie_ws_connection_ttl_seconds"`
+	CookieWSHostCooldownSeconds      int      `mapstructure:"cookie_ws_host_cooldown_seconds"`
+	RelayEnabled                     bool     `mapstructure:"relay_enabled"`
+	RelayURL                         string   `mapstructure:"relay_url"`
+	RelayKey                         string   `mapstructure:"relay_key"`
+	RelayMode                        string   `mapstructure:"relay_mode"`
+	RelayTimeoutSeconds              int      `mapstructure:"relay_timeout_seconds"`
+	RelayAllowMint                   bool     `mapstructure:"relay_allow_mint"`
 }
 
 // GatewayGrokConfig holds Grok-specific gateway scheduling knobs.
@@ -2476,6 +2508,23 @@ func setDefaults() {
 	viper.SetDefault("gateway.proxy_probe_response_read_max_bytes", int64(1024*1024))
 	viper.SetDefault("gateway.gemini_debug_response_headers", false)
 	viper.SetDefault("gateway.connection_pool_isolation", ConnectionPoolIsolationAccountProxy)
+	viper.SetDefault("gateway.openai_codex_ticket.enabled", false)
+	viper.SetDefault("gateway.openai_codex_ticket.ttl_seconds", 3600)
+	viper.SetDefault("gateway.openai_codex_ticket.refresh_before_seconds", 600)
+	viper.SetDefault("gateway.openai_codex_ticket.target_length", 780)
+	viper.SetDefault("gateway.openai_codex_ticket.harvest_proxy_url", "")
+	viper.SetDefault("gateway.openai_codex_ticket.harvest_probe_interval_seconds", 5)
+	viper.SetDefault("gateway.openai_codex_ticket.harvest_attempt_timeout_seconds", 25)
+	viper.SetDefault("gateway.openai_codex_ticket.models", []string{"gpt-6-astra"})
+	viper.SetDefault("gateway.openai_codex_ticket.cookie_host_whitelist", []string{})
+	viper.SetDefault("gateway.openai_codex_ticket.cookie_harvest_proxy_urls", []string{})
+	viper.SetDefault("gateway.openai_codex_ticket.relay_enabled", false)
+	viper.SetDefault("gateway.openai_codex_ticket.relay_url", "")
+	viper.SetDefault("gateway.openai_codex_ticket.relay_key", "")
+	viper.SetDefault("gateway.openai_codex_ticket.relay_mode", "mint")
+	viper.SetDefault("gateway.openai_codex_ticket.relay_timeout_seconds", 75)
+	viper.SetDefault("gateway.openai_codex_ticket.relay_allow_mint", true)
+	viper.SetDefault("gateway.openai_codex_ticket.override_turn_state", true)
 	// HTTP 上游连接池配置（针对 5000+ 并发用户优化）
 	viper.SetDefault("gateway.max_idle_conns", 2560)          // 最大空闲连接总数（高并发场景可调大）
 	viper.SetDefault("gateway.max_idle_conns_per_host", 120)  // 每主机最大空闲连接（HTTP/2 场景默认）

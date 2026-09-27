@@ -694,6 +694,12 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 				normalizedExtra[key] = v
 			}
 		}
+		// Runtime values learned from the upstream must survive an admin edit.
+		for key, value := range account.Extra {
+			if key == "session_id" || IsOpenAICodexTicketPrivateExtraKey(key) {
+				normalizedExtra[key] = value
+			}
+		}
 		normalizedExtra = prepareCodexFingerprintExtraForUpdate(account, normalizedExtra)
 		account.Extra = normalizedExtra
 		if account.Platform == PlatformAntigravity && wasOveragesEnabled && !account.IsOveragesEnabled() {

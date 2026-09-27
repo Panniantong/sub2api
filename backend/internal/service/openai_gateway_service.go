@@ -28,7 +28,8 @@ import (
 
 const (
 	// ChatGPT internal API for OAuth accounts
-	chatgptCodexURL = "https://chatgpt.com/backend-api/codex/responses"
+	chatgptCodexURL           = "https://chatgpt.com/backend-api/codex/responses"
+	openAIExcelBasispointsURL = "https://bps.openai.com/basispoints/api/responses"
 	// OpenAI Platform API for API Key accounts (fallback)
 	openaiPlatformAPIURL            = "https://api.openai.com/v1/responses"
 	openaiPlatformAPIInputTokensURL = "https://api.openai.com/v1/responses/input_tokens"
@@ -273,6 +274,10 @@ type OpenAIForwardResult struct {
 	// upstream Responses WebSocket turn. Empty preserves legacy/non-WS success.
 	UpstreamTerminalEvent string
 	ResponseHeaders       http.Header
+	RequestState          string
+	ResponseState         string
+	RequestCookie         string
+	RequestHeaders        string
 	Duration              time.Duration
 	FirstTokenMs          *int
 	ClientDisconnect      bool
@@ -298,6 +303,25 @@ type OpenAIForwardResult struct {
 	wsReplayInput                []json.RawMessage
 	wsReplayInputExists          bool
 	wsAccountFailoverReplayInput []json.RawMessage
+}
+
+// serializeOpenAIHeaders preserves all header values without including a body.
+func serializeOpenAIHeaders(headers http.Header) string {
+	if len(headers) == 0 {
+		return ""
+	}
+	data, err := json.Marshal(headers)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+func serializeOpenAIResponseRequestHeaders(response *http.Response) string {
+	if response == nil || response.Request == nil {
+		return ""
+	}
+	return serializeOpenAIHeaders(response.Request.Header)
 }
 
 // SucceededForScheduling reports whether this result is an upstream success
@@ -502,6 +526,14 @@ type OpenAIGatewayService struct {
 	openAIModelsCache                   openAIModelsCache
 	openaiCompatSessionResponses        sync.Map
 	openaiCompatAnthropicDigestSessions sync.Map
+	openaiCodexTickets                  sync.Map // account id -> *openAICodexTicket
+	openaiCodexTicketMu                 sync.Mutex
+	openaiCodexTicketHistoryMu          sync.Mutex
+	openaiCodexTicketCancel             context.CancelFunc
+	openaiCodexTicketDone               chan struct{}
+	openaiCodexSessionIDs               sync.Map // account id -> string
+	openaiCodexCookieProxySequence      atomic.Uint64
+	openaiCookieRotationLocks           sync.Map // key: int64(accountID), value: *sync.Mutex
 	// openaiCodexTurnStateOrigins: 下游会话 seed → openAICodexTurnStateOrigin，
 	// 记录最近一次向该会话下发 x-codex-turn-state 的铸造账号，供出站守卫
 	// 剥离跨账号回带（openai_codex_turn_state.go）。
@@ -565,7 +597,7 @@ func NewOpenAIGatewayService(
 		openAITokenProvider:   openAITokenProvider,
 		grokTokenProvider:     grokTokenProvider,
 		toolCorrector:         NewCodexToolCorrector(),
-		openaiWSResolver:      NewOpenAIWSProtocolResolver(cfg),
+		openaiWSResolver:      NewOpenAIWSProtocolResolver(cfg, settingService),
 		resolver:              resolver,
 		channelService:        channelService,
 		balanceNotifyService:  balanceNotifyService,
@@ -584,6 +616,7 @@ func NewOpenAIGatewayService(
 		openAITokenProvider.SetAccountRuntimeBlocker(svc)
 	}
 	svc.logOpenAIWSModeBootstrap()
+	svc.startOpenAICodexTicketHarvester()
 	return svc
 }
 
@@ -750,6 +783,9 @@ func (s *OpenAIGatewayService) getOpenAIWSProtocolResolver() OpenAIWSProtocolRes
 	var cfg *config.Config
 	if s != nil {
 		cfg = s.cfg
+	}
+	if s != nil {
+		return NewOpenAIWSProtocolResolver(cfg, s.settingService)
 	}
 	return NewOpenAIWSProtocolResolver(cfg)
 }

@@ -491,6 +491,12 @@ func (_c *UsageLogCreate) SetNillableIPAddress(v *string) *UsageLogCreate {
 	return _c
 }
 
+// SetRequestDebug sets the "request_debug" field.
+func (_c *UsageLogCreate) SetRequestDebug(v map[string]string) *UsageLogCreate {
+	_c.mutation.SetRequestDebug(v)
+	return _c
+}
+
 // SetImageCount sets the "image_count" field.
 func (_c *UsageLogCreate) SetImageCount(v int) *UsageLogCreate {
 	_c.mutation.SetImageCount(v)
@@ -1090,6 +1096,10 @@ func (_c *UsageLogCreate) createSpec() (*UsageLog, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.IPAddress(); ok {
 		_spec.SetField(usagelog.FieldIPAddress, field.TypeString, value)
 		_node.IPAddress = &value
+	}
+	if value, ok := _c.mutation.RequestDebug(); ok {
+		_spec.SetField(usagelog.FieldRequestDebug, field.TypeJSON, value)
+		_node.RequestDebug = value
 	}
 	if value, ok := _c.mutation.ImageCount(); ok {
 		_spec.SetField(usagelog.FieldImageCount, field.TypeInt, value)
@@ -1899,6 +1909,24 @@ func (u *UsageLogUpsert) UpdateIPAddress() *UsageLogUpsert {
 // ClearIPAddress clears the value of the "ip_address" field.
 func (u *UsageLogUpsert) ClearIPAddress() *UsageLogUpsert {
 	u.SetNull(usagelog.FieldIPAddress)
+	return u
+}
+
+// SetRequestDebug sets the "request_debug" field.
+func (u *UsageLogUpsert) SetRequestDebug(v map[string]string) *UsageLogUpsert {
+	u.Set(usagelog.FieldRequestDebug, v)
+	return u
+}
+
+// UpdateRequestDebug sets the "request_debug" field to the value that was provided on create.
+func (u *UsageLogUpsert) UpdateRequestDebug() *UsageLogUpsert {
+	u.SetExcluded(usagelog.FieldRequestDebug)
+	return u
+}
+
+// ClearRequestDebug clears the value of the "request_debug" field.
+func (u *UsageLogUpsert) ClearRequestDebug() *UsageLogUpsert {
+	u.SetNull(usagelog.FieldRequestDebug)
 	return u
 }
 
@@ -2859,6 +2887,27 @@ func (u *UsageLogUpsertOne) UpdateIPAddress() *UsageLogUpsertOne {
 func (u *UsageLogUpsertOne) ClearIPAddress() *UsageLogUpsertOne {
 	return u.Update(func(s *UsageLogUpsert) {
 		s.ClearIPAddress()
+	})
+}
+
+// SetRequestDebug sets the "request_debug" field.
+func (u *UsageLogUpsertOne) SetRequestDebug(v map[string]string) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetRequestDebug(v)
+	})
+}
+
+// UpdateRequestDebug sets the "request_debug" field to the value that was provided on create.
+func (u *UsageLogUpsertOne) UpdateRequestDebug() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateRequestDebug()
+	})
+}
+
+// ClearRequestDebug clears the value of the "request_debug" field.
+func (u *UsageLogUpsertOne) ClearRequestDebug() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearRequestDebug()
 	})
 }
 
@@ -4015,6 +4064,27 @@ func (u *UsageLogUpsertBulk) UpdateIPAddress() *UsageLogUpsertBulk {
 func (u *UsageLogUpsertBulk) ClearIPAddress() *UsageLogUpsertBulk {
 	return u.Update(func(s *UsageLogUpsert) {
 		s.ClearIPAddress()
+	})
+}
+
+// SetRequestDebug sets the "request_debug" field.
+func (u *UsageLogUpsertBulk) SetRequestDebug(v map[string]string) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetRequestDebug(v)
+	})
+}
+
+// UpdateRequestDebug sets the "request_debug" field to the value that was provided on create.
+func (u *UsageLogUpsertBulk) UpdateRequestDebug() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateRequestDebug()
+	})
+}
+
+// ClearRequestDebug clears the value of the "request_debug" field.
+func (u *UsageLogUpsertBulk) ClearRequestDebug() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearRequestDebug()
 	})
 }
 

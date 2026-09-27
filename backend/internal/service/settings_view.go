@@ -570,6 +570,27 @@ type OverloadCooldownSettings struct {
 	CooldownMinutes int `json:"cooldown_minutes"`
 }
 
+type OpenAICodexTicketSettings struct {
+	Enabled                      bool     `json:"enabled"`
+	Model                        string   `json:"model"`
+	TTLSeconds                   int      `json:"ttl_seconds"`
+	RefreshBeforeSeconds         int      `json:"refresh_before_seconds"`
+	RetryIntervalSeconds         int      `json:"retry_interval_seconds"`
+	HarvestProxyURL              string   `json:"harvest_proxy_url"`
+	CookieHostWhitelist          []string `json:"cookie_host_whitelist"`
+	CookieHarvestProxyURLs       []string `json:"cookie_harvest_proxy_urls"`
+	OverrideTurnState            bool     `json:"override_turn_state"`
+	CookieWSConnections          int      `json:"cookie_ws_connections"`
+	CookieWSConnectionTTLSeconds int      `json:"cookie_ws_connection_ttl_seconds"`
+	CookieWSHostCooldownSeconds  int      `json:"cookie_ws_host_cooldown_seconds"`
+	RelayEnabled                 bool     `json:"relay_enabled"`
+	RelayURL                     string   `json:"relay_url"`
+	RelayKey                     string   `json:"relay_key"`
+	RelayMode                    string   `json:"relay_mode"`
+	RelayTimeoutSeconds          int      `json:"relay_timeout_seconds"`
+	RelayAllowMint               bool     `json:"relay_allow_mint"`
+}
+
 // RateLimit429CooldownSettings 429默认回避配置
 type RateLimit429CooldownSettings struct {
 	// Enabled 是否在无法解析上游重置时间时应用默认429回避

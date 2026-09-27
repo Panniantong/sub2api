@@ -95,6 +95,8 @@ type UsageLog struct {
 	UserAgent *string `json:"user_agent,omitempty"`
 	// IPAddress holds the value of the "ip_address" field.
 	IPAddress *string `json:"ip_address,omitempty"`
+	// RequestDebug holds the value of the "request_debug" field.
+	RequestDebug map[string]string `json:"request_debug,omitempty"`
 	// ImageCount holds the value of the "image_count" field.
 	ImageCount int `json:"image_count,omitempty"`
 	// ImageSize holds the value of the "image_size" field.
@@ -200,7 +202,7 @@ func (*UsageLog) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case usagelog.FieldImageSizeBreakdown:
+		case usagelog.FieldRequestDebug, usagelog.FieldImageSizeBreakdown:
 			values[i] = new([]byte)
 		case usagelog.FieldUpstreamModelMismatch, usagelog.FieldLongContextBillingApplied, usagelog.FieldStream, usagelog.FieldCacheTTLOverridden:
 			values[i] = new(sql.NullBool)
@@ -463,6 +465,14 @@ func (_m *UsageLog) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.IPAddress = new(string)
 				*_m.IPAddress = value.String
+			}
+		case usagelog.FieldRequestDebug:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field request_debug", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &_m.RequestDebug); err != nil {
+					return fmt.Errorf("unmarshal field request_debug: %w", err)
+				}
 			}
 		case usagelog.FieldImageCount:
 			if value, ok := values[i].(*sql.NullInt64); !ok {
@@ -736,6 +746,9 @@ func (_m *UsageLog) String() string {
 		builder.WriteString("ip_address=")
 		builder.WriteString(*v)
 	}
+	builder.WriteString(", ")
+	builder.WriteString("request_debug=")
+	builder.WriteString(fmt.Sprintf("%v", _m.RequestDebug))
 	builder.WriteString(", ")
 	builder.WriteString("image_count=")
 	builder.WriteString(fmt.Sprintf("%v", _m.ImageCount))

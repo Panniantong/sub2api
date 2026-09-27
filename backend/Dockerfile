@@ -16,7 +16,7 @@ COPY . .
 
 # 构建应用
 RUN VERSION_VALUE="$(./scripts/resolve-version.sh)" && \
-    go build -ldflags="-s -w -X main.Version=${VERSION_VALUE}" -o main ./cmd/server/
+    go build -tags embed -ldflags="-s -w -X main.Version=${VERSION_VALUE}" -o main ./cmd/server/
 
 # 暴露端口
 EXPOSE 8080

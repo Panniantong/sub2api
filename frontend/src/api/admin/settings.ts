@@ -1300,6 +1300,69 @@ export async function updateOverloadCooldownSettings(
   return data;
 }
 
+export interface OpenAICodexTicketSettings {
+  enabled: boolean;
+  model: string;
+  ttl_seconds: number;
+  refresh_before_seconds: number;
+  retry_interval_seconds: number;
+  harvest_proxy_url: string;
+  cookie_host_whitelist: string[];
+  cookie_harvest_proxy_urls: string[];
+  override_turn_state: boolean;
+  cookie_ws_connections: number;
+  cookie_ws_connection_ttl_seconds: number;
+  cookie_ws_host_cooldown_seconds: number;
+  relay_enabled: boolean;
+  relay_url: string;
+  relay_key: string;
+  relay_mode: "mint" | "transparent";
+  relay_timeout_seconds: number;
+  relay_allow_mint: boolean;
+}
+
+export async function getOpenAICodexTicketSettings(): Promise<OpenAICodexTicketSettings> {
+  const { data } = await apiClient.get<OpenAICodexTicketSettings>(
+    "/admin/settings/openai-codex-ticket",
+  );
+  return data;
+}
+
+export async function updateOpenAICodexTicketSettings(
+  settings: OpenAICodexTicketSettings,
+): Promise<OpenAICodexTicketSettings> {
+  const { data } = await apiClient.put<OpenAICodexTicketSettings>(
+    "/admin/settings/openai-codex-ticket",
+    settings,
+  );
+  return data;
+}
+
+export interface OpenAICodexCookieLibraryEntry {
+  host: string;
+  cookie: string;
+  payload?: Record<string, unknown>;
+  captured_at: string;
+  expires_at: string;
+}
+
+export async function getOpenAICodexCookieLibrary(): Promise<OpenAICodexCookieLibraryEntry[]> {
+  const { data } = await apiClient.get<OpenAICodexCookieLibraryEntry[]>(
+    "/admin/settings/openai-codex-cookie-library",
+  );
+  return data;
+}
+
+export async function updateOpenAICodexCookieLibrary(
+  entries: OpenAICodexCookieLibraryEntry[],
+): Promise<OpenAICodexCookieLibraryEntry[]> {
+  const { data } = await apiClient.put<OpenAICodexCookieLibraryEntry[]>(
+    "/admin/settings/openai-codex-cookie-library",
+    { entries },
+  );
+  return data;
+}
+
 // ==================== 429 Rate Limit Cooldown Settings ====================
 
 export interface RateLimit429CooldownSettings {
@@ -1581,6 +1644,10 @@ export const settingsAPI = {
   deleteAdminApiKey,
   getOverloadCooldownSettings,
   updateOverloadCooldownSettings,
+  getOpenAICodexTicketSettings,
+  updateOpenAICodexTicketSettings,
+  getOpenAICodexCookieLibrary,
+  updateOpenAICodexCookieLibrary,
   getRateLimit429CooldownSettings,
   updateRateLimit429CooldownSettings,
   getPanelRateLimitSettings,

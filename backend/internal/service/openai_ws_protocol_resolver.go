@@ -1,6 +1,9 @@
 package service
 
-import "github.com/Wei-Shaw/sub2api/internal/config"
+import (
+	"context"
+	"github.com/Wei-Shaw/sub2api/internal/config"
+)
 
 // OpenAIUpstreamTransport 表示 OpenAI 上游传输协议。
 type OpenAIUpstreamTransport string
@@ -27,12 +30,17 @@ type OpenAIWSProtocolResolver interface {
 }
 
 type defaultOpenAIWSProtocolResolver struct {
-	cfg *config.Config
+	cfg      *config.Config
+	settings *SettingService
 }
 
 // NewOpenAIWSProtocolResolver 创建默认协议决策器。
-func NewOpenAIWSProtocolResolver(cfg *config.Config) OpenAIWSProtocolResolver {
-	return &defaultOpenAIWSProtocolResolver{cfg: cfg}
+func NewOpenAIWSProtocolResolver(cfg *config.Config, settings ...*SettingService) OpenAIWSProtocolResolver {
+	r := &defaultOpenAIWSProtocolResolver{cfg: cfg}
+	if len(settings) > 0 {
+		r.settings = settings[0]
+	}
+	return r
 }
 
 func (r *defaultOpenAIWSProtocolResolver) Resolve(account *Account) OpenAIWSProtocolDecision {
@@ -41,6 +49,12 @@ func (r *defaultOpenAIWSProtocolResolver) Resolve(account *Account) OpenAIWSProt
 	}
 	if !account.IsOpenAI() {
 		return openAIWSHTTPDecision("platform_not_openai")
+	}
+	if r != nil && r.settings != nil && openAICodexCookieHostFromAccount(account) != "" {
+		settings, err := r.settings.GetOpenAICookieSettings(context.Background())
+		if err != nil || !settings.WSEnabled {
+			return openAIWSHTTPDecision("cookie_ws_disabled")
+		}
 	}
 	if account.IsOpenAIWSForceHTTPEnabled() {
 		return openAIWSHTTPDecision("account_force_http")
@@ -66,6 +80,12 @@ func (r *defaultOpenAIWSProtocolResolver) Resolve(account *Account) OpenAIWSProt
 		}
 	} else {
 		return openAIWSHTTPDecision("unknown_auth_type")
+	}
+	// A host-bound Cookie account is an explicit operator choice to use the
+	// account-level WebSocket pool. It bypasses per-account WS opt-in flags while
+	// retaining the global feature and force-HTTP safety switches above.
+	if openAICodexCookieHostFromAccount(account) != "" && wsCfg.ResponsesWebsocketsV2 && account.Concurrency > 0 {
+		return OpenAIWSProtocolDecision{Transport: OpenAIUpstreamTransportResponsesWebsocketV2, Reason: "cookie_bound_account"}
 	}
 	if wsCfg.ModeRouterV2Enabled {
 		mode := account.ResolveOpenAIResponsesWebSocketV2Mode(wsCfg.IngressModeDefault)

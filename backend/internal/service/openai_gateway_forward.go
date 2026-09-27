@@ -17,6 +17,10 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+func shouldUseOpenAIExcelFullMode(account *Account, transport OpenAIUpstreamTransport) bool {
+	return account != nil && account.IsOpenAIExcelFullMode() && transport == OpenAIUpstreamTransportHTTPSSE
+}
+
 // Forward forwards request to OpenAI API
 func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
 	beginUpstreamResponseModelObservation(c)
@@ -109,9 +113,16 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 	}
 	wsDecision := s.getOpenAIWSProtocolResolver().Resolve(account)
-	// 仅允许 WS 入站请求走 WS 上游，避免出现 HTTP -> WS 协议混用。
-	wsDecision = resolveOpenAIWSDecisionByClientTransport(wsDecision, GetOpenAIClientTransport(c))
+	// Cookie-bound accounts use the account-level upstream WS pool even when the
+	// client entered through HTTP/SSE. Other accounts retain the protocol guard.
+	if openAICodexCookieHostFromAccount(account) == "" {
+		wsDecision = resolveOpenAIWSDecisionByClientTransport(wsDecision, GetOpenAIClientTransport(c))
+	}
 	passthroughEnabled := account.IsOpenAIPassthroughEnabled()
+	// Excel/Basispoints is a transport fallback: native Responses WS remains
+	// authoritative when selected, otherwise Excel mode must route through the
+	// passthrough request builder even when ordinary passthrough is disabled.
+	passthroughRouteEnabled := passthroughEnabled || shouldUseOpenAIExcelFullMode(account, wsDecision.Transport)
 	compactPath := isOpenAIResponsesCompactPath(c)
 	if shouldFlattenOpenAIResponsesNamespaces(account, wsDecision.Transport, passthroughEnabled, compactPath) {
 		body, err = flattenOpenAIResponsesNamespaces(c, body)
@@ -260,7 +271,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 		return nil, errors.New("openai ws v1 is temporarily unsupported; use ws v2")
 	}
-	if passthroughEnabled {
+	if passthroughRouteEnabled {
 		attemptImageIntentInvalidated := false
 		if isCodexCLI && codexImageGenerationExplicitToolPolicy == codexImageGenerationExplicitToolPolicyStrip {
 			strippedBody, changed, stripErr := stripOpenAIImageGenerationToolsFromRawPayload(body)
@@ -519,8 +530,11 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			markDecodedModified()
 		} else {
 			codexResult = applyCodexOAuthTransformWithOptions(decoded, codexOAuthTransformOptions{
-				IsCodexCLI:                          isCodexCLI,
-				IsCompact:                           isCompactRequest,
+				IsCodexCLI: isCodexCLI,
+				IsCompact:  isCompactRequest,
+				// WS continuation refers to call IDs already held by the upstream
+				// connection. Rewriting call_* to fc_*/ctc_* breaks that reference.
+				PreserveToolCallIDs:                 wsDecision.Transport == OpenAIUpstreamTransportResponsesWebsocketV2,
 				OmitPromotedSystemMessagesFromInput: omitPromotedSystemMessages,
 			})
 		}
@@ -907,6 +921,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				&agentTaskRecoveryTried,
 			)
 			if wsErr == nil {
+				break
+			}
+			if errors.Is(wsErr, errCookieWSPoolUnavailable) {
 				break
 			}
 			if c != nil && c.Writer != nil && c.Writer.Written() {
@@ -1307,6 +1324,12 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			usage = &OpenAIUsage{}
 		}
 
+		requestState := ""
+		requestCookie := ""
+		if resp.Request != nil && resp.Request.Header != nil {
+			requestState = strings.TrimSpace(resp.Request.Header.Get(openAICodexTurnStateHeader))
+			requestCookie = strings.TrimSpace(resp.Request.Header.Get("Cookie"))
+		}
 		forwardResult := &OpenAIForwardResult{
 			RequestID:                     resp.Header.Get("x-request-id"),
 			UpstreamHeaders:               resp.Header,
@@ -1324,6 +1347,10 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			OpenAIWSMode:                  false,
 			Duration:                      time.Since(startTime),
 			FirstTokenMs:                  firstTokenMs,
+			RequestState:                  requestState,
+			ResponseState:                 strings.TrimSpace(resp.Header.Get(openAICodexTurnStateHeader)),
+			RequestCookie:                 requestCookie,
+			RequestHeaders:                serializeOpenAIResponseRequestHeaders(resp),
 		}
 		if imageCount > 0 {
 			forwardResult.ImageCount = imageCount
@@ -1513,6 +1540,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	// 账号级请求头覆写（仅 openai api_key 账号启用时生效；OAuth 路径 no-op）
 	account.ApplyHeaderOverrides(req.Header)
 	applyOpenCodeSessionHeader(c, account, targetURL, req.Header, body, openCodeSessionHintBody(promptCacheKey))
+	s.applyOpenAIAccountBoundState(account, req.Header)
 	// x-codex-beta-features：按真实 Codex 的会话级行为补注（在账号级覆写之后，
 	// 保证不被覆盖丢失）。
 	applyOpenAICodexBetaFeatures(c, account, req.Header)

@@ -50,12 +50,18 @@ const (
 
 // TestEvent represents a SSE event for account testing
 type TestEvent struct {
-	Type     string `json:"type"`
-	Text     string `json:"text,omitempty"`
-	Model    string `json:"model,omitempty"`
-	Status   string `json:"status,omitempty"`
-	Code     string `json:"code,omitempty"`
-	ImageURL string `json:"image_url,omitempty"`
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
+	// Intelligence-test metadata is intentionally optional so existing account
+	// test consumers keep receiving the same event shape.
+	Case       string `json:"case,omitempty"`
+	Prompt     string `json:"prompt,omitempty"`
+	CookieHost string `json:"cookie_host,omitempty"`
+	Timestamp  string `json:"timestamp,omitempty"`
+	Model      string `json:"model,omitempty"`
+	Status     string `json:"status,omitempty"`
+	Code       string `json:"code,omitempty"`
+	ImageURL   string `json:"image_url,omitempty"`
 	// AudioURL / VideoURL are data: or https URLs for in-browser media players.
 	AudioURL string `json:"audio_url,omitempty"`
 	VideoURL string `json:"video_url,omitempty"`
@@ -175,6 +181,22 @@ func (s *AccountTestService) SetOpenAIGatewayService(gateway *OpenAIGatewayServi
 	if s != nil {
 		s.openaiGatewayService = gateway
 	}
+}
+
+func (s *AccountTestService) applyOpenAIAccountBoundRequestState(account *Account, headers http.Header) {
+	if account == nil || headers == nil || !account.IsOpenAIOAuthLike() {
+		return
+	}
+	if s.openaiGatewayService != nil {
+		s.openaiGatewayService.applyOpenAIAccountBoundState(account, headers)
+		return
+	}
+	applyOpenAIAccountSessionID(account, headers)
+}
+
+func (s *AccountTestService) captureOpenAIAccountTestResponse(account *Account, response *http.Response) {
+	// Account-bound ticket, Cookie and session_id are updated only by the
+	// dedicated clean harvesting request. Connection tests are read-only.
 }
 
 // FetchOpenAIAccountModels uses the shared cached discovery path for the test picker.
@@ -900,6 +922,9 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 
 	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
 	credentialAccount.ApplyHeaderOverrides(req.Header)
+	// Connectivity tests are real forwarded requests, so account-bound state
+	// must win over any test/client header just like the gateway path.
+	s.applyOpenAIAccountBoundRequestState(credentialAccount, req.Header)
 
 	// Get proxy URL
 	proxyURL := ""
@@ -912,6 +937,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Request failed: %s", err.Error()))
 	}
 	defer func() { _ = resp.Body.Close() }()
+	s.captureOpenAIAccountTestResponse(credentialAccount, resp)
 
 	if isOAuth && s.accountRepo != nil {
 		if updates, err := extractOpenAICodexProbeUpdates(resp); err == nil && len(updates) > 0 {
@@ -943,7 +969,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	}
 
 	// Process SSE stream
-	return s.processOpenAIStream(c, resp.Body)
+	return s.processOpenAIStreamWithResponse(c, resp.Body, credentialAccount, resp)
 }
 
 // testGrokAccountConnection routes Grok admin connectivity tests by explicit mode first,
@@ -2239,6 +2265,7 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 
 	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
 	account.ApplyHeaderOverrides(req.Header)
+	s.applyOpenAIAccountBoundRequestState(credentialAccount, req.Header)
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
@@ -2255,6 +2282,7 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Request failed: %s", err.Error()))
 	}
 	defer func() { _ = resp.Body.Close() }()
+	s.captureOpenAIAccountTestResponse(credentialAccount, resp)
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	body = redactAgentIdentitySensitiveBodyForAccount(ctx, s.accountRepo, credentialAccount, body)
@@ -2903,8 +2931,13 @@ func (s *AccountTestService) processOpenAIChatCompletionsStream(c *gin.Context, 
 
 // processOpenAIStream processes the SSE stream from OpenAI Responses API
 func (s *AccountTestService) processOpenAIStream(c *gin.Context, body io.Reader) error {
+	return s.processOpenAIStreamWithResponse(c, body, nil, nil)
+}
+
+func (s *AccountTestService) processOpenAIStreamWithResponse(c *gin.Context, body io.Reader, account *Account, response *http.Response) error {
 	reader := bufio.NewReader(body)
 	seenCompleted := false
+	capturedSessionID := ""
 
 	for {
 		line, err := reader.ReadString('\n')
@@ -2936,6 +2969,17 @@ func (s *AccountTestService) processOpenAIStream(c *gin.Context, body io.Reader)
 		var data map[string]any
 		if err := json.Unmarshal([]byte(jsonStr), &data); err != nil {
 			continue
+		}
+		if s.openaiGatewayService != nil && account != nil && response != nil {
+			sessionID := strings.TrimSpace(gjson.Get(jsonStr, "session_id").String())
+			if sessionID == "" {
+				sessionID = strings.TrimSpace(gjson.Get(jsonStr, "response.session_id").String())
+			}
+			if sessionID != "" && sessionID != capturedSessionID {
+				capturedSessionID = sessionID
+				response.Header.Set("session_id", sessionID)
+				s.captureOpenAIAccountTestResponse(account, response)
+			}
 		}
 
 		eventType, _ := data["type"].(string)
