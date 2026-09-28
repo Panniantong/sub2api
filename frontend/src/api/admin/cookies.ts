@@ -3,6 +3,10 @@ import type { OpenAICodexCookieLibraryEntry } from './settings'
 import type { PaginatedResponse } from '@/types'
 
 export interface CookieSettings {
+  remote_sync_enabled?: boolean
+  remote_sync_url?: string
+  remote_sync_admin_key?: string
+  remote_sync_interval_seconds?: number
   degraded_group_id?: number
   degraded_group_name?: string
   harvest_policy?: CookieHarvestPolicy
@@ -52,7 +56,7 @@ export interface CookieLog {
   task?: string
   target_host?: string
   id: string
-  kind?: 'validation' | 'scheduler' | string
+  kind?: 'validation' | 'scheduler' | 'remote_sync' | string
   attempt_id?: string
   stage?: string
   account_id: number

@@ -16,6 +16,11 @@ const cookieLogsKey = "openai_cookie_acquisition_logs"
 const intelligenceMonitorSettingKey = "openai_intelligence_monitor"
 
 type OpenAICookieSettings struct {
+	RemoteSyncEnabled         bool   `json:"remote_sync_enabled"`
+	RemoteSyncURL             string `json:"remote_sync_url"`
+	RemoteSyncAdminKey        string `json:"remote_sync_admin_key"`
+	RemoteSyncIntervalSeconds int    `json:"remote_sync_interval_seconds"`
+
 	// Runtime-only reader; never persist candidate availability in account state.
 	rotationCandidates func() ([]OpenAICodexCookieLibraryEntry, error)
 	DegradedGroupID    int64                `json:"degraded_group_id"`
@@ -55,6 +60,29 @@ type OpenAICookieSettings struct {
 	CookieHostRotationBeforeSeconds  int      `json:"cookie_host_rotation_before_seconds"`
 	// Runtime-only fan-out marker for explicit collector accounts.
 	autoConfigureOtherAccounts bool `json:"-"`
+}
+
+func validateCookieRemoteSync(v *OpenAICookieSettings) error {
+	if !v.RemoteSyncEnabled {
+		return nil
+	}
+	if strings.TrimSpace(v.RemoteSyncURL) == "" {
+		return fmt.Errorf("remote_sync_url is required when remote sync is enabled")
+	}
+	if strings.TrimSpace(v.RemoteSyncAdminKey) == "" {
+		return fmt.Errorf("remote_sync_admin_key is required when remote sync is enabled")
+	}
+	u, err := url.Parse(strings.TrimSpace(v.RemoteSyncURL))
+	if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("remote_sync_url must be an HTTP(S) server URL without credentials, query or fragment")
+	}
+	if v.RemoteSyncIntervalSeconds == 0 {
+		return nil
+	}
+	if v.RemoteSyncIntervalSeconds < 10 || v.RemoteSyncIntervalSeconds > 86400 {
+		return fmt.Errorf("remote_sync_interval_seconds must be between 10 and 86400")
+	}
+	return nil
 }
 
 type cachedOpenAICookieSettings struct {
@@ -177,6 +205,9 @@ func (s *SettingService) SetOpenAICookieSettings(ctx context.Context, value *Ope
 			}
 		}
 		value.HostMonitor = old.HostMonitor
+		if value.RemoteSyncAdminKey == "" {
+			value.RemoteSyncAdminKey = old.RemoteSyncAdminKey
+		}
 	}
 	return s.setOpenAICookieSettings(ctx, value)
 }
@@ -209,6 +240,9 @@ func (s *SettingService) setOpenAICookieSettings(ctx context.Context, value *Ope
 			return fmt.Errorf("降级分组必须是启用的 OpenAI 分组")
 		}
 		value.DegradedGroupName = group.Name
+	}
+	if err := validateCookieRemoteSync(value); err != nil {
+		return err
 	}
 	value.Model = strings.TrimSpace(value.Model)
 	if value.Model == "" || len(value.Model) > 128 {

@@ -83,6 +83,14 @@
       <form v-if="tab === 'settings'" class="card space-y-5 p-6" @submit.prevent="save">
         <p v-if="!settingsLoaded" class="text-sm text-gray-500">配置尚未加载，点击刷新重试。</p>
         <fieldset :disabled="!settingsLoaded || saving" class="space-y-5">
+          <section class="space-y-3 rounded-lg border p-4">
+            <label class="flex items-center gap-2"><input v-model="form.remote_sync_enabled" type="checkbox" />允许远程获取 Cookie</label>
+            <p class="text-xs text-gray-500">按 Host 合并远程 Cookie，采集时间较新的记录优先，时间相同保留本地。同步独立于本地采集开关运行。</p>
+            <label class="block text-sm">远程服务器地址<input v-model="form.remote_sync_url" class="input mt-1 w-full" placeholder="https://sub2api.example.com" /></label>
+            <label class="block text-sm">远程 Admin Key<input v-model="form.remote_sync_admin_key" type="password" autocomplete="new-password" class="input mt-1 w-full" placeholder="输入管理员 API Key；留空保留已保存的 Key" /></label>
+            <label class="block text-sm">同步频率（秒）<input v-model.number="form.remote_sync_interval_seconds" type="number" min="10" max="86400" class="input mt-1 w-full" placeholder="默认 60 秒" /></label>
+            <p class="text-xs text-gray-500">保存后自动同步，在“同步日志”查看结果；失败时保留本地 Cookie。</p>
+          </section>
           <section class="space-y-5 rounded border border-gray-200 p-4 dark:border-dark-700">
             <div>
               <h3 class="font-semibold">运行与模型</h3>
@@ -400,7 +408,7 @@ const validationStageLabel = (stage?: string) => validationStageLabels[stage || 
 const remaining = (value: string) => Math.max(0, Math.floor((new Date(value).getTime() - now.value) / 1000))
 const formatTime = (value: string) => value ? new Date(value).toLocaleString() : '—'
 const formatClock = (value: string) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '----/--/-- --:--:--'
-const isSchedulerLog = (log: cookies.CookieLog) => log.kind === 'scheduler' || (log.account_id <= 0 && !log.status_code)
+const isSchedulerLog = (log: cookies.CookieLog) => log.kind === 'scheduler' || log.kind === 'remote_sync' || (log.account_id <= 0 && !log.status_code)
 const liveAccountLabel = (log: cookies.CookieLog) => isSchedulerLog(log) ? '系统调度' : `账号 ${log.account_name || '—'} #${log.account_id}`
 const liveAcquisitionText = (log: cookies.CookieLog) => {
   if (isSchedulerLog(log)) return `${liveAccountLabel(log)} · ${log.message}`

@@ -14,7 +14,9 @@ func (h *SettingHandler) GetCookieSettings(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Success(c, value)
+	public := *value
+	public.RemoteSyncAdminKey = ""
+	response.Success(c, public)
 }
 
 func (h *SettingHandler) UpdateCookieSettings(c *gin.Context) {
@@ -27,6 +29,7 @@ func (h *SettingHandler) UpdateCookieSettings(c *gin.Context) {
 		response.BadRequest(c, err.Error())
 		return
 	}
+	value.RemoteSyncAdminKey = ""
 	response.Success(c, value)
 }
 
