@@ -35,29 +35,30 @@ type OpenAICookieSettings struct {
 	IntervalSeconds    int                      `json:"interval_seconds"`
 	// AccountID is retained for compatibility with older single-account
 	// settings. AccountIDs is the authoritative multi-select value.
-	AccountID                        int64    `json:"account_id,omitempty"`
-	AccountIDs                       []int64  `json:"account_ids,omitempty"`
-	GroupIDs                         []int64  `json:"group_ids,omitempty"`
-	RotationAccountIDs               []int64  `json:"rotation_account_ids,omitempty"`
-	RotationGroupIDs                 []int64  `json:"rotation_group_ids,omitempty"`
-	CookieHostSchedulingGuardEnabled bool     `json:"cookie_host_scheduling_guard_enabled"`
-	ProxyURLs                        []string `json:"proxy_urls"`
-	ManagedProxyIDs                  []int64  `json:"managed_proxy_ids,omitempty"`
-	UseAllManagedProxies             bool     `json:"use_all_managed_proxies"`
-	CookieProxyScheduleMode          string   `json:"cookie_proxy_schedule_mode"`
-	CookieHarvestConcurrency         int      `json:"cookie_harvest_concurrency"`
-	CookieProxyLearningAttempts      int      `json:"cookie_proxy_learning_attempts"`
-	DynamicProxyFillHostCookie       bool     `json:"dynamic_proxy_fill_host_cookie"`
-	HostWhitelist                    []string `json:"host_whitelist"`
-	AutoValidateHost                 bool     `json:"auto_validate_host"`
-	WSEnabled                        bool     `json:"ws_enabled"`
-	WSConnections                    int      `json:"ws_connections"`
-	WSTTLSeconds                     int      `json:"ws_ttl_seconds"`
-	WSHostCooldownSeconds            int      `json:"ws_host_cooldown_seconds"`
-	CookieRefreshBeforeSeconds       int      `json:"cookie_refresh_before_seconds"`
-	CookieRotationEnabled            bool     `json:"cookie_rotation_enabled"`
-	CookieHostBindingSeconds         int      `json:"cookie_host_binding_seconds"`
-	CookieHostRotationBeforeSeconds  int      `json:"cookie_host_rotation_before_seconds"`
+	AccountID                                  int64    `json:"account_id,omitempty"`
+	AccountIDs                                 []int64  `json:"account_ids,omitempty"`
+	GroupIDs                                   []int64  `json:"group_ids,omitempty"`
+	RotationAccountIDs                         []int64  `json:"rotation_account_ids,omitempty"`
+	RotationGroupIDs                           []int64  `json:"rotation_group_ids,omitempty"`
+	CookieHostSchedulingGuardEnabled           bool     `json:"cookie_host_scheduling_guard_enabled"`
+	ProxyURLs                                  []string `json:"proxy_urls"`
+	ManagedProxyIDs                            []int64  `json:"managed_proxy_ids,omitempty"`
+	UseAllManagedProxies                       bool     `json:"use_all_managed_proxies"`
+	CookieProxyScheduleMode                    string   `json:"cookie_proxy_schedule_mode"`
+	CookieHarvestConcurrency                   int      `json:"cookie_harvest_concurrency"`
+	CookieProxyLearningAttempts                int      `json:"cookie_proxy_learning_attempts"`
+	DynamicProxyFillHostCookie                 bool     `json:"dynamic_proxy_fill_host_cookie"`
+	HostWhitelist                              []string `json:"host_whitelist"`
+	AutoValidateHost                           bool     `json:"auto_validate_host"`
+	WSEnabled                                  bool     `json:"ws_enabled"`
+	WSConnections                              int      `json:"ws_connections"`
+	WSTTLSeconds                               int      `json:"ws_ttl_seconds"`
+	WSHostCooldownSeconds                      int      `json:"ws_host_cooldown_seconds"`
+	CookieHostValidationFailureCooldownSeconds int      `json:"cookie_host_validation_failure_cooldown_seconds"`
+	CookieRefreshBeforeSeconds                 int      `json:"cookie_refresh_before_seconds"`
+	CookieRotationEnabled                      bool     `json:"cookie_rotation_enabled"`
+	CookieHostBindingSeconds                   int      `json:"cookie_host_binding_seconds"`
+	CookieHostRotationBeforeSeconds            int      `json:"cookie_host_rotation_before_seconds"`
 	// Runtime-only fan-out marker for explicit collector accounts.
 	autoConfigureOtherAccounts bool `json:"-"`
 }
@@ -116,7 +117,7 @@ var cookieSettingsMu sync.Mutex
 func (s *SettingService) GetOpenAICookieSettings(ctx context.Context) (*OpenAICookieSettings, error) {
 	cookieSettingsMu.Lock()
 	defer cookieSettingsMu.Unlock()
-	value := OpenAICookieSettings{Model: openAICodexTicketHarvestModel, IntervalSeconds: 5, CookieProxyScheduleMode: "round_robin", CookieHarvestConcurrency: 1, CookieProxyLearningAttempts: openAICookieProxyDiscoveryRequests, WSConnections: 10, WSTTLSeconds: 3600, WSHostCooldownSeconds: 14400, CookieRefreshBeforeSeconds: 600, CookieHostBindingSeconds: 240, CookieHostRotationBeforeSeconds: 10, ProxyURLs: []string{}, HostWhitelist: []string{}}
+	value := OpenAICookieSettings{Model: openAICodexTicketHarvestModel, IntervalSeconds: 5, CookieProxyScheduleMode: "round_robin", CookieHarvestConcurrency: 1, CookieProxyLearningAttempts: openAICookieProxyDiscoveryRequests, WSConnections: 10, WSTTLSeconds: 3600, WSHostCooldownSeconds: 14400, CookieHostValidationFailureCooldownSeconds: 120, CookieRefreshBeforeSeconds: 600, CookieHostBindingSeconds: 240, CookieHostRotationBeforeSeconds: 10, ProxyURLs: []string{}, HostWhitelist: []string{}}
 	if s == nil || s.settingRepo == nil {
 		return &value, nil
 	}
@@ -155,6 +156,9 @@ func (s *SettingService) GetOpenAICookieSettings(ctx context.Context) (*OpenAICo
 		}
 	} else if err := json.Unmarshal([]byte(raw), &value); err != nil {
 		return nil, fmt.Errorf("decode cookie settings: %w", err)
+	}
+	if value.CookieHostValidationFailureCooldownSeconds <= 0 {
+		value.CookieHostValidationFailureCooldownSeconds = 120
 	}
 	if value.CookieHostBindingSeconds <= 0 {
 		value.CookieHostBindingSeconds = 240
@@ -312,6 +316,12 @@ func (s *SettingService) setOpenAICookieSettings(ctx context.Context, value *Ope
 	}
 	if value.WSHostCooldownSeconds < 0 || value.WSHostCooldownSeconds > 604800 {
 		return fmt.Errorf("invalid host cooldown")
+	}
+	if value.CookieHostValidationFailureCooldownSeconds == 0 {
+		value.CookieHostValidationFailureCooldownSeconds = 120
+	}
+	if value.CookieHostValidationFailureCooldownSeconds < 1 || value.CookieHostValidationFailureCooldownSeconds > 604800 {
+		return fmt.Errorf("cookie_host_validation_failure_cooldown_seconds must be between 1 and 604800")
 	}
 	if value.CookieRefreshBeforeSeconds < 0 || value.CookieRefreshBeforeSeconds > 86400 {
 		return fmt.Errorf("cookie_refresh_before_seconds must be between 0 and 86400")

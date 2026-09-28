@@ -32,6 +32,7 @@ export interface CookieSettings {
   ws_connections: number
   ws_ttl_seconds: number
   ws_host_cooldown_seconds: number
+  cookie_host_validation_failure_cooldown_seconds: number
   cookie_refresh_before_seconds: number
   cookie_rotation_enabled: boolean
   cookie_host_binding_seconds: number

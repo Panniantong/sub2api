@@ -838,7 +838,13 @@ func (s *OpenAIGatewayService) validateOpenAICodexCookieHost(ctx context.Context
 		return "error", err.Error(), 0
 	}
 	defer resp.Body.Close()
-	responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	responseBody, readErr := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
+	if readErr != nil {
+		return "read_error", readErr.Error(), resp.StatusCode
+	}
+	if len(responseBody) > 1<<20 {
+		return "response_too_large", truncateOpenAICodexValidationResponse(string(responseBody)), resp.StatusCode
+	}
 	decision := openAICodexCookieValidationDecision(responseBody)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "error", string(responseBody), resp.StatusCode
@@ -863,15 +869,20 @@ func openAICodexCookieValidationRequestBody(model string) ([]byte, error) {
 
 func openAICodexCookieValidationDecision(body []byte) string {
 	var output strings.Builder
-	appendText := func(value string) {
-		if strings.TrimSpace(value) != "" {
-			output.WriteString(value)
-		}
-	}
+	failed := false
+	appendText := func(value string) { output.WriteString(value) }
 	var readOutput func(any)
 	readOutput = func(value any) {
 		obj, ok := value.(map[string]any)
 		if !ok {
+			return
+		}
+		if eventType, _ := obj["type"].(string); eventType == "error" || eventType == "response.failed" || eventType == "response.incomplete" {
+			failed = true
+			return
+		}
+		if status, _ := obj["status"].(string); status == "failed" || status == "incomplete" {
+			failed = true
 			return
 		}
 		if text, _ := obj["output_text"].(string); text != "" {
@@ -885,7 +896,13 @@ func openAICodexCookieValidationDecision(body []byte) string {
 		}
 		if eventType, _ := obj["type"].(string); eventType == "response.completed" || eventType == "response.done" {
 			if response, ok := obj["response"]; ok {
+				// Completed/done carries a full snapshot, not another delta.
+				partial := output.String()
+				output.Reset()
 				readOutput(response)
+				if output.Len() == 0 {
+					output.WriteString(partial)
+				}
 			}
 			return
 		}
@@ -943,6 +960,9 @@ func openAICodexCookieValidationDecision(body []byte) string {
 		if json.Unmarshal([]byte(line), &decoded) == nil {
 			readOutput(decoded)
 		}
+	}
+	if failed || scanner.Err() != nil {
+		return ""
 	}
 	normalized := strings.ToLower(strings.TrimSpace(output.String()))
 	normalized = strings.Trim(normalized, ".!?\\\"' `\r\n")

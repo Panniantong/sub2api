@@ -176,7 +176,8 @@
             <div class="grid gap-4 md:grid-cols-3">
               <label class="space-y-2"><span class="block text-sm">每个账号 WS 连接数</span><input v-model.number="form.ws_connections" required type="number" min="1" max="64" class="input w-full" /></label>
               <label class="space-y-2"><span class="block text-sm">WS 有效期（秒）</span><input v-model.number="form.ws_ttl_seconds" required type="number" min="60" max="3600" class="input w-full" /><span class="block text-xs text-gray-500">最长 3600 秒，连接池到期后需重新建立。</span></label>
-              <label class="space-y-2"><span class="block text-sm">账号 Host 冷静期（秒）</span><input v-model.number="form.ws_host_cooldown_seconds" required type="number" min="0" max="604800" class="input w-full" /><span class="block text-xs text-gray-500">验证失败或被轮换下来的 Host 再次尝试前等待时间。</span></label>
+              <label class="space-y-2"><span class="block text-sm">账号 Host 冷静期（秒）</span><input v-model.number="form.ws_host_cooldown_seconds" required type="number" min="0" max="604800" class="input w-full" /><span class="block text-xs text-gray-500">明确返回 no 或被轮换下来的 Host 再次尝试前等待时间。</span></label>
+              <label class="space-y-2"><span class="block text-sm">验证异常冷却（秒）</span><input v-model.number="form.cookie_host_validation_failure_cooldown_seconds" required type="number" min="1" max="604800" class="input w-full" /><span class="block text-xs text-gray-500">网络失败、超时、HTTP 错误或响应不是 yes/no 时的冷却时间，默认 120 秒。</span></label>
             </div>
           </section>
           <button class="btn btn-primary" type="submit">{{ saving ? '保存中…' : '保存配置' }}</button>
@@ -280,7 +281,7 @@ const notice = ref('')
 const now = ref(Date.now())
 const detail = ref<string | null>(null)
 const detailTitle = ref('')
-const form = reactive<cookies.CookieSettings>({ harvest_policy: cookies.defaultHarvestPolicy(), enabled: false, model: 'gpt-6-astra', interval_seconds: 5, account_ids: [], group_ids: [], rotation_account_ids: [], rotation_group_ids: [], cookie_host_scheduling_guard_enabled: false, proxy_urls: [], managed_proxy_ids: [], use_all_managed_proxies: false, cookie_proxy_schedule_mode: 'round_robin', cookie_harvest_concurrency: 1, cookie_proxy_learning_attempts: 100, dynamic_proxy_fill_host_cookie: false, host_whitelist: [], auto_validate_host: false, ws_enabled: false, ws_connections: 10, ws_ttl_seconds: 3600, ws_host_cooldown_seconds: 14400, cookie_refresh_before_seconds: 600, cookie_rotation_enabled: false, cookie_host_binding_seconds: 240, cookie_host_rotation_before_seconds: 10 })
+const form = reactive<cookies.CookieSettings>({ harvest_policy: cookies.defaultHarvestPolicy(), enabled: false, model: 'gpt-6-astra', interval_seconds: 5, account_ids: [], group_ids: [], rotation_account_ids: [], rotation_group_ids: [], cookie_host_scheduling_guard_enabled: false, proxy_urls: [], managed_proxy_ids: [], use_all_managed_proxies: false, cookie_proxy_schedule_mode: 'round_robin', cookie_harvest_concurrency: 1, cookie_proxy_learning_attempts: 100, dynamic_proxy_fill_host_cookie: false, host_whitelist: [], auto_validate_host: false, ws_enabled: false, ws_connections: 10, ws_ttl_seconds: 3600, ws_host_cooldown_seconds: 14400, cookie_host_validation_failure_cooldown_seconds: 120, cookie_refresh_before_seconds: 600, cookie_rotation_enabled: false, cookie_host_binding_seconds: 240, cookie_host_rotation_before_seconds: 10 })
 const policyTotal = computed(() => { const p = form.harvest_policy; return p ? p.explore_percent + p.fill_percent + p.refresh_percent : 100 })
 const harvestRunning = ref<Record<string, number>>({})
 const dashboard = ref<cookies.CookieDashboard | null>(null)

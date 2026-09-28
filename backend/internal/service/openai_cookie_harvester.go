@@ -272,7 +272,7 @@ func (s *OpenAIGatewayService) validateBindAndBuildOpenAICookieHost(ctx context.
 			}
 			base.BindingStatus = "token_failed"
 			base.ValidationResult = "error"
-			s.appendOpenAICookieValidationStage(ctx, base, "validation_failed", "无法发送验证提示词："+err.Error())
+			s.cooldownCookieValidationFailure(ctx, account, settings, base, "无法发送验证提示词："+err.Error())
 			return "error", err
 		}
 	}
@@ -293,9 +293,8 @@ func (s *OpenAIGatewayService) validateBindAndBuildOpenAICookieHost(ctx context.
 	// The account/Host binding clock starts when the validation request is
 	// actually initiated, rather than when the temporary candidate is attached.
 	validationStartedAt := time.Now()
-	// Network/upstream failures are retried twice. A definitive "no" is not
-	// retried because it is a valid Host capability result and should enter
-	// cooldown immediately.
+	// Retry transient failures, then cool the Host so repeated scheduler passes
+	// do not immediately send another request to the same failing endpoint.
 	result, responseBody, statusCode := "error", "", 0
 	for attempt := 0; attempt < 3; attempt++ {
 		result, responseBody, statusCode = s.validateOpenAICodexCookieHost(ctx, &candidate, token, cookie, "", model)
@@ -306,7 +305,7 @@ func (s *OpenAIGatewayService) validateBindAndBuildOpenAICookieHost(ctx context.
 		retryLog.ValidationResult = result
 		retryLog.StatusCode = statusCode
 		retryLog.ValidationResponse = truncateOpenAICodexValidationResponse(responseBody)
-		s.appendOpenAICookieValidationStage(ctx, retryLog, "validation_retry", fmt.Sprintf("验证请求异常，第 %d 次重试", attempt+1))
+		s.appendOpenAICookieValidationStage(ctx, retryLog, "validation_retry", fmt.Sprintf("%s，第 %d 次重试", cookieValidationFailureSummary(result, statusCode), attempt+1))
 	}
 	base.StatusCode = statusCode
 	base.ValidationResult = result
@@ -327,8 +326,7 @@ func (s *OpenAIGatewayService) validateBindAndBuildOpenAICookieHost(ctx context.
 		return result, nil
 	default:
 		base.Success = false
-		base.BindingStatus = "validation_failed"
-		s.appendOpenAICookieValidationStage(ctx, base, "validation_failed", "验证请求失败或响应不是 yes/no")
+		s.cooldownCookieValidationFailure(ctx, account, settings, base, cookieValidationFailureSummary(result, statusCode)+"；详情见 validation_response")
 		return result, nil
 	}
 
@@ -433,7 +431,7 @@ func (s *OpenAIGatewayService) LogOpenAICookieHostBinding(ctx context.Context, a
 func (s *OpenAIGatewayService) runOpenAICookieHarvester(ctx context.Context) {
 	defer s.cookieHarvestRuntime.wg.Wait()
 	go s.runCookieHostMonitor(ctx)
- go s.settingService.runCookieRemoteSync(ctx)
+	go s.settingService.runCookieRemoteSync(ctx)
 	// Restore saved bindings once at startup, independently of inference.
 	if accounts, err := s.accountRepo.ListByPlatform(ctx, PlatformOpenAI); err == nil {
 		for i := range accounts {

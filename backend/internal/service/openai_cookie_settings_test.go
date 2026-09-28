@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -333,4 +334,25 @@ func TestCookieValidationDecisionUsesAssistantOutputOnly(t *testing.T) {
 	// A yes/no in metadata or the echoed prompt is not an assistant answer.
 	require.Empty(t, openAICodexCookieValidationDecision([]byte("data: {\"type\":\"response.completed\",\"response\":{},\"metadata\":{\"note\":\"yes\"}}\n")))
 	require.Empty(t, openAICodexCookieValidationDecision([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"yes, definitely\"}\n")))
+}
+
+func TestCookieValidationDecisionDoesNotDuplicateStreamSnapshots(t *testing.T) {
+	for _, answer := range []string{"yes", "no"} {
+		t.Run(answer, func(t *testing.T) {
+			final := fmt.Sprintf(`{"output":[{"type":"message","content":[{"type":"output_text","text":%q}]}]}`, answer)
+			stream := fmt.Sprintf("data: {\"type\":\"response.output_text.delta\",\"delta\":%q}\n\ndata: {\"type\":\"response.output_text.done\",\"text\":%q}\n\ndata: {\"type\":\"response.completed\",\"response\":%s}\n\ndata: {\"type\":\"response.done\",\"response\":%s}\n\n", answer, answer, final, final)
+			require.Equal(t, answer, openAICodexCookieValidationDecision([]byte(stream)))
+		})
+	}
+}
+
+func TestCookieValidationDecisionRejectsFailedStream(t *testing.T) {
+	for _, terminal := range []string{"error", "response.failed", "response.incomplete"} {
+		stream := "data: {\"type\":\"response.output_text.delta\",\"delta\":\"yes\"}\n\ndata: {\"type\":\"" + terminal + "\"}\n\n"
+		require.Empty(t, openAICodexCookieValidationDecision([]byte(stream)))
+	}
+	// Genuine repeated output must not be mistaken for a repeated snapshot.
+	require.Empty(t, openAICodexCookieValidationDecision([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"yes\"}\n\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"yes\"}\n")))
+	// Preserve whitespace in chunks instead of turning 'y es' into 'yes'.
+	require.Empty(t, openAICodexCookieValidationDecision([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"y \"}\n\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"es\"}\n")))
 }
