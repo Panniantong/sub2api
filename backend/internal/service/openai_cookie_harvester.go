@@ -433,6 +433,7 @@ func (s *OpenAIGatewayService) LogOpenAICookieHostBinding(ctx context.Context, a
 func (s *OpenAIGatewayService) runOpenAICookieHarvester(ctx context.Context) {
 	defer s.cookieHarvestRuntime.wg.Wait()
 	go s.runCookieHostMonitor(ctx)
+ go s.settingService.runCookieRemoteSync(ctx)
 	// Restore saved bindings once at startup, independently of inference.
 	if accounts, err := s.accountRepo.ListByPlatform(ctx, PlatformOpenAI); err == nil {
 		for i := range accounts {
