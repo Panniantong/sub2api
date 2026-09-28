@@ -6,14 +6,15 @@ import (
 )
 
 type CookieDashboard struct {
-	Harvest            map[string]int `json:"harvest"`
-	RotationAccounts   int            `json:"rotation_accounts"`
-	RotationRunning    int            `json:"rotation_running"`
-	DegradedAccounts   int            `json:"degraded_accounts"`
-	HarvestEnabled     bool           `json:"harvest_enabled"`
-	RotationEnabled    bool           `json:"rotation_enabled"`
-	HarvestConcurrency int            `json:"harvest_concurrency"`
-	UpdatedAt          time.Time      `json:"updated_at"`
+	Harvest              map[string]int `json:"harvest"`
+	RotationAccounts     int            `json:"rotation_accounts"`
+	RotationRunning      int            `json:"rotation_running"`
+	DegradedAccounts     int            `json:"degraded_accounts"`
+	HealthyBoundAccounts int            `json:"healthy_bound_accounts"`
+	HarvestEnabled       bool           `json:"harvest_enabled"`
+	RotationEnabled      bool           `json:"rotation_enabled"`
+	HarvestConcurrency   int            `json:"harvest_concurrency"`
+	UpdatedAt            time.Time      `json:"updated_at"`
 }
 
 func (s *OpenAIGatewayService) CookieDashboard(ctx context.Context) (*CookieDashboard, error) {
@@ -27,12 +28,14 @@ func (s *OpenAIGatewayService) CookieDashboard(ctx context.Context) (*CookieDash
 	}
 	// Use one consistent library snapshot for the whole dashboard. Failure is
 	// reported instead of turning unavailable data into a misleading zero.
-	if settings.DegradedGroupID > 0 {
-		entries, err := s.settingService.cookieSchedulingCandidates(ctx)
-		if err != nil {
-			return nil, err
-		}
-		settings.rotationCandidates = func() ([]OpenAICodexCookieLibraryEntry, error) { return entries, nil }
+	entries, err := s.settingService.cookieSchedulingCandidates(ctx)
+	if err != nil {
+		return nil, err
+	}
+	settings.rotationCandidates = func() ([]OpenAICodexCookieLibraryEntry, error) { return entries, nil }
+	byHost := make(map[string]OpenAICodexCookieLibraryEntry, len(entries))
+	for _, entry := range entries {
+		byHost[normalizeOpenAICookieHost(entry.Host)] = entry
 	}
 	result := &CookieDashboard{
 		Harvest: s.CookieHarvestRunning(), HarvestEnabled: settings.Enabled,
@@ -46,6 +49,9 @@ func (s *OpenAIGatewayService) CookieDashboard(ctx context.Context) (*CookieDash
 			continue
 		}
 		seen[a.ID] = true
+		if cookieDashboardHealthyBinding(a, settings, byHost, result.UpdatedAt) {
+			result.HealthyBoundAccounts++
+		}
 		if isOpenAICookieRotationAccount(a, settings) {
 			result.RotationAccounts++
 		}
@@ -61,4 +67,17 @@ func (s *OpenAIGatewayService) CookieDashboard(ctx context.Context) (*CookieDash
 		return true
 	})
 	return result, nil
+}
+
+func cookieDashboardHealthyBinding(a *Account, settings *OpenAICookieSettings, entries map[string]OpenAICodexCookieLibraryEntry, now time.Time) bool {
+	if !a.IsSchedulable() || cookieHostMonitorOwns(a, settings) {
+		return false
+	}
+	host := normalizeOpenAICookieHost(openAICodexCookieHostFromAccount(a))
+	entry, ok := entries[host]
+	if !ok || entry.Cookie == "" || !entry.ExpiresAt.After(now) || openAICodexCookieHostCooldownUntil(a, host).After(now) {
+		return false
+	}
+	expires, err := time.Parse(time.RFC3339Nano, a.GetExtraString("codex_cookie_host_binding_expires_at"))
+	return err == nil && expires.After(now)
 }

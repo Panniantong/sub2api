@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -31,4 +32,41 @@ func TestCookieDashboardCountsLiveTasksAndDegradation(t *testing.T) {
 	result, err = s.CookieDashboard(context.Background())
 	require.NoError(t, err)
 	require.Zero(t, result.RotationRunning)
+}
+
+func TestCookieDashboardCountsOnlyHealthyBindings(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+	settings := &OpenAICookieSettings{HostMonitor: &CookieHostMonitorConfig{Enabled: true, AccountID: 9}}
+	raw, err := json.Marshal(settings)
+	require.NoError(t, err)
+	svc := &SettingService{settingRepo: &cookieTestRepo{values: map[string]string{cookieSettingsKey: string(raw)}}}
+	_, err = svc.SetOpenAICodexCookieLibrary(ctx, []OpenAICodexCookieLibraryEntry{
+		{Host: "healthy.example", Cookie: "cookie", ExpiresAt: now.Add(time.Hour)},
+		{Host: "expired.example", Cookie: "cookie", ExpiresAt: now.Add(-time.Minute)},
+	})
+	require.NoError(t, err)
+	accounts := make([]Account, 9)
+	for i := range accounts {
+		accounts[i] = cookieGuardTestAccount("healthy.example", now.Add(time.Hour))
+		accounts[i].ID = int64(i + 1)
+	}
+	accounts[1].Extra["codex_cookie_host_binding_expires_at"] = now.Add(-time.Minute).Format(time.RFC3339Nano)
+	accounts[2].Extra[openAICodexCookieHostExtraKey] = "missing.example"
+	accounts[3].Extra[openAICodexCookieHostExtraKey] = "expired.example"
+	accounts[4].Schedulable = false
+	accounts[5].Extra[openAICodexCookieCooldownsExtraKey] = map[string]string{"healthy.example": now.Add(time.Minute).Format(time.RFC3339Nano)}
+	accounts[6].Extra[openAICodexCookieHostExtraKey] = ""
+	accounts[7].RateLimitResetAt = ptrTime(now.Add(time.Minute))
+	accounts = append(accounts, accounts[0]) // Repeated group membership must not double count.
+	gateway := &OpenAIGatewayService{settingService: svc, accountRepo: cookieMonitorRepo{schedulerTestOpenAIAccountRepo{accounts: accounts}}}
+	result, err := gateway.CookieDashboard(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.HealthyBoundAccounts, "healthy bindings must count even without a degraded group configured")
+
+	// A failed library read must not publish a misleading healthy count of zero.
+	svc.settingRepo.(*cookieTestRepo).values[SettingKeyOpenAICodexCookieLibrary] = "invalid json"
+	svc.cookieCandidatesCache = nil
+	_, err = gateway.CookieDashboard(ctx)
+	require.Error(t, err)
 }

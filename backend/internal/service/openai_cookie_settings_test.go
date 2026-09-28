@@ -69,6 +69,49 @@ func (r *cookieTestRepo) Set(_ context.Context, key, value string) error {
 	return nil
 }
 
+func TestOpenAICookieBindingEstimatedAvailableDuration(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+	for _, tc := range []struct {
+		name     string
+		host     string
+		binding  int
+		advance  int
+		count    int
+		estimate int64
+	}{
+		{"bound", "current.example", 240, 10, 3, 690},
+		{"unbound", "", 240, 10, 4, 920},
+		{"updated config", "current.example", 600, 30, 3, 1710},
+		{"immediate rotation", "current.example", 240, 240, 3, 0},
+		{"invalid legacy interval", "current.example", 240, 300, 3, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &SettingService{settingRepo: &cookieTestRepo{values: map[string]string{
+				cookieSettingsKey: fmt.Sprintf(`{"cookie_host_binding_seconds":%d,"cookie_host_rotation_before_seconds":%d}`, tc.binding, tc.advance),
+			}}}
+			_, err := svc.SetOpenAICodexCookieLibrary(ctx, []OpenAICodexCookieLibraryEntry{
+				{Host: "current.example", Cookie: "cookie", ExpiresAt: now.Add(time.Hour)},
+				{Host: "one.example", Cookie: "cookie", ExpiresAt: now.Add(time.Hour)},
+				{Host: "two.example", Cookie: "cookie", ExpiresAt: now.Add(time.Hour)},
+				{Host: "three.example", Cookie: "cookie", ExpiresAt: now.Add(time.Hour)},
+				{Host: "expired.example", Cookie: "cookie", ExpiresAt: now.Add(-time.Minute)},
+				{Host: "cooldown.example", Cookie: "cookie", ExpiresAt: now.Add(time.Hour)},
+			})
+			require.NoError(t, err)
+			account := cookieGuardTestAccount(tc.host, now.Add(time.Minute))
+			account.Extra[openAICodexCookieCooldownsExtraKey] = map[string]string{"cooldown.example": now.Add(time.Minute).Format(time.RFC3339Nano)}
+			status := svc.OpenAICookieBinding(ctx, &account)
+			require.NotNil(t, status)
+			require.Equal(t, tc.count, status.AvailableHostCount)
+			require.Equal(t, tc.binding, status.BindingSeconds)
+			require.Equal(t, tc.advance, status.RotationBeforeSeconds)
+			require.NotNil(t, status.EstimatedBindingSeconds)
+			require.Equal(t, tc.estimate, *status.EstimatedBindingSeconds)
+		})
+	}
+}
+
 func TestIndependentCookieConfigurationAndWS(t *testing.T) {
 	ctx := context.Background()
 	repo := &cookieTestRepo{values: map[string]string{}}

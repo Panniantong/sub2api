@@ -109,6 +109,7 @@ export async function getHarvestRuntime() {
 }
 
 export interface CookieDashboard {
+  healthy_bound_accounts: number
   harvest: Record<string, number>
   rotation_accounts: number
   rotation_running: number

@@ -328,7 +328,7 @@
             />
           </template>
           <template #cell-cookie_host="{ row }">
-            <div v-if="row.cookie_binding?.host || row.cookie_binding?.degraded_group_id || row.cookie_binding?.scheduling_blocked || row.cookie_binding?.rotation_status === 'running' || row.cookie_binding?.rotation_status === 'waiting'" class="min-w-[10rem] max-w-[16rem] text-xs">
+            <div v-if="row.cookie_binding" class="min-w-[10rem] max-w-[16rem] text-xs">
               <span v-if="row.cookie_binding?.degraded_group_id" class="mb-1 block text-amber-600">降级到 {{ row.cookie_binding.degraded_group_name || '#' + row.cookie_binding.degraded_group_id }} 分组 · {{ row.cookie_binding.scheduling_block_reason === 'cookie_host_unbound' ? '未绑定且无可轮换 Host' : row.cookie_binding.scheduling_block_reason === 'cookie_host_binding_expired' ? 'Host 绑定已超时' : 'Host 绑定有效期无效' }}</span>
               <div v-if="row.cookie_binding?.host" class="truncate font-mono text-gray-700 dark:text-gray-300" :title="row.cookie_binding.host">{{ row.cookie_binding.host }}</div>
               <span v-if="row.cookie_binding?.host" :class="cookieHostRemaining(row) > 0 ? 'text-emerald-600' : 'text-red-600'">绑定剩余 {{ cookieHostRemaining(row) }}s</span>
@@ -341,6 +341,7 @@
                 @click="openCookieRotationLogs(row)"
               >{{ rotationLabel(row) }}</button>
               <span v-if="row.cookie_binding.available_host_count !== undefined" class="block text-gray-500">可绑定 Host {{ row.cookie_binding.available_host_count }}</span>
+              <CookieBindingEstimate :binding="row.cookie_binding" />
             </div>
             <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
           </template>
@@ -536,6 +537,7 @@
 </template>
 
 <script setup lang="ts">
+import CookieBindingEstimate from '@/components/account/CookieBindingEstimate.vue'
 import { ref, reactive, computed, onMounted, onUnmounted, toRaw, watch } from 'vue'
 import { useIntervalFn } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'

@@ -430,25 +430,28 @@ type OpenAICookieAcquisitionLog struct {
 var cookieLogMu sync.Mutex
 
 type OpenAICookieBindingStatus struct {
-	DegradedGroupID        int64                `json:"degraded_group_id,omitempty"`
-	DegradedGroupName      string               `json:"degraded_group_name,omitempty"`
-	SchedulingGuardEnabled bool                 `json:"scheduling_guard_enabled"`
-	SchedulingBlocked      bool                 `json:"scheduling_blocked"`
-	SchedulingBlockReason  string               `json:"scheduling_block_reason,omitempty"`
-	Host                   string               `json:"host"`
-	Status                 string               `json:"status"`
-	ExpiresAt              *time.Time           `json:"expires_at,omitempty"`
-	BindingExpiresAt       *time.Time           `json:"binding_expires_at,omitempty"`
-	RotationAt             *time.Time           `json:"rotation_at,omitempty"`
-	CookieExpiresAt        *time.Time           `json:"cookie_expires_at,omitempty"`
-	AvailableHostCount     int                  `json:"available_host_count"`
-	WSEnabled              bool                 `json:"ws_enabled"`
-	CooldownHost           string               `json:"cooldown_host,omitempty"`
-	CooldownUntil          *time.Time           `json:"cooldown_until,omitempty"`
-	Cooldowns              map[string]time.Time `json:"cooldowns,omitempty"`
-	RotationStatus         string               `json:"rotation_status,omitempty"`
-	RotationStartedAt      *time.Time           `json:"rotation_started_at,omitempty"`
-	RotationMessage        string               `json:"rotation_message,omitempty"`
+	DegradedGroupID         int64                `json:"degraded_group_id,omitempty"`
+	DegradedGroupName       string               `json:"degraded_group_name,omitempty"`
+	SchedulingGuardEnabled  bool                 `json:"scheduling_guard_enabled"`
+	SchedulingBlocked       bool                 `json:"scheduling_blocked"`
+	SchedulingBlockReason   string               `json:"scheduling_block_reason,omitempty"`
+	Host                    string               `json:"host"`
+	Status                  string               `json:"status"`
+	ExpiresAt               *time.Time           `json:"expires_at,omitempty"`
+	BindingExpiresAt        *time.Time           `json:"binding_expires_at,omitempty"`
+	RotationAt              *time.Time           `json:"rotation_at,omitempty"`
+	CookieExpiresAt         *time.Time           `json:"cookie_expires_at,omitempty"`
+	AvailableHostCount      int                  `json:"available_host_count"`
+	BindingSeconds          int                  `json:"binding_seconds"`
+	RotationBeforeSeconds   int                  `json:"rotation_before_seconds"`
+	EstimatedBindingSeconds *int64               `json:"estimated_binding_seconds,omitempty"`
+	WSEnabled               bool                 `json:"ws_enabled"`
+	CooldownHost            string               `json:"cooldown_host,omitempty"`
+	CooldownUntil           *time.Time           `json:"cooldown_until,omitempty"`
+	Cooldowns               map[string]time.Time `json:"cooldowns,omitempty"`
+	RotationStatus          string               `json:"rotation_status,omitempty"`
+	RotationStartedAt       *time.Time           `json:"rotation_started_at,omitempty"`
+	RotationMessage         string               `json:"rotation_message,omitempty"`
 }
 
 func (s *SettingService) OpenAICookieBinding(ctx context.Context, account *Account) *OpenAICookieBindingStatus {
@@ -476,7 +479,11 @@ func (s *SettingService) OpenAICookieBinding(ctx context.Context, account *Accou
 		}
 	}
 	rotationEligible := false
+	settingsLoaded := false
 	if cfg, err := s.GetOpenAICookieSettings(ctx); err == nil {
+		settingsLoaded = true
+		status.BindingSeconds = cfg.CookieHostBindingSeconds
+		status.RotationBeforeSeconds = cfg.CookieHostRotationBeforeSeconds
 		if cookieDegradedTarget(account, cfg, time.Now()) > 0 {
 			status.DegradedGroupID = cfg.DegradedGroupID
 			status.DegradedGroupName = cfg.DegradedGroupName
@@ -510,6 +517,11 @@ func (s *SettingService) OpenAICookieBinding(ctx context.Context, account *Accou
 			if openAICookieRotationCandidate(account, item, now) {
 				status.AvailableHostCount++
 			}
+		}
+		if settingsLoaded {
+			secondsPerHost := max(0, status.BindingSeconds-status.RotationBeforeSeconds)
+			estimate := int64(status.AvailableHostCount) * int64(secondsPerHost)
+			status.EstimatedBindingSeconds = &estimate
 		}
 	}
 	if status.Host == "" {

@@ -13,12 +13,13 @@
           <span class="text-xs text-gray-500">{{ dashboard ? '更新于 ' + formatTime(dashboard.updated_at) : '正在加载运行数据…' }}</span>
         </div>
         <p v-if="dashboardError" role="status" class="text-xs text-amber-600">{{ dashboardError }}{{ dashboard ? '，保留上次数据。' : '，等待重试。' }}</p>
-        <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
           <button type="button" class="card min-w-0 border-t-2 border-sky-500 px-4 py-4 text-left hover:bg-sky-50 dark:hover:bg-dark-700" @click="tab = 'logs'">
             <div class="text-sm text-gray-500">正在打 Cookie 的账号</div><div class="my-2 text-3xl font-semibold tabular-nums text-sky-600">{{ dashboard?.harvest.total ?? '—' }}<span v-if="dashboard" class="ml-2 text-sm font-normal text-gray-400">/ {{ dashboard.harvest_concurrency }} 并发</span></div>
             <p class="text-xs text-gray-500">{{ dashboard ? dashboard.harvest_enabled ? '采集已启用' : '采集已关闭' : '等待数据' }} · 查看获取日志 →</p>
           </button>
           <div class="card min-w-0 border-t-2 border-indigo-500 px-4 py-4"><div class="text-sm text-gray-500">Cookie Host 轮换账号</div><div class="my-2 text-3xl font-semibold tabular-nums text-indigo-600">{{ dashboard?.rotation_accounts ?? '—' }}</div><p class="text-xs text-gray-500">配置范围内去重账号 · {{ dashboard ? dashboard.rotation_enabled ? '自动轮换已启用' : '自动轮换已关闭' : '等待数据' }}</p></div>
+          <div class="card min-w-0 border-t-2 border-emerald-500 px-4 py-4"><div class="text-sm text-gray-500">绑定正常账号</div><div class="my-2 text-3xl font-semibold tabular-nums text-emerald-600">{{ dashboard?.healthy_bound_accounts ?? '—' }}</div><p class="text-xs text-gray-500">账号可调度，绑定与 Cookie 有效，无冷却或监控隔离</p></div>
           <button type="button" class="card min-w-0 border-t-2 border-amber-500 px-4 py-4 text-left hover:bg-amber-50 dark:hover:bg-dark-700" @click="tab = 'rotation-logs'"><div class="text-sm text-gray-500">正在轮换 Cookie Host</div><div class="my-2 text-3xl font-semibold tabular-nums text-amber-600">{{ dashboard?.rotation_running ?? '—' }}</div><p class="text-xs text-gray-500">实际执行中，不含等待重试 · 查看日志 →</p></button>
           <div class="card min-w-0 border-t-2 border-orange-500 px-4 py-4"><div class="text-sm text-gray-500">Cookie Host 降级账号</div><div class="my-2 text-3xl font-semibold tabular-nums text-orange-600">{{ dashboard?.degraded_accounts ?? '—' }}</div><p class="text-xs text-gray-500">按账号列表降级标记统计，不代表全部可调度</p></div>
         </div>
