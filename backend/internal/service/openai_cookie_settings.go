@@ -16,9 +16,18 @@ const cookieLogsKey = "openai_cookie_acquisition_logs"
 const intelligenceMonitorSettingKey = "openai_intelligence_monitor"
 
 type OpenAICookieSettings struct {
-	Enabled         bool   `json:"enabled"`
-	Model           string `json:"model"`
-	IntervalSeconds int    `json:"interval_seconds"`
+	// Runtime-only reader; never persist candidate availability in account state.
+	rotationCandidates func() ([]OpenAICodexCookieLibraryEntry, error)
+	DegradedGroupID    int64                `json:"degraded_group_id"`
+	DegradedGroupName  string               `json:"degraded_group_name,omitempty"`
+	HarvestPolicy      *CookieHarvestPolicy `json:"harvest_policy,omitempty"`
+	harvestTask        string
+	harvestTarget      string
+	harvestProxy       string
+	HostMonitor        *CookieHostMonitorConfig `json:"host_monitor,omitempty"`
+	Enabled            bool                     `json:"enabled"`
+	Model              string                   `json:"model"`
+	IntervalSeconds    int                      `json:"interval_seconds"`
 	// AccountID is retained for compatibility with older single-account
 	// settings. AccountIDs is the authoritative multi-select value.
 	AccountID                        int64    `json:"account_id,omitempty"`
@@ -85,6 +94,7 @@ func (s *SettingService) GetOpenAICookieSettings(ctx context.Context) (*OpenAICo
 	}
 	if cached, ok := s.openAICookieCache.Load().(*cachedOpenAICookieSettings); ok && time.Now().Before(cached.until) {
 		copy := cached.value
+		copy.rotationCandidates = func() ([]OpenAICodexCookieLibraryEntry, error) { return s.cookieSchedulingCandidates(ctx) }
 		return &copy, nil
 	}
 	raw, err := s.settingRepo.GetValue(ctx, cookieSettingsKey)
@@ -137,19 +147,68 @@ func (s *SettingService) GetOpenAICookieSettings(ctx context.Context) (*OpenAICo
 	if value.CookieProxyLearningAttempts <= 0 {
 		value.CookieProxyLearningAttempts = openAICookieProxyDiscoveryRequests
 	}
+	if value.HarvestPolicy == nil {
+		value.HarvestPolicy = defaultCookieHarvestPolicy()
+	}
+	if value.DegradedGroupID > 0 && s.defaultSubGroupReader != nil {
+		if group, err := s.defaultSubGroupReader.GetByID(ctx, value.DegradedGroupID); err == nil && group != nil {
+			value.DegradedGroupName = group.Name
+		}
+	}
 	s.openAICookieCache.Store(&cachedOpenAICookieSettings{value, time.Now().Add(5 * time.Second)})
+	value.rotationCandidates = func() ([]OpenAICodexCookieLibraryEntry, error) { return s.cookieSchedulingCandidates(ctx) }
 	return &value, nil
 }
 
 func (s *SettingService) SetOpenAICookieSettings(ctx context.Context, value *OpenAICookieSettings) error {
 	cookieSettingsMu.Lock()
 	defer cookieSettingsMu.Unlock()
+	// The dedicated monitor endpoint owns its configuration. A stale Cookie
+	// settings form must not reset an active experiment or its identity.
+	if s != nil && s.settingRepo != nil && value != nil {
+		raw, err := s.settingRepo.GetValue(ctx, cookieSettingsKey)
+		if err != nil && !errors.Is(err, ErrSettingNotFound) {
+			return err
+		}
+		var old OpenAICookieSettings
+		if raw != "" {
+			if err := json.Unmarshal([]byte(raw), &old); err != nil {
+				return err
+			}
+		}
+		value.HostMonitor = old.HostMonitor
+	}
 	return s.setOpenAICookieSettings(ctx, value)
 }
 
 func (s *SettingService) setOpenAICookieSettings(ctx context.Context, value *OpenAICookieSettings) error {
 	if s == nil || s.settingRepo == nil || value == nil {
 		return fmt.Errorf("cookie settings unavailable")
+	}
+	if value.HarvestPolicy == nil {
+		value.HarvestPolicy = defaultCookieHarvestPolicy()
+	}
+	if err := value.HarvestPolicy.validate(); err != nil {
+		return err
+	}
+	if value.DegradedGroupID < 0 {
+		return fmt.Errorf("降级分组配置无效")
+	}
+	value.DegradedGroupName = ""
+	if value.DegradedGroupID > 0 {
+		for _, id := range value.RotationGroupIDs {
+			if id == value.DegradedGroupID {
+				return fmt.Errorf("降级分组不能同时作为 Host 轮换来源分组")
+			}
+		}
+		if s.defaultSubGroupReader == nil {
+			return fmt.Errorf("分组校验服务不可用")
+		}
+		group, err := s.defaultSubGroupReader.GetByID(ctx, value.DegradedGroupID)
+		if err != nil || group == nil || !group.IsActive() || group.Platform != PlatformOpenAI {
+			return fmt.Errorf("降级分组必须是启用的 OpenAI 分组")
+		}
+		value.DegradedGroupName = group.Name
 	}
 	value.Model = strings.TrimSpace(value.Model)
 	if value.Model == "" || len(value.Model) > 128 {
@@ -293,6 +352,9 @@ func (s *SettingService) resolveOpenAICookieProxyURLs(ctx context.Context, setti
 }
 
 type OpenAICookieAcquisitionLog struct {
+	harvestAttempted   bool
+	Task               string         `json:"task,omitempty"`
+	TargetHost         string         `json:"target_host,omitempty"`
 	ID                 string         `json:"id"`
 	AttemptID          string         `json:"attempt_id,omitempty"`
 	Stage              string         `json:"stage,omitempty"`
@@ -321,6 +383,8 @@ type OpenAICookieAcquisitionLog struct {
 var cookieLogMu sync.Mutex
 
 type OpenAICookieBindingStatus struct {
+	DegradedGroupID        int64                `json:"degraded_group_id,omitempty"`
+	DegradedGroupName      string               `json:"degraded_group_name,omitempty"`
 	SchedulingGuardEnabled bool                 `json:"scheduling_guard_enabled"`
 	SchedulingBlocked      bool                 `json:"scheduling_blocked"`
 	SchedulingBlockReason  string               `json:"scheduling_block_reason,omitempty"`
@@ -366,6 +430,11 @@ func (s *SettingService) OpenAICookieBinding(ctx context.Context, account *Accou
 	}
 	rotationEligible := false
 	if cfg, err := s.GetOpenAICookieSettings(ctx); err == nil {
+		if cookieDegradedTarget(account, cfg, time.Now()) > 0 {
+			status.DegradedGroupID = cfg.DegradedGroupID
+			status.DegradedGroupName = cfg.DegradedGroupName
+			status.SchedulingBlocked = false
+		}
 		status.WSEnabled = cfg.WSEnabled
 		rotationEligible = cfg.CookieRotationEnabled && isOpenAICookieRotationAccount(account, cfg)
 	}
@@ -391,7 +460,7 @@ func (s *SettingService) OpenAICookieBinding(ctx context.Context, account *Accou
 	if entries, err := s.GetOpenAICodexCookieLibrary(ctx); err == nil {
 		now := time.Now()
 		for _, item := range entries {
-			if item.Host != "" && normalizeOpenAICookieHost(item.Host) != normalizeOpenAICookieHost(status.Host) && item.ExpiresAt.After(now) {
+			if openAICookieRotationCandidate(account, item, now) {
 				status.AvailableHostCount++
 			}
 		}

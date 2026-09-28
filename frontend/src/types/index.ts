@@ -1168,7 +1168,7 @@ export interface Account {
   credentials?: Record<string, unknown>
   credentials_status?: Record<string, boolean>
   ollama_cloud_usage?: OllamaCloudUsageState
-  cookie_binding?: { host: string; status: 'active' | 'expired' | 'unbound' | 'unavailable' | 'cooldown'; expires_at?: string; binding_expires_at?: string; rotation_at?: string; cookie_expires_at?: string; available_host_count?: number; ws_enabled: boolean; cooldown_host?: string; cooldown_until?: string; cooldowns?: Record<string, string>; rotation_status?: string; rotation_started_at?: string; rotation_message?: string; scheduling_guard_enabled?: boolean; scheduling_blocked?: boolean; scheduling_block_reason?: string }
+  cookie_binding?: { degraded_group_id?: number; degraded_group_name?: string; host: string; status: 'active' | 'expired' | 'unbound' | 'unavailable' | 'cooldown'; expires_at?: string; binding_expires_at?: string; rotation_at?: string; cookie_expires_at?: string; available_host_count?: number; ws_enabled: boolean; cooldown_host?: string; cooldown_until?: string; cooldowns?: Record<string, string>; rotation_status?: string; rotation_started_at?: string; rotation_message?: string; scheduling_guard_enabled?: boolean; scheduling_blocked?: boolean; scheduling_block_reason?: string }
   ws_connections?: { total: number; idle: number; in_use: number; connecting: number; target?: number; host?: string; state?: string; probe_state?: string; probe_response_id?: string; last_error?: string; expires_at?: string }
   codex_turn_tickets?: Array<{
     ready: boolean

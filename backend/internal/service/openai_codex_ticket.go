@@ -43,20 +43,26 @@ const (
 )
 
 type openAICookieProxyHostBindingState struct {
-	Requests  int            `json:"requests"`
-	Hosts     map[string]int `json:"hosts"`
-	History   map[string]int `json:"history,omitempty"`
-	UpdatedAt time.Time      `json:"updated_at,omitempty"`
+	Stats        CookieProxyHarvestStats `json:"stats"`
+	BackoffUntil time.Time               `json:"backoff_until,omitempty"`
+	Requests     int                     `json:"requests"`
+	Hosts        map[string]int          `json:"hosts"`
+	History      map[string]int          `json:"history,omitempty"`
+	UpdatedAt    time.Time               `json:"updated_at,omitempty"`
 }
 
 type OpenAICookieProxyHostMemory struct {
-	Proxy         string                             `json:"proxy"`
-	ProxyUsername string                             `json:"proxy_username,omitempty"`
-	Requests      int                                `json:"requests"`
-	Limit         int                                `json:"limit"`
-	Completed     bool                               `json:"completed"`
-	Hosts         []OpenAICookieProxyHostMemoryEntry `json:"hosts"`
-	UpdatedAt     time.Time                          `json:"updated_at,omitempty"`
+	Stats             CookieProxyHarvestStats            `json:"stats"`
+	BackoffUntil      time.Time                          `json:"backoff_until,omitempty"`
+	SuccessfulSamples int                                `json:"successful_samples"`
+	SampleTarget      int                                `json:"sample_target"`
+	Proxy             string                             `json:"proxy"`
+	ProxyUsername     string                             `json:"proxy_username,omitempty"`
+	Requests          int                                `json:"requests"`
+	Limit             int                                `json:"limit"`
+	Completed         bool                               `json:"completed"`
+	Hosts             []OpenAICookieProxyHostMemoryEntry `json:"hosts"`
+	UpdatedAt         time.Time                          `json:"updated_at,omitempty"`
 }
 
 type OpenAICookieProxyHostMemoryEntry struct {
@@ -454,6 +460,9 @@ func (s *OpenAIGatewayService) refreshOpenAICodexTickets(ctx context.Context) {
 		if account.Status != StatusActive || !isOpenAICodexTicketAccount(account) {
 			continue
 		}
+		if settings, err := s.settingService.GetOpenAICookieSettings(ctx); err == nil && cookieHostMonitorOwns(account, settings) {
+			continue
+		}
 		var ticket *openAICodexTicket
 		if raw, ok := account.Extra[openAICodexTicketExtraKey]; ok {
 			if b, e := json.Marshal(raw); e == nil {
@@ -476,7 +485,11 @@ func (s *OpenAIGatewayService) probeOpenAICodexTicket(ctx context.Context, accou
 	var cookieLog *OpenAICookieAcquisitionLog
 	if len(cookieSettings) > 0 && cookieSettings[0] != nil {
 		cookieLog = &OpenAICookieAcquisitionLog{ID: uuid.NewString(), AccountID: account.ID, AccountName: account.Name, CreatedAt: time.Now(), Model: firstOpenAICodexTicketModel(cfg.Models), Message: "Cookie 请求未完成"}
+		cookieLog.Task, cookieLog.TargetHost = cookieSettings[0].harvestTask, cookieSettings[0].harvestTarget
 		defer func() {
+			if cookieSettings[0].harvestProxy != "" {
+				s.recordCookieHarvestOutcome(cookieSettings[0], cookieLog)
+			}
 			logCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if err := s.settingService.appendOpenAICookieLog(logCtx, *cookieLog); err != nil {
@@ -543,7 +556,9 @@ func (s *OpenAIGatewayService) probeOpenAICodexTicket(ctx context.Context, accou
 	if err != nil {
 		return
 	}
-	if cfg.RelayEnabled && cfg.RelayAllowMint && strings.EqualFold(strings.TrimSpace(cfg.RelayMode), "mint") {
+	// A scheduled proxy discovery must actually use its reserved proxy. Relay
+	// mint has no selectable egress and cannot contribute proxy route samples.
+	if cfg.RelayEnabled && cfg.RelayAllowMint && strings.EqualFold(strings.TrimSpace(cfg.RelayMode), "mint") && (cookieLog == nil || cookieSettings[0].harvestProxy == "") {
 		relayResult, relayErr := s.mintOpenAICodexViaRelay(probeCtx, account, token, harvestModel, body, cfg)
 		if relayErr == nil && s.acceptOpenAICodexRelayMint(probeCtx, account, token, harvestModel, probeSessionID, cfg, func() *OpenAICookieSettings {
 			if len(cookieSettings) > 0 {
@@ -611,7 +626,12 @@ func (s *OpenAIGatewayService) probeOpenAICodexTicket(ctx context.Context, accou
 		return
 	}
 	if cookieLog != nil {
-		learningAttempt = s.recordOpenAICookieProxyAttempt(probeCtx, proxyURL, cfg.CookieProxyLearningAttempts)
+		sampleTarget := defaultCookieHarvestPolicy().LearningSamples
+		if cookieSettings[0].HarvestPolicy != nil {
+			sampleTarget = cookieSettings[0].HarvestPolicy.LearningSamples
+		}
+		learningAttempt = s.recordOpenAICookieProxyAttempt(probeCtx, proxyURL, cfg.CookieProxyLearningAttempts, sampleTarget)
+		cookieLog.harvestAttempted = true
 	}
 	proxyScheme, proxyHost := openAICodexHarvestProxyInfo(proxyURL)
 	slog.Info("openai_codex_ticket_harvest_request",
@@ -738,7 +758,7 @@ func markOpenAICookieHarvestUnauthorized(ctx context.Context, repo AccountReposi
 	if len(detail) > 2048 {
 		detail = detail[:2048]
 	}
-	errorMessage := "Cookie harvest upstream returned HTTP 401"
+	errorMessage := "Authentication failed (401)"
 	if detail != "" {
 		errorMessage += ": " + detail
 	}
@@ -985,6 +1005,9 @@ func (s *OpenAIGatewayService) bindOpenAICodexCookieHost(ctx context.Context, ac
 // A validated replacement retains the deadline measured from the start of
 // validation, and publishes Host and deadline together only after success.
 func (s *OpenAIGatewayService) bindOpenAICodexCookieHostStartedAt(ctx context.Context, account *Account, host string, startedAt time.Time) error {
+	if err := s.checkCookieHostMonitorLock(ctx, account); err != nil {
+		return err
+	}
 	if account == nil || strings.TrimSpace(host) == "" {
 		return errors.New("account or host is empty")
 	}
@@ -1060,6 +1083,9 @@ func (s *OpenAIGatewayService) bindOpenAICodexCookieHostStartedAt(ctx context.Co
 // account/Host cooldown records are preserved so a failed validation cannot
 // leave a transient Host attached to the account.
 func (s *OpenAIGatewayService) unbindOpenAICodexCookieHost(ctx context.Context, account *Account, host string) error {
+	if err := s.checkCookieHostMonitorLock(ctx, account); err != nil {
+		return err
+	}
 	if account == nil {
 		return errors.New("account is empty")
 	}
@@ -1208,7 +1234,7 @@ func normalizeOpenAICookieProxyLearningLimit(limit int) int {
 	return limit
 }
 
-func (s *OpenAIGatewayService) recordOpenAICookieProxyAttempt(ctx context.Context, proxyURL string, limit int) bool {
+func (s *OpenAIGatewayService) recordOpenAICookieProxyAttempt(ctx context.Context, proxyURL string, limit int, sampleTargets ...int) bool {
 	proxyURL = normalizeCookieProxyKey(proxyURL)
 	if proxyURL == "" || s == nil || s.settingService == nil || s.settingService.settingRepo == nil {
 		return false
@@ -1223,6 +1249,7 @@ func (s *OpenAIGatewayService) recordOpenAICookieProxyAttempt(ctx context.Contex
 	if state.Requests >= limit {
 		return false
 	}
+	learning := len(sampleTargets) == 0 || cookieProxySamples(state) < sampleTargets[0]
 	if state.Hosts == nil {
 		state.Hosts = map[string]int{}
 	}
@@ -1238,7 +1265,7 @@ func (s *OpenAIGatewayService) recordOpenAICookieProxyAttempt(ctx context.Contex
 			slog.Warn("openai cookie proxy learning attempt persist failed", "error", err)
 		}
 	}
-	return true
+	return learning
 }
 
 func (s *OpenAIGatewayService) recordOpenAICookieProxyHost(ctx context.Context, proxyURL, host string, learningAttempt bool) {
@@ -1259,6 +1286,17 @@ func (s *OpenAIGatewayService) recordOpenAICookieProxyHost(ctx context.Context, 
 	}
 	if state.History == nil {
 		state.History = map[string]int{}
+	}
+	newHost := true
+	for _, other := range bindings {
+		if cookieProxyHistory(other)[normalizedHost] > 0 {
+			newHost = false
+			break
+		}
+	}
+	if newHost {
+		state.Stats.NewHosts++
+		state.Stats.LastNewHostAt = time.Now()
 	}
 	state.History[normalizedHost]++
 	// Hosts only enter the learned route sample during the configured request
@@ -1302,8 +1340,12 @@ func (s *SettingService) GetOpenAICookieProxyHostMemories(ctx context.Context) (
 	defer openAICookieProxyHostBindingsMu.Unlock()
 	bindings := loadOpenAICookieProxyBindingsFromSettingService(ctx, s)
 	limit := openAICookieProxyDiscoveryRequests
+	sampleTarget := defaultCookieHarvestPolicy().LearningSamples
 	if settings, err := s.GetOpenAICookieSettings(ctx); err == nil {
 		limit = normalizeOpenAICookieProxyLearningLimit(settings.CookieProxyLearningAttempts)
+		if settings.HarvestPolicy != nil {
+			sampleTarget = settings.HarvestPolicy.LearningSamples
+		}
 	}
 	result := make([]OpenAICookieProxyHostMemory, 0, len(bindings))
 	for proxy, state := range bindings {
@@ -1328,7 +1370,8 @@ func (s *SettingService) GetOpenAICookieProxyHostMemories(ctx context.Context) (
 		}
 		result = append(result, OpenAICookieProxyHostMemory{
 			Proxy: proxyDisplay, ProxyUsername: proxyUsername, Requests: state.Requests,
-			Limit: limit, Completed: state.Requests >= limit,
+			Limit: limit, Completed: state.Requests >= limit || cookieProxySamples(state) >= sampleTarget,
+			SuccessfulSamples: cookieProxySamples(state), SampleTarget: sampleTarget, Stats: state.Stats, BackoffUntil: state.BackoffUntil,
 			Hosts: items, UpdatedAt: state.UpdatedAt,
 		})
 	}
@@ -1651,7 +1694,7 @@ func openAICodexCookieFromAccount(account *Account) string {
 }
 
 func openAICodexCookieHostFromAccount(account *Account) string {
-	if account == nil || account.Extra == nil {
+	if account == nil || account.Extra == nil || account.openaiCookieDegraded {
 		return ""
 	}
 	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(account.GetExtraString(openAICodexCookieHostExtraKey)), "."))
@@ -1667,6 +1710,9 @@ func (s *OpenAIGatewayService) openAICodexCookieForAccount(account *Account) str
 	}
 	if account.openaiCookieValidationCookie != "" {
 		return account.openaiCookieValidationCookie
+	}
+	if account.openaiCookieDegraded {
+		return ""
 	}
 	host := openAICodexCookieHostFromAccount(account)
 	if host == "" || s == nil || s.settingService == nil {
@@ -1879,6 +1925,11 @@ func (s *OpenAIGatewayService) applyOpenAICodexCookie(account *Account, headers 
 // before writing so a raw passthrough header cannot coexist on the wire.
 func (s *OpenAIGatewayService) applyOpenAIAccountBoundState(account *Account, headers http.Header) {
 	if s == nil || account == nil || headers == nil || !account.IsOpenAIOAuthLike() {
+		return
+	}
+	if account.openaiCookieDegraded {
+		deleteOpenAIHeaderEqualFold(headers, "Cookie")
+		deleteOpenAIHeaderEqualFold(headers, openAICodexTurnStateHeader)
 		return
 	}
 	s.applyOpenAICodexTicket(account, headers)

@@ -3,6 +3,9 @@ import type { OpenAICodexCookieLibraryEntry } from './settings'
 import type { PaginatedResponse } from '@/types'
 
 export interface CookieSettings {
+  degraded_group_id?: number
+  degraded_group_name?: string
+  harvest_policy?: CookieHarvestPolicy
   enabled: boolean
   model: string
   interval_seconds: number
@@ -31,7 +34,23 @@ export interface CookieSettings {
   cookie_host_rotation_before_seconds: number
 }
 
+export interface CookieHarvestPolicy {
+  explore_percent: number
+  fill_percent: number
+  refresh_percent: number
+  learning_samples: number
+  failure_threshold: number
+  failure_backoff_seconds: number
+  target_miss_limit: number
+  target_backoff_seconds: number
+  exploration_revisit_seconds: number
+}
+
+export const defaultHarvestPolicy = (): CookieHarvestPolicy => ({ explore_percent: 30, fill_percent: 50, refresh_percent: 20, learning_samples: 20, failure_threshold: 3, failure_backoff_seconds: 60, target_miss_limit: 3, target_backoff_seconds: 120, exploration_revisit_seconds: 900 })
+
 export interface CookieLog {
+  task?: string
+  target_host?: string
   id: string
   kind?: 'validation' | 'scheduler' | string
   attempt_id?: string
@@ -63,6 +82,10 @@ export interface CookieProxyHostMemoryEntry {
 }
 
 export interface CookieProxyHostMemory {
+  successful_samples?: number
+  sample_target?: number
+  backoff_until?: string
+  stats?: { attempts: number; successes: number; failures: number; unauthorized: number; new_hosts: number; target_hits: number; tasks?: Record<string, number> }
   proxy: string
   proxy_username?: string
   requests: number
@@ -74,6 +97,25 @@ export interface CookieProxyHostMemory {
 
 export async function getSettings() {
   return (await apiClient.get<CookieSettings>('/admin/settings/cookie')).data
+}
+
+export async function getHarvestRuntime() {
+  return (await apiClient.get<Record<string, number>>('/admin/settings/cookie/runtime')).data
+}
+
+export interface CookieDashboard {
+  harvest: Record<string, number>
+  rotation_accounts: number
+  rotation_running: number
+  degraded_accounts: number
+  harvest_enabled: boolean
+  rotation_enabled: boolean
+  harvest_concurrency: number
+  updated_at: string
+}
+
+export async function getDashboard() {
+  return (await apiClient.get<CookieDashboard>('/admin/settings/cookie/dashboard')).data
 }
 export async function saveSettings(value: CookieSettings) {
   return (await apiClient.put<CookieSettings>('/admin/settings/cookie', value)).data

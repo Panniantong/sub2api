@@ -153,7 +153,7 @@
           <button v-if="account.cookie_binding.rotation_at && bindingRotationLabel(account) === '正在轮换'" type="button" class="text-amber-600 underline hover:text-amber-700" title="查看当前轮换验证日志" @click.stop="openCookieValidationLogs">正在轮换</button>
           <span v-else-if="account.cookie_binding.rotation_at" class="text-gray-500">{{ bindingRotationLabel(account) }}</span>
           <span v-if="account.cookie_binding.available_host_count !== undefined" class="text-gray-500">可绑定 Host {{ account.cookie_binding.available_host_count }}</span>
-          <span v-if="cookieSchedulingBlockLabel" class="rounded bg-amber-50 px-1.5 py-0.5 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300" title="轮换分组调度保护；有效绑定恢复后自动解除，不改变账号可调度开关">暂不调度 · {{ cookieSchedulingBlockLabel }}</span>
+          <span v-if="cookieSchedulingBlockLabel" class="rounded bg-amber-50 px-1.5 py-0.5 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300" title="动态调度状态；有效绑定恢复后自动回原组，不修改账号实际分组或可调度开关">{{ account.cookie_binding?.degraded_group_id ? `降级到 ${account.cookie_binding.degraded_group_name || '#' + account.cookie_binding.degraded_group_id} 分组` : '暂不调度' }} · {{ cookieSchedulingBlockLabel }}</span>
           <span v-else :class="account.cookie_binding.status === 'active' ? 'text-emerald-600' : 'text-gray-500'">{{ { active: '绑定有效', expired: 'Cookie 已过期或不存在，绑定不生效', unbound: '未绑定', unavailable: 'Cookie 状态读取失败', cooldown: 'Host 冷静中' }[account.cookie_binding.status] }}</span>
           <span class="text-gray-500">WS {{ account.cookie_binding.ws_enabled ? '已启用' : '已关闭' }}</span>
           <button type="button" class="text-blue-600 hover:underline dark:text-blue-400" @click.stop="openCookieValidationLogs">Host 验证日志</button>
@@ -955,11 +955,12 @@ const cookieSchedulingBlockLabel = computed(() => {
   const binding = props.account.cookie_binding
   if (!binding?.scheduling_guard_enabled) return ''
   const reasons: Record<string, string> = {
-    cookie_host_unbound: '未绑定 Cookie Host',
+	  cookie_host_monitoring: '固定 Host 恢复监控中',
+    cookie_host_unbound: binding.degraded_group_id ? '未绑定且无可轮换 Host' : '未绑定 Cookie Host',
     cookie_host_binding_expired: 'Host 绑定已超时',
     cookie_host_binding_invalid: 'Host 绑定有效期缺失或无效'
   }
-  if (binding.scheduling_blocked) return reasons[binding.scheduling_block_reason || ''] || '等待有效 Host 绑定'
+  if (binding.scheduling_blocked || binding.degraded_group_id) return reasons[binding.scheduling_block_reason || ''] || '等待有效 Host 绑定'
   if (!binding.host) return reasons.cookie_host_unbound
   const expiresAt = Date.parse(binding.binding_expires_at || '')
   if (!Number.isFinite(expiresAt)) return reasons.cookie_host_binding_invalid

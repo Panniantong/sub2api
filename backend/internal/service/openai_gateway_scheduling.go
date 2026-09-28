@@ -882,6 +882,7 @@ func resolveOpenAIErrorSchedulingModel(billingModel, upstreamModel string) strin
 }
 
 func (s *OpenAIGatewayService) selectAccountForModelWithExclusions(ctx context.Context, groupID *int64, platform string, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}, requireCompact bool, stickyAccountID int64, requiredCapability OpenAIEndpointCapability, preferLowUpstreamRate bool) (*Account, error) {
+	ctx = withCookieSchedulingGroup(ctx, groupID)
 	platform = NormalizeOpenAICompatiblePlatform(platform)
 	if s.checkChannelPricingRestriction(ctx, groupID, requestedModel) {
 		slog.Warn("channel pricing restriction blocked request",
@@ -976,7 +977,7 @@ func (s *OpenAIGatewayService) tryStickySessionHit(ctx context.Context, groupID 
 		return nil
 	}
 	account = s.recheckSelectedOpenAIAccountFromDB(ctx, account, groupID, platform, requestedModel, requireCompact, requiredCapability)
-	if account == nil || !s.openAIAccountMatchesSchedulingGroup(account, groupID) {
+	if account == nil || !s.openAIAccountMatchesSchedulingGroup(ctx, account, groupID) {
 		_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
 		return nil
 	}
@@ -1195,7 +1196,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 					account = s.recheckSelectedOpenAIAccountFromDB(ctx, account, groupID, platform, requestedModel, requireCompact, requiredCapability)
 					if account == nil {
 						_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
-					} else if !s.openAIAccountMatchesSchedulingGroup(account, groupID) {
+					} else if !s.openAIAccountMatchesSchedulingGroup(ctx, account, groupID) {
 						_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
 					} else if s.isOpenAIAccountRequestRuntimeBlocked(account, requestedModel) {
 						_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
@@ -1474,6 +1475,46 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 
 func (s *OpenAIGatewayService) listSchedulableAccounts(ctx context.Context, groupID *int64, platform string) ([]Account, error) {
 	platform = NormalizeOpenAICompatiblePlatform(platform)
+	ctx = withCookieSchedulingGroup(ctx, groupID)
+	accounts, err := s.listCookieBaseSchedulableAccounts(ctx, groupID, platform)
+	if err != nil {
+		return nil, err
+	}
+	if platform != PlatformOpenAI || !s.cookieDegradationConfigured(ctx) {
+		return accounts, nil
+	}
+	if s.settingService != nil && platform == PlatformOpenAI && groupID != nil {
+		settings, settingsErr := s.settingService.GetOpenAICookieSettings(ctx)
+		if settingsErr != nil {
+			return nil, settingsErr
+		}
+		if settings.DegradedGroupID > 0 && *groupID == settings.DegradedGroupID {
+			for _, source := range settings.RotationGroupIDs {
+				if source == *groupID {
+					continue
+				}
+				candidates, err := s.listCookieBaseSchedulableAccounts(ctx, &source, platform)
+				if err != nil {
+					return nil, err
+				}
+				accounts = append(accounts, candidates...)
+			}
+		}
+	}
+	seen := map[int64]bool{}
+	result := make([]Account, 0, len(accounts))
+	for i := range accounts {
+		a := &accounts[i]
+		if !seen[a.ID] && s.openAIAccountMatchesSchedulingGroup(ctx, a, groupID) {
+			seen[a.ID] = true
+			result = append(result, *s.cookieDegradedRequestAccount(ctx, a))
+		}
+	}
+	return result, nil
+}
+
+func (s *OpenAIGatewayService) listCookieBaseSchedulableAccounts(ctx context.Context, groupID *int64, platform string) ([]Account, error) {
+	platform = NormalizeOpenAICompatiblePlatform(platform)
 	if s.schedulerSnapshot != nil {
 		accounts, _, err := s.schedulerSnapshot.ListSchedulableAccounts(ctx, groupID, platform, false)
 		if err != nil {
@@ -1581,11 +1622,15 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDB(ctx context.Co
 }
 
 func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDBBeforeProfit(ctx context.Context, account *Account, groupID *int64, platform string, requestedModel string, requireCompact bool, requiredCapability OpenAIEndpointCapability) *Account {
+	ctx = withCookieSchedulingGroup(ctx, groupID)
 	if account == nil {
 		return nil
 	}
 	platform = NormalizeOpenAICompatiblePlatform(platform)
 	if s.schedulerSnapshot == nil || s.accountRepo == nil {
+		if s.cookieDegradationConfigured(ctx) && !s.openAIAccountMatchesSchedulingGroup(ctx, account, groupID) {
+			return nil
+		}
 		if s.openAIGroupRequiresPrivacySet(ctx, groupID) && !account.IsPrivacySet() {
 			return nil
 		}
@@ -1601,14 +1646,14 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDBBeforeProfit(ct
 		if s.isOpenAIProxyStreamQuarantined(ctx, account) {
 			return nil
 		}
-		return account
+		return s.cookieDegradedRequestAccount(ctx, account)
 	}
 
 	latest, err := s.accountRepo.GetByID(ctx, account.ID)
 	if err != nil || latest == nil {
 		return nil
 	}
-	if !s.openAIAccountMatchesSchedulingGroup(latest, groupID) {
+	if !s.openAIAccountMatchesSchedulingGroup(ctx, latest, groupID) {
 		return nil
 	}
 	if s.openAIGroupRequiresPrivacySet(ctx, groupID) && !latest.IsPrivacySet() {
@@ -1629,10 +1674,16 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDBBeforeProfit(ct
 	if s.isOpenAIProxyStreamQuarantined(ctx, latest) {
 		return nil
 	}
-	return latest
+	return s.cookieDegradedRequestAccount(ctx, latest)
 }
 
-func (s *OpenAIGatewayService) openAIAccountMatchesSchedulingGroup(account *Account, groupID *int64) bool {
+func (s *OpenAIGatewayService) openAIAccountMatchesSchedulingGroup(ctx context.Context, account *Account, groupID *int64) bool {
+	if target := s.cookieDegradedGroup(ctx, account); target > 0 {
+		return groupID != nil && *groupID == target
+	}
+	if account != nil && account.IsOpenAI() && s.cookieDegradationConfigured(ctx) {
+		return openAIStickyAccountMatchesGroup(account, groupID)
+	}
 	if s != nil && s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
 		return account != nil
 	}
@@ -1661,7 +1712,7 @@ func (s *OpenAIGatewayService) getSchedulableAccount(ctx context.Context, accoun
 			return nil, nil
 		}
 	}
-	return account, nil
+	return s.cookieDegradedRequestAccount(ctx, account), nil
 }
 
 // filterGrokFreeQuotaAccountsForOpenAI applies the same local free soft-gate as
@@ -1717,6 +1768,30 @@ func (s *OpenAIGatewayService) newSelectionResult(ctx context.Context, account *
 	if err != nil {
 		return nil, err
 	}
+	if hydrated != nil && s.accountRepo != nil && s.cookieDegradationConfigured(ctx) {
+		hydrated, err = s.accountRepo.GetByID(ctx, hydrated.ID)
+		if err != nil {
+			return nil, err
+		}
+		if hydrated == nil || !hydrated.IsSchedulable() {
+			return nil, ErrNoAvailableAccounts
+		}
+	}
+	// Re-evaluate the deadline after hydration; never return a binding that
+	// expired while account selection was in progress.
+	if s.openAICookieSchedulingBlockReason(ctx, hydrated) != "" {
+		return nil, ErrNoAvailableAccounts
+	}
+	if group, ok := ctx.Value(cookieSchedulingGroupKey{}).(int64); ok && s.cookieDegradationConfigured(ctx) {
+		var groupID *int64
+		if group > 0 {
+			groupID = &group
+		}
+		if !s.openAIAccountMatchesSchedulingGroup(ctx, hydrated, groupID) {
+			return nil, ErrNoAvailableAccounts
+		}
+	}
+	hydrated = s.cookieDegradedRequestAccount(ctx, hydrated)
 	return attachSelectionProfitGate(ctx, &AccountSelectionResult{
 		Account:     hydrated,
 		Acquired:    acquired,

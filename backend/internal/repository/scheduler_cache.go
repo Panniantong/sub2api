@@ -974,6 +974,13 @@ func filterSchedulerExtra(extra map[string]any) map[string]any {
 		return nil
 	}
 	keys := []string{
+		// Cookie admission runs before full-account hydration.
+		"codex_cookie_host",
+		"codex_cookie_host_binding_expires_at",
+		"codex_cookie_host_cooldowns",
+		"codex_cookie_ws_host",
+		"codex_cookie_ws_started_at",
+		"codex_cookie_host_cooldown_until",
 		// Anthropic shared-window and Fable-only threshold checks run on this
 		// projection. UpdateExtra refreshes both payloads without a bucket rebuild.
 		"session_window_utilization",

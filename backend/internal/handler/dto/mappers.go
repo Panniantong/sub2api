@@ -9,6 +9,16 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
+// Older Cookie collectors used a source-specific prefix. Keep historical
+// account errors consistent with the normal OpenAI account test display.
+func accountErrorMessageForDisplay(message string) string {
+	const oldPrefix = "Cookie harvest upstream returned HTTP 401"
+	if message == oldPrefix || strings.HasPrefix(message, oldPrefix+":") {
+		return "Authentication failed (401)" + strings.TrimPrefix(message, oldPrefix)
+	}
+	return message
+}
+
 func UserFromServiceShallow(u *service.User) *User {
 	if u == nil {
 		return nil
@@ -259,7 +269,7 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		Priority:                a.Priority,
 		RateMultiplier:          a.BillingRateMultiplier(),
 		Status:                  a.Status,
-		ErrorMessage:            a.ErrorMessage,
+		ErrorMessage:            accountErrorMessageForDisplay(a.ErrorMessage),
 		LastUsedAt:              a.LastUsedAt,
 		ExpiresAt:               timeToUnixSeconds(a.ExpiresAt),
 		AutoPauseOnExpired:      a.AutoPauseOnExpired,
@@ -466,7 +476,7 @@ func AccountListItemFromAccount(a *Account) *AccountListItem {
 		CookieBinding: a.CookieBinding, WSConnections: a.WSConnections,
 		ProxyID: a.ProxyID, ProxyFallbackOriginID: a.ProxyFallbackOriginID, ProxyFallbackOriginName: a.ProxyFallbackOriginName,
 		Concurrency: a.Concurrency, LoadFactor: a.LoadFactor, Priority: a.Priority, RateMultiplier: a.RateMultiplier,
-		Status: a.Status, ErrorMessage: a.ErrorMessage, LastUsedAt: a.LastUsedAt, ExpiresAt: a.ExpiresAt,
+		Status: a.Status, ErrorMessage: accountErrorMessageForDisplay(a.ErrorMessage), LastUsedAt: a.LastUsedAt, ExpiresAt: a.ExpiresAt,
 		AutoPauseOnExpired: a.AutoPauseOnExpired, CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt,
 		Schedulable: a.Schedulable, RateLimitedAt: a.RateLimitedAt, RateLimitResetAt: a.RateLimitResetAt,
 		OverloadUntil: a.OverloadUntil, TempUnschedulableUntil: a.TempUnschedulableUntil,

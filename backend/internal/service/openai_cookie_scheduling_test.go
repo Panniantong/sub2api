@@ -52,7 +52,10 @@ func TestCookieHostSchedulingGuardScopeAndDeadline(t *testing.T) {
 		{"early rotation", func(a *Account, _ *OpenAICookieSettings) {
 			a.Extra[openAICodexCookieRotationStatusExtraKey] = "running"
 		}, true, ""},
-		{"guard off", func(a *Account, s *OpenAICookieSettings) { s.CookieHostSchedulingGuardEnabled = false; a.Extra = nil }, false, ""},
+		{"guard off with selected group", func(a *Account, s *OpenAICookieSettings) {
+			s.CookieHostSchedulingGuardEnabled = false
+			a.Extra = nil
+		}, true, "cookie_host_unbound"},
 		{"other group and explicit account", func(a *Account, s *OpenAICookieSettings) {
 			a.GroupIDs = []int64{3}
 			a.Extra = nil
@@ -246,6 +249,16 @@ func TestCookieHostSchedulingGuardValidationHandoff(t *testing.T) {
 	}
 }
 
+func TestCookieHostSchedulingGuardFinalAdmissionReleasesSlotOnce(t *testing.T) {
+	account := cookieGuardTestAccount("host.example", time.Now().Add(-time.Second))
+	svc := &OpenAIGatewayService{settingService: cookieGuardTestSettings(t)}
+	releases := 0
+	selection, err := svc.newAcquiredSelectionResult(context.Background(), &account, func() { releases++ })
+	require.ErrorIs(t, err, ErrNoAvailableAccounts)
+	require.Nil(t, selection)
+	require.Equal(t, 1, releases)
+}
+
 func TestCookieHostSchedulingGuardSettingsRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	s := cookieGuardTestSettings(t)
@@ -259,6 +272,11 @@ func TestCookieHostSchedulingGuardSettingsRoundTrip(t *testing.T) {
 	require.NoError(t, s.SetOpenAICookieSettings(ctx, settings))
 	account := cookieGuardTestAccount("", time.Time{})
 	guard, reason := s.openAICookieSchedulingStatus(ctx, &account)
+	require.True(t, guard)
+	require.Equal(t, "cookie_host_unbound", reason)
+	settings.RotationGroupIDs = nil
+	require.NoError(t, s.SetOpenAICookieSettings(ctx, settings))
+	guard, reason = s.openAICookieSchedulingStatus(ctx, &account)
 	require.False(t, guard)
 	require.Empty(t, reason)
 }

@@ -81,6 +81,9 @@ func (s *SettingService) SetOpenAICodexCookieLibrary(ctx context.Context, entrie
 	if err := s.settingRepo.Set(ctx, SettingKeyOpenAICodexCookieLibrary, string(b)); err != nil {
 		return nil, err
 	}
+	s.cookieCandidatesMu.Lock()
+	s.cookieCandidatesCache = nil
+	s.cookieCandidatesMu.Unlock()
 	return entries, nil
 }
 

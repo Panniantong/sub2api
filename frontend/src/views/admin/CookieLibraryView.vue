@@ -7,10 +7,28 @@
       </div>
       <p v-if="error" role="alert" class="rounded bg-red-50 p-3 text-sm text-red-700">{{ error }}</p>
       <p v-if="notice" role="status" class="text-sm text-emerald-600">{{ notice }}</p>
+      <section class="space-y-3 rounded-xl border border-gray-200 bg-gray-50/70 p-4 dark:border-dark-700 dark:bg-dark-800/40" aria-label="Cookie 运行驾驶舱">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="flex items-center gap-2"><span class="h-2 w-2 rounded-full" :class="dashboardError ? 'bg-amber-500' : dashboard ? 'bg-emerald-500' : 'bg-gray-400'"></span><h2 class="font-semibold">Cookie 运行驾驶舱</h2><span class="text-xs text-gray-500">每 5 秒更新</span></div>
+          <span class="text-xs text-gray-500">{{ dashboard ? '更新于 ' + formatTime(dashboard.updated_at) : '正在加载运行数据…' }}</span>
+        </div>
+        <p v-if="dashboardError" role="status" class="text-xs text-amber-600">{{ dashboardError }}{{ dashboard ? '，保留上次数据。' : '，等待重试。' }}</p>
+        <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <button type="button" class="card min-w-0 border-t-2 border-sky-500 px-4 py-4 text-left hover:bg-sky-50 dark:hover:bg-dark-700" @click="tab = 'logs'">
+            <div class="text-sm text-gray-500">正在打 Cookie 的账号</div><div class="my-2 text-3xl font-semibold tabular-nums text-sky-600">{{ dashboard?.harvest.total ?? '—' }}<span v-if="dashboard" class="ml-2 text-sm font-normal text-gray-400">/ {{ dashboard.harvest_concurrency }} 并发</span></div>
+            <p class="text-xs text-gray-500">{{ dashboard ? dashboard.harvest_enabled ? '采集已启用' : '采集已关闭' : '等待数据' }} · 查看获取日志 →</p>
+          </button>
+          <div class="card min-w-0 border-t-2 border-indigo-500 px-4 py-4"><div class="text-sm text-gray-500">Cookie Host 轮换账号</div><div class="my-2 text-3xl font-semibold tabular-nums text-indigo-600">{{ dashboard?.rotation_accounts ?? '—' }}</div><p class="text-xs text-gray-500">配置范围内去重账号 · {{ dashboard ? dashboard.rotation_enabled ? '自动轮换已启用' : '自动轮换已关闭' : '等待数据' }}</p></div>
+          <button type="button" class="card min-w-0 border-t-2 border-amber-500 px-4 py-4 text-left hover:bg-amber-50 dark:hover:bg-dark-700" @click="tab = 'rotation-logs'"><div class="text-sm text-gray-500">正在轮换 Cookie Host</div><div class="my-2 text-3xl font-semibold tabular-nums text-amber-600">{{ dashboard?.rotation_running ?? '—' }}</div><p class="text-xs text-gray-500">实际执行中，不含等待重试 · 查看日志 →</p></button>
+          <div class="card min-w-0 border-t-2 border-orange-500 px-4 py-4"><div class="text-sm text-gray-500">Cookie Host 降级账号</div><div class="my-2 text-3xl font-semibold tabular-nums text-orange-600">{{ dashboard?.degraded_accounts ?? '—' }}</div><p class="text-xs text-gray-500">按账号列表降级标记统计，不代表全部可调度</p></div>
+        </div>
+        <div v-if="dashboard" class="flex flex-wrap gap-x-5 gap-y-1 text-xs text-gray-500"><span>当前采集任务</span><span>探索 {{ dashboard.harvest.explore || 0 }}</span><span>补齐 {{ dashboard.harvest.fill || 0 }}</span><span>刷新 {{ dashboard.harvest.refresh || 0 }}</span><span>轮询 {{ dashboard.harvest.round_robin || 0 }}</span></div>
+      </section>
       <div class="flex gap-2 border-b pb-3">
         <button v-for="item in tabs" :key="item.key" class="btn" :class="tab === item.key ? 'btn-primary' : 'btn-secondary'" @click="tab = item.key">{{ item.label }}</button>
       </div>
 
+      <CookieHostMonitor v-if="tab === 'host-monitor'" :hosts="library.map(item => item.host)" />
       <section v-if="tab === 'library'" class="space-y-3">
         <input v-model="search" class="input w-full" placeholder="搜索 Host" aria-label="搜索 Host" />
         <div class="grid gap-3 sm:grid-cols-3">
@@ -45,7 +63,7 @@
 
       <section v-if="tab === 'proxy-memory'" class="space-y-3">
         <div class="flex flex-wrap items-center justify-between gap-3">
-          <div><h2 class="text-lg font-semibold">代理 Host 记忆</h2><p class="text-sm text-gray-500">展示代理历史上命中的全部 Host；前 100 次用于建立路由记忆，后续命中也会持续记录。</p></div>
+          <div><h2 class="text-lg font-semibold">代理 Host 记忆</h2><p class="text-sm text-gray-500">展示代理历史上命中的全部 Host；按配置的成功样本目标与尝试上限完成初始学习，之后持续探索。新增统计从本次升级开始累计。</p></div>
           <div class="flex gap-2"><button class="btn btn-secondary btn-sm" :disabled="proxyMemoriesLoading" @click="loadProxyMemories">刷新</button><button class="btn btn-danger btn-sm" :disabled="proxyMemoriesLoading || !proxyMemories.length" @click="resetAllProxyMemories">清空全部重学</button></div>
         </div>
         <div class="grid gap-3 sm:grid-cols-4">
@@ -57,6 +75,7 @@
         <div v-if="!proxyMemories.length" class="card p-5 text-sm text-gray-500">暂无代理 Host 记忆</div>
         <article v-for="memory in proxyMemories" :key="memory.proxy + ':' + (memory.proxy_username || '')" class="card space-y-3 p-5">
           <div class="flex flex-wrap items-start justify-between gap-3"><div class="min-w-0"><div class="flex flex-wrap items-center gap-2"><div class="break-all font-mono text-sm">{{ memory.proxy }}</div><span v-if="managedProxyForMemory(memory)" class="rounded bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">IP 管理 · {{ managedProxyLocation(managedProxyForMemory(memory)) }}</span></div><div v-if="memory.proxy_username" class="mt-1 text-xs text-gray-500">用户名：{{ memory.proxy_username }}</div></div><div class="flex items-center gap-3 text-xs"><span :class="memory.completed ? 'text-emerald-600' : 'text-gray-500'">路由学习 {{ memory.requests }}/{{ memory.limit }}{{ memory.completed ? '（已完成）' : '' }}</span><button class="btn btn-secondary btn-sm" :disabled="proxyMemoryResetting === memory.proxy" @click="resetProxyMemory(memory)">清空重学</button></div></div>
+          <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500"><span>学习成功样本 {{ memory.successful_samples || 0 }} / {{ memory.sample_target || 20 }}</span><template v-if="memory.stats"><span>采集成功 {{ memory.stats.successes }} / {{ memory.stats.attempts }}</span><span>失败 {{ memory.stats.failures }} · 账号 401 {{ memory.stats.unauthorized }}</span><span>发现全局新 Host {{ memory.stats.new_hosts }}</span><span>补齐/刷新目标命中 {{ memory.stats.target_hits }}</span><span>探索 {{ memory.stats.tasks?.explore || 0 }} · 补齐 {{ memory.stats.tasks?.fill || 0 }} · 刷新 {{ memory.stats.tasks?.refresh || 0 }}</span></template><span v-if="memory.backoff_until && remaining(memory.backoff_until) > 0" class="text-amber-600">代理退避剩余 {{ remaining(memory.backoff_until) }}s</span></div>
           <div class="flex flex-wrap gap-2"><span v-for="host in displayMemoryHosts(memory)" :key="host.host" class="rounded bg-gray-100 px-2 py-1 font-mono text-xs dark:bg-dark-800">{{ host.host }} ×{{ host.count }}</span><span v-if="!displayMemoryHosts(memory).length" class="text-xs text-gray-500">尚未记录 Host</span></div>
         </article>
       </section>
@@ -73,7 +92,7 @@
               <label class="flex items-center gap-2 rounded bg-gray-50 px-3 py-2 text-sm dark:bg-dark-800"><input v-model="form.enabled" type="checkbox" />启用 Cookie 获取（与打票独立）</label>
               <label class="flex items-center gap-2 rounded bg-gray-50 px-3 py-2 text-sm dark:bg-dark-800"><input v-model="form.auto_validate_host" type="checkbox" />自动验证 Host 是否降智</label>
               <label class="space-y-2"><span class="block text-sm">Cookie 获取模型</span><input v-model="form.model" required maxlength="128" class="input w-full" placeholder="gpt-6-astra" /><span class="block text-xs text-gray-500">仅用于获取 Cookie 的请求。</span></label>
-              <label class="space-y-2"><span class="block text-sm">Cookie 获取间隔（秒）</span><input v-model.number="form.interval_seconds" required type="number" min="1" max="3600" class="input w-full" /><span class="block text-xs text-gray-500">每轮采集任务之间的间隔。</span></label>
+              <label class="space-y-2"><span class="block text-sm">同账号采集间隔（秒）</span><input v-model.number="form.interval_seconds" required type="number" min="1" max="3600" class="input w-full" /><span class="block text-xs text-gray-500">账号完成一次采集后的最短休息时间；其他空闲账号可继续采集，不再等待整批结束。</span></label>
               <label class="space-y-2"><span class="block text-sm">智力测试模型（独立配置）</span><input v-model="intelligenceModel" required maxlength="128" class="input w-full" placeholder="gpt-6-astra" /><span class="block text-xs text-gray-500">只用于账号列表中的智力测试和智力监控，不会改变 Cookie 获取模型。</span></label>
               <div class="flex items-end text-xs text-gray-500">智力测试题目和监控周期请在“智力监控”页面配置。</div>
             </div>
@@ -85,16 +104,17 @@
               <p class="mt-1 text-xs text-gray-500">获取账号负责采集 Cookie；轮换账号负责已有 Host 的自动切换。两套范围互不覆盖。</p>
             </div>
             <div class="grid gap-4 md:grid-cols-2">
-              <label class="space-y-2"><span class="block text-sm">Cookie 获取分组（可多选）</span><button type="button" class="input flex min-h-11 w-full items-center justify-between text-left" @click="openPicker('groups')"><span v-if="pickerDisplayNames('groups').length" class="flex min-w-0 flex-wrap gap-1"><span v-for="name in pickerDisplayNames('groups')" :key="name" class="max-w-full truncate rounded bg-primary-50 px-2 py-0.5 text-xs text-primary-700 dark:bg-primary-900/30 dark:text-primary-300">{{ name }}</span></span><span v-else class="truncate text-gray-500">未选择分组</span><span class="ml-3 shrink-0 text-gray-400">⌄</span></button><span class="block text-xs text-gray-500">仅使用这些分组账号采集 Cookie；未选择时轮询所有可用账号。</span></label>
+              <label class="space-y-2"><span class="block text-sm">Cookie 获取分组（可多选）</span><button type="button" class="input flex min-h-11 w-full items-center justify-between text-left" @click="openPicker('groups')"><span v-if="pickerDisplayNames('groups').length" class="flex min-w-0 flex-wrap gap-1"><span v-for="name in pickerDisplayNames('groups')" :key="name" class="max-w-full truncate rounded bg-primary-50 px-2 py-0.5 text-xs text-primary-700 dark:bg-primary-900/30 dark:text-primary-300">{{ name }}</span></span><span v-else class="truncate text-gray-500">未选择分组</span><span class="ml-3 shrink-0 text-gray-400">⌄</span></button><span class="block text-xs text-gray-500">使用所选分组账号采集 Cookie，也包含当前临时降级到所选分组的账号；恢复后自动退出降级组的采集范围。未绑定且没有可轮换 Host 时也可临时降级。分组和账号均未选择时，轮询所有可用账号。</span></label>
               <label class="space-y-2"><span class="block text-sm">Cookie 获取账号（可多选）</span><button type="button" class="input flex min-h-11 w-full items-center justify-between text-left" @click="openPicker('accounts')"><span v-if="pickerDisplayNames('accounts').length" class="flex min-w-0 flex-wrap gap-1"><span v-for="name in pickerDisplayNames('accounts')" :key="name" class="max-w-full truncate rounded bg-primary-50 px-2 py-0.5 text-xs text-primary-700 dark:bg-primary-900/30 dark:text-primary-300">{{ name }}</span></span><span v-else class="truncate text-gray-500">未指定账号（自动轮询）</span><span class="ml-3 shrink-0 text-gray-400">⌄</span></button><span class="block text-xs text-gray-500">指定账号只负责采集 Cookie，不会因此获得轮换权限。</span></label>
               <label class="space-y-2"><span class="block text-sm">Host 轮换分组（可多选）</span><button type="button" class="input flex min-h-11 w-full items-center justify-between text-left" @click="openPicker('rotation-groups')"><span v-if="pickerDisplayNames('rotation-groups').length" class="flex min-w-0 flex-wrap gap-1"><span v-for="name in pickerDisplayNames('rotation-groups')" :key="name" class="max-w-full truncate rounded bg-primary-50 px-2 py-0.5 text-xs text-primary-700 dark:bg-primary-900/30 dark:text-primary-300">{{ name }}</span></span><span v-else class="truncate text-gray-500">未选择分组</span><span class="ml-3 shrink-0 text-gray-400">⌄</span></button><span class="block text-xs text-gray-500">只有这些分组中的账号会自动轮换 Host。</span></label>
               <label class="space-y-2"><span class="block text-sm">Host 轮换账号（可多选）</span><button type="button" class="input flex min-h-11 w-full items-center justify-between text-left" @click="openPicker('rotation-accounts')"><span v-if="pickerDisplayNames('rotation-accounts').length" class="flex min-w-0 flex-wrap gap-1"><span v-for="name in pickerDisplayNames('rotation-accounts')" :key="name" class="max-w-full truncate rounded bg-primary-50 px-2 py-0.5 text-xs text-primary-700 dark:bg-primary-900/30 dark:text-primary-300">{{ name }}</span></span><span v-else class="truncate text-gray-500">未指定轮换账号（不限制）</span><span class="ml-3 shrink-0 text-gray-400">⌄</span></button><span class="block text-xs text-gray-500">指定账号可单独加入轮换范围；未选择账号和分组时不会自动轮换任何账号。</span></label>
             </div>
           </section>
           <section class="space-y-4 rounded border border-gray-200 p-4 dark:border-dark-700">
-            <label class="flex items-center gap-2 text-sm"><input v-model="form.cookie_host_scheduling_guard_enabled" type="checkbox" />轮换分组调度保护：未绑定或绑定超时的账号暂不调度</label>
-            <p class="text-xs text-gray-500">仅对上方“Host 轮换分组”中的账号生效；只单独选择“Host 轮换账号”不生效。未绑定 Cookie Host、绑定有效期缺失或绑定到期未换好时，暂停接收新请求；提前轮换期间旧绑定未到期仍可调度，恢复有效绑定后自动解除保护。</p>
-            <p class="text-xs text-gray-500">此配置独立于自动轮换和账号的“可调度”开关，不会修改该开关，也不会阻止后台寻找和验证下一个 Host。未选择轮换分组时不影响任何账号。</p>
+            <h3 class="text-sm font-semibold">轮换分组调度保护与动态降级</h3>
+            <label class="block space-y-2"><span class="text-sm">Cookie Host 失效时降级到</span><select v-model.number="form.degraded_group_id" class="input w-full"><option :value="0">不降级，保持暂不调度</option><option v-for="group in cookieGroups.filter(g => !form.rotation_group_ids.includes(g.id))" :key="group.id" :value="group.id">{{ group.name }}</option></select><span class="block text-xs text-gray-500">仅作用于上方 Host 轮换分组。未绑定 Cookie Host 时，有可轮换候选则暂不调度并继续轮换；候选全部过期、处于该账号冷静期或库中无候选时，临时进入降级组。读取失败不视为候选耗尽。已有 Host 绑定超时或有效期无效时，账号临时仅供此组调度；恢复有效绑定后自动回原组，不修改账号实际分组。降级组按自身请求规则使用账号的普通链路，不携带失效绑定的 Host Cookie。账号手动关闭调度、异常状态与监控隔离仍然有效。</span></label>
+            <p class="text-xs text-gray-500">只单独选择“Host 轮换账号”不会启用分组降级。提前轮换期间旧绑定仍有效的账号继续在原组使用；后台轮换始终按账号原有归属执行。</p>
+            <p class="text-xs text-gray-500">未配置降级组时，失效账号保持暂不调度。配置后仅改变失效账号的临时调度归属，不会把原组请求转发到降级组；原组没有其他可用账号时仍返回 503。关闭账号“可调度”开关后，所有组均无法使用该账号。</p>
           </section>
           <section class="space-y-4 rounded border border-gray-200 p-4 dark:border-dark-700">
             <div><h3 class="font-semibold">Cookie 代理池</h3><p class="mt-1 text-xs text-gray-500">可直接选用 IP 管理中的代理，也可继续使用手工连接 URL；两种来源会合并并去重。</p></div>
@@ -102,9 +122,26 @@
             <label class="block space-y-2"><span class="text-sm">指定 IP 管理代理（可多选）</span><button type="button" class="input flex min-h-11 w-full items-center justify-between text-left disabled:cursor-not-allowed disabled:opacity-60" :disabled="form.use_all_managed_proxies" @click="openPicker('managed-proxies')"><span class="truncate">{{ pickerSummary('managed-proxies') }}</span><span class="ml-3 shrink-0 text-gray-400">⌄</span></button><span class="block text-xs text-gray-500">开启“全部”时会自动使用当前及后续新增的全部启用代理；关闭后仅使用这里选中的启用且未过期代理。</span></label>
             <label class="block space-y-2"><span class="text-sm">手工代理池（每行一个）</span><textarea v-model="proxyText" rows="4" class="input w-full font-mono text-sm" placeholder="http://user:password@host:port" /><span class="block text-xs text-gray-500">保留原有填写方式。未启用 IP 管理且这里留空时，使用采集账号自身代理；没有可用代理时跳过并记录失败，不直连。</span></label>
             <div class="grid gap-4 md:grid-cols-2">
-            <label class="space-y-2"><span class="block text-sm">Cookie 采集调度方式</span><select v-model="form.cookie_proxy_schedule_mode" class="input w-full"><option value="round_robin">轮询</option><option value="dynamic">动态适配</option></select><span class="block text-xs text-gray-500">轮询：多个账号按代理池顺序依次取代理。动态适配：根据代理历史命中的 Host 和当前 Cookie 库缺口，优先使用能补齐缺失 Host 的代理。</span></label>
+            <label class="space-y-2"><span class="block text-sm">Cookie 采集调度方式</span><select v-model="form.cookie_proxy_schedule_mode" class="input w-full"><option value="round_robin">轮询</option><option value="dynamic">动态适配</option></select><span class="block text-xs text-gray-500">轮询：多个账号按代理池顺序依次取代理。动态适配：按下方比例持续探索、补齐缺失及刷新到期 Host；结合代理历史命中率与退避自动选择代理。</span></label>
             <label class="space-y-2"><span class="block text-sm">并发采集账号数</span><input v-model.number="form.cookie_harvest_concurrency" required type="number" min="1" max="64" class="input w-full" /><span class="block text-xs text-gray-500">同时使用多少个采集账号打 Cookie；每个账号会独立选择代理，适合多个账号并行补齐 Host。</span></label>
-            <label class="space-y-2"><span class="block text-sm">代理路由学习尝试次数</span><input v-model.number="form.cookie_proxy_learning_attempts" required type="number" min="1" max="10000" class="input w-full" /><span class="block text-xs text-gray-500">每个代理实际发起多少次 Cookie 获取请求来学习可能返回的 Host。失败、超时或未返回有效 Host 也计入次数，默认 100 次。</span></label>
+            <label class="space-y-2"><span class="block text-sm">初始学习尝试上限</span><input v-model.number="form.cookie_proxy_learning_attempts" required type="number" min="1" max="10000" class="input w-full" /><span class="block text-xs text-gray-500">保留原配置，失败也消耗尝试预算；达到成功样本目标或尝试上限即结束初始学习。结束后仍持续探索并记录历史，不会停止发现新 Host。</span></label>
+            </div>
+            <div v-if="form.harvest_policy" class="space-y-3 rounded bg-gray-50 p-4 dark:bg-dark-800">
+              <div><h4 class="font-semibold">动态覆盖策略</h4><p class="mt-1 text-xs text-gray-500">比例仅对动态适配生效，按任务数分配，合计必须为 100%。缺失补齐或到期刷新没有任务时，其名额用于探索。每个账号、代理同时最多执行一个采集任务。</p></div>
+              <fieldset :disabled="form.cookie_proxy_schedule_mode !== 'dynamic'" class="grid gap-4 md:grid-cols-3 disabled:opacity-50">
+                <label class="space-y-1"><span class="block text-sm">探索新 Host（%）</span><input v-model.number="form.harvest_policy.explore_percent" required type="number" min="1" max="100" class="input w-full" /></label>
+                <label class="space-y-1"><span class="block text-sm">缺失 Host 补齐（%）</span><input v-model.number="form.harvest_policy.fill_percent" required type="number" min="0" max="99" class="input w-full" /></label>
+                <label class="space-y-1"><span class="block text-sm">即将过期刷新（%）</span><input v-model.number="form.harvest_policy.refresh_percent" required type="number" min="0" max="99" class="input w-full" /></label>
+                <label class="space-y-1"><span class="block text-sm">探索巡检周期（秒）</span><input v-model.number="form.harvest_policy.exploration_revisit_seconds" required type="number" min="30" max="86400" class="input w-full" /><span class="text-xs text-gray-500">超过该时间未被使用的代理优先探索；实际速度受并发、账号和退避限制。</span></label>
+                <label class="space-y-1"><span class="block text-sm">同目标连续未命中次数</span><input v-model.number="form.harvest_policy.target_miss_limit" required type="number" min="1" max="100" class="input w-full" /></label>
+                <label class="space-y-1"><span class="block text-sm">目标未命中退避（秒）</span><input v-model.number="form.harvest_policy.target_backoff_seconds" required type="number" min="1" max="86400" class="input w-full" /><span class="text-xs text-gray-500">只暂停该代理补这个 Host，换其他代理尝试；获得的其他有效 Host 仍入库。</span></label>
+              </fieldset>
+              <p class="text-xs" :class="policyTotal === 100 ? 'text-gray-500' : 'text-red-600'">当前比例合计 {{ policyTotal }}%。刷新窗口沿用下方“Cookie 提前刷新”配置；目标 Host 只是调度意图，最终节点由上游分配。</p>
+              <div class="grid gap-4 md:grid-cols-3">
+                <label class="space-y-1"><span class="block text-sm">初始学习成功样本目标</span><input v-model.number="form.harvest_policy.learning_samples" required type="number" min="1" max="10000" class="input w-full" /><span class="text-xs text-gray-500">有效 Host 响应才算成功样本；旧学习记录保留，无需清空全部重学。</span></label>
+                <label class="space-y-1"><span class="block text-sm">连续采集失败阈值</span><input v-model.number="form.harvest_policy.failure_threshold" required type="number" min="1" max="20" class="input w-full" /><span class="text-xs text-gray-500">401 计入账号异常，不处罚代理。</span></label>
+                <label class="space-y-1"><span class="block text-sm">失败代理退避（秒）</span><input v-model.number="form.harvest_policy.failure_backoff_seconds" required type="number" min="1" max="3600" class="input w-full" /><span class="text-xs text-gray-500">轮询和动态模式均生效，到期自动重新尝试。</span></label>
+              </div>
             </div>
             <label class="block space-y-2"><span class="text-sm">Host 白名单（每行一个，留空允许所有 Host）</span><textarea v-model="whitelistText" rows="3" class="input w-full font-mono text-sm" placeholder="chat.gateway.unified-84.api.openai.com" /></label>
           </section>
@@ -140,6 +177,7 @@
       </form>
 
       <section v-if="tab === 'logs'" class="space-y-3">
+        <div class="card flex flex-wrap gap-x-6 gap-y-2 px-4 py-3 text-sm"><span>正在采集 {{ harvestRunning.total || 0 }} / {{ form.cookie_harvest_concurrency }}</span><span>探索 {{ harvestRunning.explore || 0 }}</span><span>补齐 {{ harvestRunning.fill || 0 }}</span><span>刷新 {{ harvestRunning.refresh || 0 }}</span><span>轮询 {{ harvestRunning.round_robin || 0 }}</span></div>
         <div class="overflow-hidden rounded border border-gray-800 bg-[#0b1220] text-gray-200 shadow-sm">
           <div class="flex flex-wrap items-center justify-between gap-3 border-b border-gray-700 bg-[#111827] px-4 py-2 text-xs">
             <div class="flex items-center gap-2 font-mono"><span class="h-2.5 w-2.5 rounded-full" :class="!form.enabled ? 'bg-gray-500' : liveAcquisitionPaused ? 'bg-amber-400' : 'bg-emerald-400'"></span><span>cookie acquisition live</span><span class="text-gray-400">· {{ !form.enabled ? 'Cookie 获取未启用' : liveAcquisitionPaused ? '已暂停' : '实时运行中' }}</span></div>
@@ -156,7 +194,7 @@
             <tbody><tr v-for="log in logs" :key="log.id" class="border-b dark:border-dark-700">
               <td class="p-3 whitespace-nowrap">{{ formatTime(log.created_at) }}<br /><span class="text-xs text-gray-500">{{ isSchedulerLog(log) ? '系统调度' : (log.account_name || '—') }}<template v-if="log.account_id > 0"> #{{ log.account_id }}</template> · {{ log.model }}</span></td>
               <td class="p-3"><span v-if="isSchedulerLog(log)" class="text-amber-600">调度提示</span><span v-else :class="log.success ? 'text-emerald-600' : 'text-red-600'">{{ log.success ? '已入库' : '未入库' }} · {{ log.status_code || '未收到响应' }}</span><p class="mt-1 text-xs">{{ log.message }}</p></td>
-              <td class="max-w-sm break-all p-3 font-mono text-xs">{{ log.host || '—' }}<p class="mt-1 text-gray-500">{{ log.proxy || '—' }}<span v-if="log.proxy_username" class="ml-2 text-gray-400">user={{ log.proxy_username }}</span></p></td>
+              <td class="max-w-sm break-all p-3 font-mono text-xs"><span class="font-sans text-gray-500">{{ harvestTaskLabel(log.task) }}</span> · {{ log.host || '—' }}<p v-if="log.target_host" class="text-amber-600">目标 {{ log.target_host }}</p><p class="mt-1 text-gray-500">{{ log.proxy || '—' }}<span v-if="log.proxy_username" class="ml-2 text-gray-400">user={{ log.proxy_username }}</span></p></td>
               <td class="p-3"><button class="btn btn-secondary btn-sm whitespace-nowrap" @click="showDetail('Cookie 获取详情', log)">查看响应 / Cookie</button></td>
             </tr><tr v-if="!logs.length"><td colspan="4" class="p-6 text-gray-500">暂无获取日志</td></tr></tbody>
           </table>
@@ -207,6 +245,7 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import AppLayout from '@/components/layout/AppLayout.vue'
+import CookieHostMonitor from '@/components/admin/CookieHostMonitor.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import * as cookies from '@/api/admin/cookies'
@@ -220,6 +259,7 @@ import type { AccountListItem, AdminGroup, Proxy } from '@/types'
 const route = useRoute()
 const tabs = [{ key: 'library', label: 'Cookie 库' }, { key: 'proxy-memory', label: '代理 Host 记忆' }, { key: 'settings', label: '获取配置 / WS' }, { key: 'logs', label: '获取日志' }, { key: 'rotation-logs', label: '自动轮转日志' }]
 const tab = ref('library')
+tabs.push({ key: 'host-monitor', label: 'Host 拉黑监控' })
 const search = ref(typeof route.query.host === 'string' ? route.query.host : '')
 const library = ref<OpenAICodexCookieLibraryEntry[]>([])
 const logs = ref<cookies.CookieLog[]>([])
@@ -232,7 +272,27 @@ const notice = ref('')
 const now = ref(Date.now())
 const detail = ref<string | null>(null)
 const detailTitle = ref('')
-const form = reactive<cookies.CookieSettings>({ enabled: false, model: 'gpt-6-astra', interval_seconds: 5, account_ids: [], group_ids: [], rotation_account_ids: [], rotation_group_ids: [], cookie_host_scheduling_guard_enabled: false, proxy_urls: [], managed_proxy_ids: [], use_all_managed_proxies: false, cookie_proxy_schedule_mode: 'round_robin', cookie_harvest_concurrency: 1, cookie_proxy_learning_attempts: 100, dynamic_proxy_fill_host_cookie: false, host_whitelist: [], auto_validate_host: false, ws_enabled: false, ws_connections: 10, ws_ttl_seconds: 3600, ws_host_cooldown_seconds: 14400, cookie_refresh_before_seconds: 600, cookie_rotation_enabled: false, cookie_host_binding_seconds: 240, cookie_host_rotation_before_seconds: 10 })
+const form = reactive<cookies.CookieSettings>({ harvest_policy: cookies.defaultHarvestPolicy(), enabled: false, model: 'gpt-6-astra', interval_seconds: 5, account_ids: [], group_ids: [], rotation_account_ids: [], rotation_group_ids: [], cookie_host_scheduling_guard_enabled: false, proxy_urls: [], managed_proxy_ids: [], use_all_managed_proxies: false, cookie_proxy_schedule_mode: 'round_robin', cookie_harvest_concurrency: 1, cookie_proxy_learning_attempts: 100, dynamic_proxy_fill_host_cookie: false, host_whitelist: [], auto_validate_host: false, ws_enabled: false, ws_connections: 10, ws_ttl_seconds: 3600, ws_host_cooldown_seconds: 14400, cookie_refresh_before_seconds: 600, cookie_rotation_enabled: false, cookie_host_binding_seconds: 240, cookie_host_rotation_before_seconds: 10 })
+const policyTotal = computed(() => { const p = form.harvest_policy; return p ? p.explore_percent + p.fill_percent + p.refresh_percent : 100 })
+const harvestRunning = ref<Record<string, number>>({})
+const dashboard = ref<cookies.CookieDashboard | null>(null)
+const dashboardError = ref('')
+let dashboardPolling = false
+let dashboardDisposed = false
+async function loadDashboard() {
+  if (dashboardPolling || dashboardDisposed || document.hidden) return
+  dashboardPolling = true
+  try {
+    const value = await cookies.getDashboard()
+    if (dashboardDisposed) return
+    dashboard.value = value
+    harvestRunning.value = value.harvest
+    dashboardError.value = ''
+  } catch {
+    if (!dashboardDisposed) dashboardError.value = '运行数据更新失败'
+  } finally { dashboardPolling = false }
+}
+const harvestTaskLabel = (task?: string) => ({ explore: '探索新 Host', fill: '补齐缺失', refresh: '到期刷新', round_robin: '轮询采集' }[task || ''] || '采集')
 const intelligenceModel = ref('gpt-6-astra')
 const intelligenceMonitorConfig = ref<IntelligenceMonitorConfig | null>(null)
 const cookieAccounts = ref<AccountListItem[]>([])
@@ -347,7 +407,7 @@ const liveAcquisitionText = (log: cookies.CookieLog) => {
   const result = log.success ? 'Cookie 已入库' : 'Cookie 未入库'
   const status = log.status_code ? `HTTP ${log.status_code}` : '未收到响应'
   const host = log.host ? ` · Host ${log.host}` : ''
-  return `${liveAccountLabel(log)} · ${result} · ${status} · ${log.message}${host}`
+  return `${harvestTaskLabel(log.task)} · ${liveAccountLabel(log)} · ${result} · ${status} · ${log.message}${host}${log.target_host ? ` · 目标 ${log.target_host}` : ''}`
 }
 const liveRotationText = (log: cookies.CookieLog) => {
   const host = log.host ? ` · Host ${log.host}` : ''
@@ -387,7 +447,10 @@ async function pollLiveLogs() {
   livePolling = true
   try {
     const tasks: Promise<void>[] = []
-    if (acquisitionActive) tasks.push(cookies.getLogs(100).then(value => appendLiveLogs('acquisition', value || [])))
+    if (acquisitionActive) {
+      tasks.push(cookies.getLogs(100).then(value => appendLiveLogs('acquisition', value || [])))
+      tasks.push(cookies.getHarvestRuntime().then(value => { harvestRunning.value = value }))
+    }
     if (rotationActive) tasks.push(cookies.getValidationLogs({ page: 1, page_size: 100 }).then(value => appendLiveLogs('rotation', value.items || [])))
     await Promise.all(tasks)
     liveStatusError.value = ''
@@ -468,6 +531,8 @@ async function resetAllProxyMemories() {
 async function loadSettings() {
   const [value, monitorConfig] = await Promise.all([cookies.getSettings(), intelligenceMonitorAPI.getConfig()])
   Object.assign(form, value)
+  form.degraded_group_id = value.degraded_group_id || 0
+  form.harvest_policy = { ...cookies.defaultHarvestPolicy(), ...value.harvest_policy }
   form.account_ids = (value.account_ids?.length ? value.account_ids : (value.account_id ? [value.account_id] : [])).map(Number)
   form.group_ids = (value.group_ids || []).map(Number)
   form.rotation_account_ids = (value.rotation_account_ids || []).map(Number)
@@ -503,6 +568,7 @@ async function refresh() {
   loading.value = true
   try {
     const results = await Promise.allSettled([
+      loadDashboard(),
       cookies.getLibrary().then(value => { library.value = value || [] }),
       cookies.getLogs().then(value => { logs.value = value || [] }),
       loadProxyMemories(),
@@ -531,6 +597,7 @@ async function save() {
     form.rotation_group_ids = (value.rotation_group_ids || []).map(Number)
     form.managed_proxy_ids = (value.managed_proxy_ids || []).map(Number)
     notice.value = '已保存，Cookie 获取、代理、账号范围、WS 与模型配置已更新。'
+    void loadDashboard()
   } catch (err) { error.value = message(err) } finally { saving.value = false }
 }
 async function saveIntelligenceModel() {
@@ -542,8 +609,11 @@ async function saveIntelligenceModel() {
 let refreshTimer: ReturnType<typeof setInterval> | undefined
 let clockTimer: ReturnType<typeof setInterval> | undefined
 let liveTimer: ReturnType<typeof setInterval> | undefined
+let dashboardTimer: ReturnType<typeof setInterval> | undefined
 watch(validationAccountId, () => { validationPage.value = 1; void loadValidationLogs().catch(err => { error.value = message(err) }) })
 watch(tab, value => { if (value === 'logs' || value === 'rotation-logs') void pollLiveLogs() })
 onMounted(() => { void refresh(); refreshTimer = setInterval(() => { void cookies.getLibrary().then(value => { library.value = value || [] }) }, 10000); clockTimer = setInterval(() => { now.value = Date.now() }, 1000); liveTimer = setInterval(() => { void pollLiveLogs() }, 1500) })
-onUnmounted(() => { clearInterval(refreshTimer); clearInterval(clockTimer); clearInterval(liveTimer) })
+onMounted(() => { dashboardTimer = setInterval(() => { void loadDashboard() }, 5000); document.addEventListener('visibilitychange', onDashboardVisibility) })
+function onDashboardVisibility() { if (!document.hidden) void loadDashboard() }
+onUnmounted(() => { dashboardDisposed = true; clearInterval(dashboardTimer); document.removeEventListener('visibilitychange', onDashboardVisibility); clearInterval(refreshTimer); clearInterval(clockTimer); clearInterval(liveTimer) })
 </script>

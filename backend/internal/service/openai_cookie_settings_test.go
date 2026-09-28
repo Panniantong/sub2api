@@ -205,7 +205,8 @@ func TestCookieHarvestUnauthorizedSynchronizesAccountError(t *testing.T) {
 	require.Equal(t, int64(21), repo.accountID)
 	require.Equal(t, StatusError, account.Status)
 	require.False(t, account.Schedulable)
-	require.Contains(t, account.ErrorMessage, "HTTP 401")
+	require.Equal(t, `Authentication failed (401): {"error":"invalid cookie"}`, account.ErrorMessage)
+	require.Equal(t, account.ErrorMessage, repo.errorMessage)
 	require.Contains(t, repo.errorMessage, "invalid cookie")
 }
 

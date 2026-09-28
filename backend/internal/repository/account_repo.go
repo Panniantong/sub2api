@@ -25,6 +25,7 @@ import (
 	dbgroup "github.com/Wei-Shaw/sub2api/ent/group"
 	dbpredicate "github.com/Wei-Shaw/sub2api/ent/predicate"
 	dbproxy "github.com/Wei-Shaw/sub2api/ent/proxy"
+	dbsetting "github.com/Wei-Shaw/sub2api/ent/setting"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -464,6 +465,9 @@ func (r *accountRepository) updateAccount(
 ) error {
 	if account == nil {
 		return nil
+	}
+	if err := r.checkMonitorHostEdit(ctx, account.ID, account.Extra); err != nil {
+		return err
 	}
 
 	baseCtx := ctx
@@ -2643,7 +2647,47 @@ func (r *accountRepository) AutoPauseExpiredAccounts(ctx context.Context, now ti
 	return int64(len(accountIDs)), nil
 }
 
+// Read persisted monitor policy here so manual edits, bulk edits and stale
+// background writers cannot replace or remove a monitored account's Host.
+func (r *accountRepository) checkMonitorHostEdit(ctx context.Context, id int64, extra map[string]any) error {
+	client := clientFromContext(ctx, r.client)
+	row, err := client.Setting.Query().Where(dbsetting.KeyEQ("openai_cookie_settings")).Only(ctx)
+	if dbent.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var settings service.OpenAICookieSettings
+	if err := json.Unmarshal([]byte(row.Value), &settings); err != nil {
+		return err
+	}
+	if settings.HostMonitor == nil || !settings.HostMonitor.Enabled {
+		return nil
+	}
+	owned := settings.HostMonitor.AccountID > 0 && settings.HostMonitor.AccountID == id
+	if !owned {
+		a, err := r.GetByID(ctx, id)
+		if err != nil {
+			return err
+		}
+		owned = service.CookieHostMonitorOwns(a, &settings)
+	}
+	if owned {
+		host, _ := extra["codex_cookie_host"].(string)
+		if strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), ".")) != settings.HostMonitor.Host {
+			return errors.New("账号正在固定 Host 监控，请先关闭监控后再修改 Cookie Host")
+		}
+	}
+	return nil
+}
+
 func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates map[string]any) error {
+	if _, ok := updates["codex_cookie_host"]; ok {
+		if err := r.checkMonitorHostEdit(ctx, id, updates); err != nil {
+			return err
+		}
+	}
 	updates = stripCodexFingerprintSeedFromExtraUpdate(updates)
 	if len(updates) == 0 {
 		return nil
@@ -2918,6 +2962,13 @@ func ollamaCloudUsageSnapshotClearRequested(extra map[string]any) bool {
 }
 
 func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates service.AccountBulkUpdate) (int64, error) {
+	if _, ok := updates.Extra["codex_cookie_host"]; ok {
+		for _, id := range ids {
+			if err := r.checkMonitorHostEdit(ctx, id, updates.Extra); err != nil {
+				return 0, err
+			}
+		}
+	}
 	if len(ids) == 0 {
 		return 0, nil
 	}

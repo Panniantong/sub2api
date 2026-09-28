@@ -50,6 +50,9 @@ func (s *OpenAIGatewayService) autoConfigureOpenAICookieHost(ctx context.Context
 }
 
 func isOpenAICookieRotationAccount(account *Account, settings *OpenAICookieSettings) bool {
+	if cookieHostMonitorOwns(account, settings) {
+		return false
+	}
 	if account == nil || settings == nil {
 		return false
 	}
@@ -173,6 +176,8 @@ func (s *OpenAIGatewayService) rotateDueOpenAICookieHost(ctx context.Context, ac
 		return true
 	}
 	defer rotationLock.Unlock()
+	s.openaiCookieRotationRunning.Store(account.ID, true)
+	defer s.openaiCookieRotationRunning.Delete(account.ID)
 	// Re-read the due state after taking the account lock. The harvester and
 	// an explicit refresh can reach this function concurrently.
 	current = openAICodexCookieHostFromAccount(account)
@@ -199,10 +204,7 @@ func (s *OpenAIGatewayService) rotateDueOpenAICookieHost(ctx context.Context, ac
 	attempted := 0
 	for _, entry := range entries {
 		host := normalizeOpenAICookieHost(entry.Host)
-		if host == "" || (current != "" && host == current) || entry.ExpiresAt.IsZero() || !entry.ExpiresAt.After(now) {
-			continue
-		}
-		if until := openAICodexCookieHostCooldownUntil(account, host); until.After(now) {
+		if !openAICookieRotationCandidate(account, entry, now) {
 			continue
 		}
 		attempted++
@@ -377,6 +379,9 @@ func (s *OpenAIGatewayService) validateBindAndBuildOpenAICookieHost(ctx context.
 // harvester validation path. It is intentionally synchronous so the account
 // update cannot report a Host as bound before the yes/no decision is known.
 func (s *OpenAIGatewayService) ValidateAndBindOpenAICookieHost(ctx context.Context, account *Account, host string) (string, error) {
+	if err := s.checkCookieHostMonitorLock(ctx, account); err != nil {
+		return "error", err
+	}
 	if s == nil || account == nil {
 		return "error", fmt.Errorf("account is unavailable")
 	}
@@ -426,6 +431,8 @@ func (s *OpenAIGatewayService) LogOpenAICookieHostBinding(ctx context.Context, a
 // Independent schedule and settings, sharing only lifecycle cancellation with
 // the ticket worker. A slow ticket probe cannot block Cookie acquisition.
 func (s *OpenAIGatewayService) runOpenAICookieHarvester(ctx context.Context) {
+	defer s.cookieHarvestRuntime.wg.Wait()
+	go s.runCookieHostMonitor(ctx)
 	// Restore saved bindings once at startup, independently of inference.
 	if accounts, err := s.accountRepo.ListByPlatform(ctx, PlatformOpenAI); err == nil {
 		for i := range accounts {
@@ -438,9 +445,6 @@ func (s *OpenAIGatewayService) runOpenAICookieHarvester(ctx context.Context) {
 	}
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
-	var next time.Time
-	var lastInterval int
-	var sequence uint64
 	for {
 		select {
 		case <-ctx.Done():
@@ -453,7 +457,6 @@ func (s *OpenAIGatewayService) runOpenAICookieHarvester(ctx context.Context) {
 			continue
 		}
 		if !settings.Enabled {
-			next = time.Time{}
 			continue
 		}
 		// Rotation is independent from Cookie collection account selection.
@@ -462,16 +465,7 @@ func (s *OpenAIGatewayService) runOpenAICookieHarvester(ctx context.Context) {
 		if settings.CookieRotationEnabled {
 			s.rotateDueOpenAICookieAccounts(ctx, settings)
 		}
-		if lastInterval != settings.IntervalSeconds {
-			next = time.Time{}
-			lastInterval = settings.IntervalSeconds
-		}
-		if time.Now().Before(next) {
-			continue
-		}
-		s.refreshOpenAICookies(ctx, settings, sequence)
-		sequence++
-		next = time.Now().Add(time.Duration(settings.IntervalSeconds) * time.Second)
+		s.dispatchOpenAICookieHarvest(ctx, settings)
 	}
 }
 
@@ -491,102 +485,10 @@ func (s *OpenAIGatewayService) rotateDueOpenAICookieAccounts(ctx context.Context
 	}
 }
 
-func (s *OpenAIGatewayService) refreshOpenAICookies(ctx context.Context, settings *OpenAICookieSettings, sequence uint64) {
-	accounts, err := s.accountRepo.ListByPlatform(ctx, PlatformOpenAI)
-	eligible := make([]*Account, 0)
-	selectedCount := 0
-	freshCount := 0
-	if err == nil {
-		learningProxies := []string(nil)
-		if settings.CookieProxyLearningAttempts > 0 {
-			learningProxies = s.learningOpenAICookieProxies(ctx, s.settingService.resolveOpenAICookieProxyURLs(ctx, settings), settings.CookieProxyLearningAttempts)
-		}
-		learningActive := len(learningProxies) > 0
-		for i := range accounts {
-			account := &accounts[i]
-			if account.Status == StatusActive && isOpenAICodexTicketAccount(account) &&
-				isOpenAICookieCollector(account, settings) {
-				selectedCount++
-				if !learningActive && settings.CookieRefreshBeforeSeconds > 0 && !(settings.CookieRotationEnabled && openAICookieRotationDue(account, time.Now())) {
-					if host := openAICodexCookieHostFromAccount(account); host != "" {
-						if entry, lookupErr := s.settingService.LookupOpenAICodexCookie(ctx, host); lookupErr == nil && entry != nil &&
-							entry.ExpiresAt.After(time.Now().Add(time.Duration(settings.CookieRefreshBeforeSeconds)*time.Second)) {
-							freshCount++
-							continue
-						}
-					}
-				}
-				eligible = append(eligible, account)
-			}
-		}
-	}
-	if err != nil {
-		_ = s.settingService.appendOpenAICookieLog(ctx, OpenAICookieAcquisitionLog{ID: uuid.NewString(), Kind: "scheduler", Model: settings.Model, CreatedAt: time.Now(), Message: fmt.Sprintf("读取采集账号失败: %v", err)})
-		return
-	}
-	if len(eligible) == 0 {
-		// A configured account with a sufficiently fresh Cookie is a normal idle
-		// cycle, not an acquisition failure. Do not flood history every interval.
-		if selectedCount > 0 && freshCount == selectedCount {
-			return
-		}
-		msg := "没有符合条件的 Cookie 采集账号；需要启用的 OpenAI OAuth/setup-token 非影子账号"
-		if len(settings.AccountIDs) > 0 || settings.AccountID > 0 || len(settings.GroupIDs) > 0 {
-			msg = "配置的采集账号或分组未匹配到可用账号；请检查账号状态、平台、类型及分组归属"
-		} else {
-			msg = "未指定采集账号或分组，自动轮询全部账号，但当前没有符合条件的启用 OpenAI OAuth/setup-token 非影子账号"
-		}
-		_ = s.settingService.appendOpenAICookieLog(ctx, OpenAICookieAcquisitionLog{ID: uuid.NewString(), Kind: "scheduler", Model: settings.Model, CreatedAt: time.Now(), Message: msg})
-		return
-	}
-	concurrency := settings.CookieHarvestConcurrency
-	if concurrency < 1 {
-		concurrency = 1
-	}
-	if concurrency > len(eligible) {
-		concurrency = len(eligible)
-	}
-	mode := strings.ToLower(strings.TrimSpace(settings.CookieProxyScheduleMode))
-	if mode == "" {
-		mode = "round_robin"
-	}
-	proxyURLs := s.settingService.resolveOpenAICookieProxyURLs(ctx, settings)
-	learningProxies := s.learningOpenAICookieProxies(ctx, proxyURLs, settings.CookieProxyLearningAttempts)
-	dynamicProxies := []string{}
-	if mode == "dynamic" && len(learningProxies) == 0 {
-		dynamicProxies = s.dynamicOpenAICookieProxiesForMissingHosts(ctx, proxyURLs)
-	}
-	var workers sync.WaitGroup
-	for worker := 0; worker < concurrency; worker++ {
-		account := eligible[(int(sequence)+worker)%len(eligible)]
-		workerIndex := worker
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
-			cfg := s.codexTicketConfig()
-			cfg.Models = []string{settings.Model}
-			cfg.HarvestProxyURL = ""
-			cfg.CookieHostWhitelist = settings.HostWhitelist
-			cfg.CookieProxyLearningAttempts = settings.CookieProxyLearningAttempts
-			cfg.CookieDynamicProxyFillHostCookie = mode == "dynamic" && len(learningProxies) == 0
-			if len(learningProxies) > 0 {
-				cfg.CookieHarvestProxyURLs = []string{learningProxies[workerIndex%len(learningProxies)]}
-			} else if mode == "dynamic" && len(dynamicProxies) > 0 {
-				cfg.CookieHarvestProxyURLs = []string{dynamicProxies[workerIndex%len(dynamicProxies)]}
-			} else {
-				cfg.CookieHarvestProxyURLs = proxyURLs
-			}
-			if settings.CookieRotationEnabled && isOpenAICookieRotationAccount(account, settings) {
-				s.rotateDueOpenAICookieHost(ctx, account, settings)
-			}
-			probeSettings := openAICookieProbeSettings(account, settings)
-			s.probeOpenAICodexTicket(ctx, account, cfg, probeSettings)
-		}()
-	}
-	workers.Wait()
-}
-
 func isOpenAICookieCollector(account *Account, settings *OpenAICookieSettings) bool {
+	if cookieHostMonitorOwns(account, settings) {
+		return false
+	}
 	if account == nil || settings == nil {
 		return false
 	}
@@ -602,6 +504,11 @@ func isOpenAICookieCollector(account *Account, settings *OpenAICookieSettings) b
 		}
 	}
 	groupIDs := append([]int64(nil), account.GroupIDs...)
+	// Collection accepts the transient degraded group in addition to explicit
+	// accounts and persisted groups. Recovery/unbinding removes this extra scope.
+	if target := cookieDegradedTarget(account, settings, time.Now()); target > 0 {
+		groupIDs = append(groupIDs, target)
+	}
 	for _, accountGroup := range account.AccountGroups {
 		groupIDs = append(groupIDs, accountGroup.GroupID)
 	}
@@ -624,22 +531,8 @@ func isExplicitOpenAICookieCollector(account *Account, settings *OpenAICookieSet
 	if account == nil || settings == nil {
 		return false
 	}
-	if settings.AccountID > 0 && settings.AccountID == account.ID {
-		return true
-	}
-	for _, id := range settings.AccountIDs {
-		if id == account.ID {
-			return true
-		}
-	}
-	for _, groupID := range account.GroupIDs {
-		for _, id := range settings.GroupIDs {
-			if id == groupID {
-				return true
-			}
-		}
-	}
-	return false
+	selected := settings.AccountID > 0 || len(settings.AccountIDs) > 0 || len(settings.GroupIDs) > 0
+	return selected && isOpenAICookieCollector(account, settings)
 }
 
 // openAICookieProbeSettings derives the per-account behavior for one harvest.

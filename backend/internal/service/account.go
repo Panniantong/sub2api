@@ -69,6 +69,7 @@ type Account struct {
 	// Request-local candidate Cookie used by Host validation only. Never
 	// persisted or exposed to scheduler snapshots as a confirmed binding.
 	openaiCookieValidationCookie string
+	openaiCookieDegraded         bool
 
 	// model_mapping 热路径缓存（非持久化字段）
 	modelMappingCache               map[string]string
