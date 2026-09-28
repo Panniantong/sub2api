@@ -34,10 +34,7 @@ const (
 
 	// snapshotGraceTTLSeconds 旧快照过期的宽限期（秒）。
 	// 替代立即 DEL，让正在读取旧版本的 reader 有足够时间完成 ZRANGE。
-	// Keep retired snapshots only briefly. Readers that started during a
-	// publish can finish, while newly admitted traffic observes status changes
-	// quickly and avoids routing to an account that just became unavailable.
-	snapshotGraceTTLSeconds = 3
+	snapshotGraceTTLSeconds = 60
 )
 
 const (

@@ -1701,8 +1701,8 @@ func openAICodexCookieHostFromAccount(account *Account) string {
 }
 
 // openAICodexCookieForAccount resolves the account's explicitly bound library
-// host. Expired bindings are removed immediately so a stale Cookie cannot be
-// sent after its JWT expires. Accounts without a binding retain the legacy
+// host. Expired Cookies are not returned; inference never edits the binding.
+// Accounts without a binding retain the legacy
 // account-local cookie for backwards compatibility.
 func (s *OpenAIGatewayService) openAICodexCookieForAccount(account *Account) string {
 	if account == nil {
@@ -1722,16 +1722,8 @@ func (s *OpenAIGatewayService) openAICodexCookieForAccount(account *Account) str
 	if err == nil && entry != nil {
 		return entry.Cookie
 	}
-	// Library lookup removes expired entries from its visible result. Clear the
-	// account binding so the UI and future requests no longer claim it is active.
-	if err == nil && account.Extra != nil {
-		delete(account.Extra, openAICodexCookieHostExtraKey)
-		if s.accountRepo != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_ = s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{openAICodexCookieHostExtraKey: nil})
-		}
-	}
+	// A request may hold an old Host while rotation has already saved a new
+	// binding. Cookie lookup must never clear the authoritative database binding.
 	return ""
 }
 

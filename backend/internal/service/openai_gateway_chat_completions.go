@@ -78,6 +78,13 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		SetActualOpenAIUpstreamEndpoint(c, "/v1/chat/completions")
 	}
 	setCodexToolNameReverse(c, nil)
+	groupID := getOpenAIGroupIDFromContext(c)
+	ctx = withCookieSchedulingGroup(ctx, &groupID)
+	currentAccount, bindingErr := s.refreshCookieDispatchAccount(ctx, account)
+	if bindingErr != nil {
+		return nil, bindingErr
+	}
+	account = currentAccount
 	if _, err := s.prepareCodexAccountIdentitySource(ctx, c, account); err != nil {
 		return nil, err
 	}

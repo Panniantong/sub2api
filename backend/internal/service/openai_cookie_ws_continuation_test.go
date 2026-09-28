@@ -40,6 +40,7 @@ func TestCookieWSHTTPContinuationReusesFixedConnection(t *testing.T) {
 	cfg.Gateway.OpenAIWS.OAuthEnabled = true
 	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
 	account := &Account{ID: 1, Concurrency: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+		Status: StatusActive, Schedulable: true,
 		Credentials: map[string]any{"access_token": "test", "chatgpt_account_id": "test"},
 		Extra:       map[string]any{openAICodexCookieHostExtraKey: "host.example", "session_id": "test-session"}}
 	conn := &openAIWSCaptureConn{events: [][]byte{

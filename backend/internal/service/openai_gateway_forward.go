@@ -37,6 +37,13 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	clearOpenAIResponsesClientToolMapping(c)
 	clearOpenAIResponsesNamespaceNames(c)
 	setCodexToolNameReverse(c, nil)
+	groupID := getOpenAIGroupIDFromContext(c)
+	ctx = withCookieSchedulingGroup(ctx, &groupID)
+	currentAccount, bindingErr := s.refreshCookieDispatchAccount(ctx, account)
+	if bindingErr != nil {
+		return nil, bindingErr
+	}
+	account = currentAccount
 	if _, err := s.prepareCodexAccountIdentitySource(ctx, c, account); err != nil {
 		return nil, err
 	}
@@ -1540,6 +1547,9 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	// 账号级请求头覆写（仅 openai api_key 账号启用时生效；OAuth 路径 no-op）
 	account.ApplyHeaderOverrides(req.Header)
 	applyOpenCodeSessionHeader(c, account, targetURL, req.Header, body, openCodeSessionHintBody(promptCacheKey))
+	if err := s.checkCookieDispatchTurn(ctx, account); err != nil {
+		return nil, err
+	}
 	s.applyOpenAIAccountBoundState(account, req.Header)
 	// x-codex-beta-features：按真实 Codex 的会话级行为补注（在账号级覆写之后，
 	// 保证不被覆盖丢失）。

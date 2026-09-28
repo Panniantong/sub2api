@@ -83,6 +83,13 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	if account == nil {
 		return errors.New("account is nil")
 	}
+	dispatchGroupID := getOpenAIGroupIDFromContext(c)
+	ctx = withCookieSchedulingGroup(ctx, &dispatchGroupID)
+	currentAccount, bindingErr := s.refreshCookieDispatchAccount(ctx, account)
+	if bindingErr != nil {
+		return bindingErr
+	}
+	account = currentAccount
 	// A handler may reuse the same gin context across account failover attempts.
 	// Never let an OAuth attempt's response aliases leak into the next account.
 	setCodexToolNameReverse(c, nil)
@@ -114,6 +121,23 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}()
 	}
 
+	var dispatchHooks OpenAIWSIngressHooks
+	if hooks != nil {
+		dispatchHooks = *hooks
+	}
+	beforeTurn := dispatchHooks.BeforeTurn
+	dispatchHooks.BeforeTurn = func(turn int) error {
+		if beforeTurn != nil {
+			if err := beforeTurn(turn); err != nil {
+				return err
+			}
+		}
+		if err := s.checkCookieDispatchTurn(ctx, account); err != nil {
+			return NewOpenAIWSClientCloseError(coderws.StatusServiceRestart, "Cookie Host changed or unavailable; reconnect to reschedule", err)
+		}
+		return nil
+	}
+	hooks = &dispatchHooks
 	wsDecision := s.getOpenAIWSProtocolResolver().Resolve(account)
 	forceHTTPBridge := account.Platform == PlatformGrok || wsDecision.Reason == "cookie_ws_disabled" ||
 		(s.pluginManager != nil && s.pluginManager.ShouldRouteOpenAIOAuth(account))
@@ -1784,6 +1808,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			)
 		}
 
+		// Check after pool queueing too, including retries that skip BeforeTurn.
+		if err := s.checkCookieDispatchTurn(ctx, account); err != nil {
+			return NewOpenAIWSClientCloseError(coderws.StatusServiceRestart, "Cookie Host changed or unavailable; reconnect to reschedule", err)
+		}
 		result, relayErr := sendAndRelay(turn, sessionLease, currentPayload, currentPayloadBytes, currentOriginalModel, currentImageBillingModel, currentImageSizeTier, currentImageInputSize, currentRequestedReasoningEffort)
 		if relayErr != nil {
 			lastTurnClean = false

@@ -1768,7 +1768,10 @@ func (s *OpenAIGatewayService) newSelectionResult(ctx context.Context, account *
 	if err != nil {
 		return nil, err
 	}
-	if hydrated != nil && s.accountRepo != nil && s.cookieDegradationConfigured(ctx) {
+	// Refresh OAuth bindings at final admission, including formerly unbound
+	// accounts. Hydration from Redis must not undo a prior database recheck.
+	refreshCookieBinding := hydrated != nil && s.accountRepo != nil && isOpenAICodexTicketAccount(hydrated)
+	if hydrated != nil && s.accountRepo != nil && (s.cookieDegradationConfigured(ctx) || refreshCookieBinding) {
 		hydrated, err = s.accountRepo.GetByID(ctx, hydrated.ID)
 		if err != nil {
 			return nil, err
