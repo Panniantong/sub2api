@@ -183,7 +183,10 @@ func (s *SettingService) GetOpenAICookieSettings(ctx context.Context) (*OpenAICo
 			value.DegradedGroupName = group.Name
 		}
 	}
-	s.openAICookieCache.Store(&cachedOpenAICookieSettings{value, time.Now().Add(5 * time.Second)})
+	// Scheduling policy changes must become visible quickly after an admin
+	// update; keep this cache short while still avoiding a settings DB read per
+	// request.
+	s.openAICookieCache.Store(&cachedOpenAICookieSettings{value, time.Now().Add(1 * time.Second)})
 	value.rotationCandidates = func() ([]OpenAICodexCookieLibraryEntry, error) { return s.cookieSchedulingCandidates(ctx) }
 	return &value, nil
 }
@@ -337,7 +340,7 @@ func (s *SettingService) setOpenAICookieSettings(ctx context.Context, value *Ope
 	if err := s.settingRepo.Set(ctx, cookieSettingsKey, string(data)); err != nil {
 		return err
 	}
-	s.openAICookieCache.Store(&cachedOpenAICookieSettings{*value, time.Now().Add(5 * time.Second)})
+	s.openAICookieCache.Store(&cachedOpenAICookieSettings{*value, time.Now().Add(1 * time.Second)})
 	return nil
 }
 

@@ -114,6 +114,8 @@ type cookieCandidateSnapshot struct {
 	until   time.Time
 }
 
+const cookieSchedulingCandidateCacheTTL = 250 * time.Millisecond
+
 // Avoid reading the whole library for every account on each scheduling pass.
 // Writes invalidate this snapshot; expiry/cooldown are still checked live.
 func (s *SettingService) cookieSchedulingCandidates(ctx context.Context) ([]OpenAICodexCookieLibraryEntry, error) {
@@ -133,7 +135,7 @@ func (s *SettingService) cookieSchedulingCandidates(ctx context.Context) ([]Open
 		}
 	}
 	entries = normalizeOpenAICodexCookieLibrary(entries, time.Now())
-	s.cookieCandidatesCache = &cookieCandidateSnapshot{entries: entries, until: time.Now().Add(time.Second)}
+	s.cookieCandidatesCache = &cookieCandidateSnapshot{entries: entries, until: time.Now().Add(cookieSchedulingCandidateCacheTTL)}
 	return entries, nil
 }
 
