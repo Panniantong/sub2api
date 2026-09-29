@@ -149,11 +149,11 @@
         <span v-if="cookieHostError" class="block text-red-600">{{ cookieHostError }}</span>
         <span v-if="account.cookie_binding.cooldown_host && account.cookie_binding.cooldown_until" class="block text-amber-600">Host 冷静中：{{ account.cookie_binding.cooldown_host }}，至 {{ new Date(account.cookie_binding.cooldown_until).toLocaleString() }}（仍可选择）</span>
         <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-          <span v-if="account.cookie_binding.binding_expires_at" :class="bindingRemaining(account) > 0 ? 'text-emerald-600' : 'text-red-600'">绑定剩余 {{ bindingRemaining(account) }}s</span>
-          <button v-if="account.cookie_binding.rotation_at && bindingRotationLabel(account) === '正在轮换'" type="button" class="text-amber-600 underline hover:text-amber-700" title="查看当前轮换验证日志" @click.stop="openCookieValidationLogs">正在轮换</button>
-          <span v-else-if="account.cookie_binding.rotation_at" class="text-gray-500">{{ bindingRotationLabel(account) }}</span>
+          <span v-if="account.cookie_binding.host && account.cookie_binding.binding_expires_at" :class="bindingRemaining(account) > 0 ? 'text-emerald-600' : 'text-red-600'">绑定剩余 {{ bindingRemaining(account) }}s</span>
+          <button v-if="account.cookie_binding.host && account.cookie_binding.rotation_at && bindingRotationLabel(account) === '正在轮换'" type="button" class="text-amber-600 underline hover:text-amber-700" title="查看当前轮换验证日志" @click.stop="openCookieValidationLogs">正在轮换</button>
+          <span v-else-if="account.cookie_binding.host && account.cookie_binding.rotation_at" class="text-gray-500">{{ bindingRotationLabel(account) }}</span>
           <span v-if="account.cookie_binding.available_host_count !== undefined" class="text-gray-500">可绑定 Host {{ account.cookie_binding.available_host_count }}</span>
-          <CookieBindingEstimate :binding="account.cookie_binding" />
+          <CookieBindingEstimate v-if="account.cookie_binding.host" :binding="account.cookie_binding" />
           <span v-if="cookieSchedulingBlockLabel" class="rounded bg-amber-50 px-1.5 py-0.5 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300" title="动态调度状态；有效绑定恢复后自动回原组，不修改账号实际分组或可调度开关">{{ account.cookie_binding?.degraded_group_id ? `降级到 ${account.cookie_binding.degraded_group_name || '#' + account.cookie_binding.degraded_group_id} 分组` : '暂不调度' }} · {{ cookieSchedulingBlockLabel }}</span>
           <span v-else :class="account.cookie_binding.status === 'active' ? 'text-emerald-600' : 'text-gray-500'">{{ { active: '绑定有效', expired: 'Cookie 已过期或不存在，绑定不生效', unbound: '未绑定', unavailable: 'Cookie 状态读取失败', cooldown: 'Host 冷静中' }[account.cookie_binding.status] }}</span>
           <span class="text-gray-500">WS {{ account.cookie_binding.ws_enabled ? '已启用' : '已关闭' }}</span>
@@ -702,6 +702,7 @@
   </div>
   <BaseDialog :show="showCookieValidationLogs" :title="`Host 验证日志 · ${account.name}`" width="extra-wide" @close="showCookieValidationLogs = false">
     <div class="space-y-3">
+      <select v-model="cookieValidationHost" class="input w-full" aria-label="筛选 Host 日志" @change="changeCookieValidationPage(1)"><option value="">全部 Host 绑定与验证记录</option><option v-for="host in cookieValidationHosts" :key="host" :value="host">{{ host }}</option></select>
       <div class="flex items-center justify-between gap-3">
         <p class="text-xs text-gray-500">仅记录实际发起的绑定尝试；已绑定账号和冷静期内的自动扫描不会生成日志。</p>
         <button type="button" class="btn btn-secondary btn-sm" :disabled="cookieValidationLoading" @click="loadCookieValidationLogs">刷新</button>
@@ -876,11 +877,18 @@ const cookieRequestError = (error: unknown, fallback: string) => {
   if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') return error.message
   return fallback
 }
+const cookieValidationHost = ref('')
+const cookieValidationHosts = ref<string[]>([])
 const loadCookieValidationLogs = async () => {
+  if (cookieValidationLoading.value) return
   cookieValidationLoading.value = true
   cookieValidationError.value = ''
   try {
-    const result = await cookieAPI.getValidationLogs({ account_id: props.account.id, page: cookieValidationPage.value, page_size: cookieValidationPageSize })
+    const [result, hosts] = await Promise.all([
+      cookieAPI.getValidationLogs({ account_id: props.account.id, host: cookieValidationHost.value, page: cookieValidationPage.value, page_size: cookieValidationPageSize }),
+      cookieAPI.getValidationHosts(props.account.id)
+    ])
+    cookieValidationHosts.value = hosts
     cookieValidationLogs.value = result.items || []
     cookieValidationTotal.value = result.total || 0
   } catch (error) {

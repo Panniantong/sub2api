@@ -1453,7 +1453,7 @@ func parseIntelligenceTestResult(body string, result *intelligenceTestResult) {
 			continue
 		}
 		result.Events = append(result.Events, event)
-		if event.CookieHost != "" {
+		if event.Type == "test_start" || event.CookieHost != "" {
 			result.CookieHost = event.CookieHost
 		}
 		if event.Type == "content" {
@@ -1550,7 +1550,7 @@ func (h *AccountHandler) IntelligenceTest(c *gin.Context) {
 	result := intelligenceTestResult{
 		ID: uuid.NewString(), AccountID: accountID, AccountName: account.Name,
 		Case: strings.TrimSpace(req.Case), Prompt: req.Prompt, ModelID: modelID,
-		Status: "running", CookieHost: account.GetExtraString("codex_cookie_host"),
+		Status:    "running",
 		StartedAt: time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	if result.Case == "" {

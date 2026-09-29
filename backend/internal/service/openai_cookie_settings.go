@@ -16,6 +16,7 @@ const cookieLogsKey = "openai_cookie_acquisition_logs"
 const intelligenceMonitorSettingKey = "openai_intelligence_monitor"
 
 type OpenAICookieSettings struct {
+	LocalHarvestDisabled bool `json:"local_harvest_disabled"`
 	RemoteSyncEnabled         bool   `json:"remote_sync_enabled"`
 	RemoteSyncURL             string `json:"remote_sync_url"`
 	RemoteSyncAdminKey        string `json:"remote_sync_admin_key"`
@@ -525,6 +526,16 @@ func (s *SettingService) OpenAICookieBinding(ctx context.Context, account *Accou
 		}
 	}
 	if status.Host == "" {
+		// An unbound account may retain old deadline/rotation fields after a
+		// failed replacement. They are historical metadata, never an active
+		// binding, and must not be exposed as a live countdown.
+		status.BindingExpiresAt = nil
+		status.RotationAt = nil
+		status.ExpiresAt = nil
+		status.CookieExpiresAt = nil
+		status.RotationStatus = ""
+		status.RotationStartedAt = nil
+		status.RotationMessage = ""
 		return status
 	}
 	status.Status = "expired"
@@ -578,7 +589,23 @@ func (s *SettingService) GetOpenAICookieValidationLogs(ctx context.Context) ([]O
 
 // GetOpenAICookieValidationLogsPage paginates validation attempts rather than
 // individual stage rows, so every returned attempt contains its full timeline.
-func (s *SettingService) GetOpenAICookieValidationLogsPage(ctx context.Context, accountID int64, page, pageSize int) ([]OpenAICookieAcquisitionLog, int64, error) {
+func (s *SettingService) GetOpenAICookieValidationLogsPage(ctx context.Context, accountID int64, page, pageSize int, hosts ...string) ([]OpenAICookieAcquisitionLog, int64, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+	if repo, ok := s.settingRepo.(CookieValidationHistoryRepository); ok {
+		host := ""
+		if len(hosts) > 0 {
+			host = normalizeOpenAICookieHost(hosts[0])
+		}
+		return repo.CookieValidationPage(ctx, accountID, host, page, pageSize)
+	}
 	logs, err := s.GetOpenAICookieValidationLogs(ctx)
 	if err != nil {
 		return nil, 0, err
@@ -658,6 +685,14 @@ func (s *SettingService) getOpenAICookieLogs(ctx context.Context, key string) ([
 }
 
 func (s *SettingService) appendOpenAICookieLog(ctx context.Context, item OpenAICookieAcquisitionLog) error {
+	if item.Kind == "validation" {
+		if item.BindingStatus == "rotation_waiting" || item.BindingStatus == "rotation_started" || item.BindingStatus == "rotation_candidate" {
+			return nil
+		}
+		if repo, ok := s.settingRepo.(CookieValidationHistoryRepository); ok {
+			return repo.AppendCookieValidation(ctx, item)
+		}
+	}
 	cookieLogMu.Lock()
 	defer cookieLogMu.Unlock()
 	key := cookieLogsKey

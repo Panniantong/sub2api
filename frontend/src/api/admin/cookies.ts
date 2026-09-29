@@ -3,6 +3,7 @@ import type { OpenAICodexCookieLibraryEntry } from './settings'
 import type { PaginatedResponse } from '@/types'
 
 export interface CookieSettings {
+  local_harvest_disabled?: boolean
   remote_sync_enabled?: boolean
   remote_sync_url?: string
   remote_sync_admin_key?: string
@@ -132,10 +133,14 @@ export async function getLibrary() {
 export async function getLogs(limit?: number) {
   return (await apiClient.get<CookieLog[]>('/admin/settings/cookie/logs', { params: limit ? { limit } : undefined })).data
 }
-export async function getValidationLogs(params: { account_id?: number; page?: number; page_size?: number } = {}) {
+export async function getValidationHosts(account_id: number) {
+  return (await apiClient.get<string[]>('/admin/settings/cookie/validation-logs', { params: { account_id, hosts_only: true } })).data
+}
+export async function getValidationLogs(params: { account_id?: number; page?: number; page_size?: number; host?: string } = {}) {
   return (await apiClient.get<PaginatedResponse<CookieLog>>('/admin/settings/cookie/validation-logs', {
     params: {
       account_id: params.account_id,
+      host: params.host,
       page: params.page ?? 1,
       page_size: params.page_size ?? 20
     }

@@ -66,7 +66,16 @@ func (h *SettingHandler) GetCookieValidationLogs(c *gin.Context) {
 		}
 		accountID = value
 	}
-	logs, total, err := h.settingService.GetOpenAICookieValidationLogsPage(c.Request.Context(), accountID, page, pageSize)
+	if c.Query("hosts_only") == "true" {
+		hosts, err := h.settingService.CookieValidationHosts(c.Request.Context(), accountID)
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+		response.Success(c, hosts)
+		return
+	}
+	logs, total, err := h.settingService.GetOpenAICookieValidationLogsPage(c.Request.Context(), accountID, page, pageSize, c.Query("host"))
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

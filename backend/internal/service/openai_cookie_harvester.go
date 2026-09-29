@@ -98,7 +98,7 @@ func (s *OpenAIGatewayService) appendOpenAICookieValidationLog(ctx context.Conte
 	if s == nil || s.settingService == nil {
 		return
 	}
-	logCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	logCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	if err := s.settingService.appendOpenAICookieLog(logCtx, item); err != nil {
 		slog.Warn("cookie validation log persist failed", "account_id", item.AccountID, "error", err)
@@ -176,6 +176,16 @@ func (s *OpenAIGatewayService) rotateDueOpenAICookieHost(ctx context.Context, ac
 		return true
 	}
 	defer rotationLock.Unlock()
+	if s.accountRepo != nil {
+		fresh, err := s.accountRepo.GetByID(ctx, account.ID)
+		if err != nil || fresh == nil {
+			return false
+		}
+		account = fresh
+		if account.Status != StatusActive || !isOpenAICookieRotationAccount(account, settings) {
+			return false
+		}
+	}
 	s.openaiCookieRotationRunning.Store(account.ID, true)
 	defer s.openaiCookieRotationRunning.Delete(account.ID)
 	// Re-read the due state after taking the account lock. The harvester and
@@ -184,12 +194,12 @@ func (s *OpenAIGatewayService) rotateDueOpenAICookieHost(ctx context.Context, ac
 	if !openAICookieRotationDue(account, time.Now()) {
 		return false
 	}
+	previousRotationState := strings.TrimSpace(account.GetExtraString(openAICodexCookieRotationStatusExtraKey))
 	s.setOpenAICookieRotationState(ctx, account, "running", "开始尝试下一个 Cookie Host")
 	startMessage := "账号未绑定 Host，开始寻找可用 Cookie Host"
 	if current != "" {
 		startMessage = fmt.Sprintf("当前 Host %s 已到轮换时间，开始尝试下一个 Host", current)
 	}
-	previousRotationState := strings.TrimSpace(account.GetExtraString(openAICodexCookieRotationStatusExtraKey))
 	validationModel := s.settingService.GetOpenAIIntelligenceModel(ctx)
 	baseLog := OpenAICookieAcquisitionLog{ID: uuid.NewString(), AttemptID: uuid.NewString(), AccountID: account.ID, AccountName: account.Name, Model: validationModel, CreatedAt: time.Now(), Host: current, Kind: "validation", BindingHost: current, BindingStatus: "rotation_started", ValidationEnabled: true, Message: startMessage}
 	if previousRotationState != "waiting" {
@@ -200,16 +210,18 @@ func (s *OpenAIGatewayService) rotateDueOpenAICookieHost(ctx context.Context, ac
 		s.setOpenAICookieRotationState(ctx, account, "waiting", "读取 Cookie 库失败，稍后重试")
 		return false
 	}
-	now := time.Now()
 	attempted := 0
 	for _, entry := range entries {
+		if ctx.Err() != nil {
+			break
+		}
 		host := normalizeOpenAICookieHost(entry.Host)
-		if !openAICookieRotationCandidate(account, entry, now) {
+		if !openAICookieRotationCandidate(account, entry, time.Now()) {
 			continue
 		}
 		attempted++
 		s.appendOpenAICookieValidationLog(ctx, OpenAICookieAcquisitionLog{ID: uuid.NewString(), AttemptID: baseLog.AttemptID, AccountID: account.ID, AccountName: account.Name, Model: validationModel, CreatedAt: time.Now(), Host: host, Kind: "validation", BindingHost: host, BindingStatus: "rotation_candidate", ValidationEnabled: true, Message: fmt.Sprintf("轮换尝试 Host %s（模型 %s）", host, validationModel)})
-		result, _ := s.validateBindAndBuildOpenAICookieHost(ctx, account, settings, host, entry.Cookie, "", validationModel, "")
+		result, _ := s.validateBindAndBuildOpenAICookieHostLocked(ctx, account, settings, host, entry.Cookie, "", validationModel, "")
 		if result == "yes" {
 			s.setOpenAICookieRotationState(ctx, account, "success", fmt.Sprintf("已切换到 Host %s", host))
 			return true
@@ -253,6 +265,35 @@ func (s *OpenAIGatewayService) setOpenAICookieRotationState(ctx context.Context,
 }
 
 func (s *OpenAIGatewayService) validateBindAndBuildOpenAICookieHost(ctx context.Context, account *Account, settings *OpenAICookieSettings, host, cookie, proxyURL, model, token string) (string, error) {
+	if account == nil {
+		return "error", fmt.Errorf("account unavailable")
+	}
+	lockValue, _ := s.openaiCookieRotationLocks.LoadOrStore(account.ID, &sync.Mutex{})
+	lock := lockValue.(*sync.Mutex)
+	if !lock.TryLock() {
+		return "busy", nil
+	}
+	defer lock.Unlock()
+	if s.accountRepo != nil {
+		fresh, err := s.accountRepo.GetByID(ctx, account.ID)
+		if err != nil {
+			return "error", err
+		}
+		if fresh == nil {
+			return "error", fmt.Errorf("account unavailable")
+		}
+		*account = *fresh
+		if openAICodexCookieHostFromAccount(account) != "" && !openAICookieRotationDue(account, time.Now()) {
+			return "already_bound", nil
+		}
+		if openAICodexCookieHostCooldownUntil(account, host).After(time.Now()) {
+			return "skipped", nil
+		}
+	}
+	return s.validateBindAndBuildOpenAICookieHostLocked(ctx, account, settings, host, cookie, proxyURL, model, token)
+}
+
+func (s *OpenAIGatewayService) validateBindAndBuildOpenAICookieHostLocked(ctx context.Context, account *Account, settings *OpenAICookieSettings, host, cookie, proxyURL, model, token string) (string, error) {
 	// Host capability validation always uses the independent intelligence
 	// model. The Cookie acquisition model must never leak into this request.
 	model = s.settingService.GetOpenAIIntelligenceModel(ctx)
@@ -298,7 +339,7 @@ func (s *OpenAIGatewayService) validateBindAndBuildOpenAICookieHost(ctx context.
 	result, responseBody, statusCode := "error", "", 0
 	for attempt := 0; attempt < 3; attempt++ {
 		result, responseBody, statusCode = s.validateOpenAICodexCookieHost(ctx, &candidate, token, cookie, "", model)
-		if result == "yes" || result == "no" || attempt == 2 {
+		if result == "yes" || result == "no" || cookieValidationConfigurationError(OpenAICookieAcquisitionLog{StatusCode: statusCode, ValidationResponse: responseBody}) || attempt == 2 {
 			break
 		}
 		retryLog := base
@@ -310,6 +351,10 @@ func (s *OpenAIGatewayService) validateBindAndBuildOpenAICookieHost(ctx context.
 	base.StatusCode = statusCode
 	base.ValidationResult = result
 	base.ValidationResponse = truncateOpenAICodexValidationResponse(responseBody)
+	if cookieValidationConfigurationError(base) {
+		s.cooldownCookieValidationFailure(ctx, account, settings, base, fmt.Sprintf("HTTP 400：验证模型 %s 或请求参数被上游拒绝；详情见 validation_response", model))
+		return "error", nil
+	}
 	switch result {
 	case "yes":
 		base.Success = true
@@ -492,7 +537,7 @@ func isOpenAICookieCollector(account *Account, settings *OpenAICookieSettings) b
 		return false
 	}
 	if len(settings.AccountIDs) == 0 && settings.AccountID == 0 && len(settings.GroupIDs) == 0 {
-		return true
+		return false
 	}
 	if len(settings.AccountIDs) == 0 && settings.AccountID == account.ID {
 		return true

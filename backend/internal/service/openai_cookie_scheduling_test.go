@@ -166,8 +166,13 @@ func (u cookieGuardValidationUpstream) Do(req *http.Request, _ string, _ int64, 
 
 type cookieGuardBindingRepo struct {
 	AccountRepository
+	account *Account
 	updates []map[string]any
 	err     error
+}
+
+func (r *cookieGuardBindingRepo) GetByID(context.Context, int64) (*Account, error) {
+	return r.account, nil
 }
 
 func (r *cookieGuardBindingRepo) UpdateExtra(_ context.Context, _ int64, updates map[string]any) error {
@@ -188,7 +193,7 @@ func TestCookieHostSchedulingGuardValidationHandoff(t *testing.T) {
 					account.Extra["codex_cookie_host_binding_expires_at"] = time.Now().Add(time.Minute).Format(time.RFC3339Nano)
 				}
 				oldHost, oldExpiry := openAICodexCookieHostFromAccount(&account), account.GetExtraString("codex_cookie_host_binding_expires_at")
-				repo := &cookieGuardBindingRepo{}
+				repo := &cookieGuardBindingRepo{account: &account}
 				settingsService := cookieGuardTestSettings(t)
 				settings, err := settingsService.GetOpenAICookieSettings(ctx)
 				require.NoError(t, err)

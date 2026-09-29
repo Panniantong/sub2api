@@ -2,11 +2,18 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
 func (s *OpenAIGatewayService) cooldownCookieValidationFailure(ctx context.Context, account *Account, settings *OpenAICookieSettings, base OpenAICookieAcquisitionLog, message string) {
+	if base.StatusCode == 400 {
+		if detail := cookieValidationUpstreamError(base.ValidationResponse); detail != "" {
+			message = strings.ReplaceAll(message, "；详情见 validation_response", "") + "；上游错误：" + detail
+		}
+	}
 	seconds := 120
 	if settings != nil && settings.CookieHostValidationFailureCooldownSeconds > 0 {
 		seconds = settings.CookieHostValidationFailureCooldownSeconds
@@ -23,6 +30,46 @@ func (s *OpenAIGatewayService) cooldownCookieValidationFailure(ctx context.Conte
 		message += fmt.Sprintf("；账号与该 Host 冷却 %d 秒，至 %s", seconds, openAICodexCookieHostCooldownUntil(account, base.Host).Format(time.RFC3339))
 	}
 	s.appendOpenAICookieValidationStage(persistCtx, base, "validation_failed", message)
+}
+
+// Extract only the upstream error text, not arbitrary response metadata.
+func cookieValidationUpstreamError(body string) string {
+	var payload struct {
+		Detail  string `json:"detail"`
+		Message string `json:"message"`
+		Error   struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	message := strings.TrimSpace(body)
+	if json.Unmarshal([]byte(body), &payload) == nil {
+		message = payload.Error.Message
+		if message == "" {
+			message = payload.Detail
+		}
+		if message == "" {
+			message = payload.Message
+		}
+	}
+	message = strings.Join(strings.Fields(message), " ")
+	runes := []rune(message)
+	if len(runes) > 500 {
+		return string(runes[:500]) + "…（完整内容见 validation_response）"
+	}
+	return message
+}
+
+func cookieValidationConfigurationError(base OpenAICookieAcquisitionLog) bool {
+	if base.StatusCode != 400 {
+		return false
+	}
+	text := strings.ToLower(strings.TrimSpace(base.ValidationResponse + " " + base.Message))
+	for _, marker := range []string{"model is not supported", "model not supported", "not supported when using codex", "unsupported model", "invalid model", "invalid parameter", "unknown parameter"} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // Keep raw upstream responses and credentials out of the live log summary.

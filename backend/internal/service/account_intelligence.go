@@ -52,7 +52,6 @@ func (s *AccountTestService) IntelligenceTestAccount(c *gin.Context, accountID i
 	metadata := func(eventType string) TestEvent {
 		return TestEvent{Type: eventType, Case: caseName, Prompt: prompt, CookieHost: host, Timestamp: startedAt}
 	}
-	s.sendEvent(c, metadata("test_start"))
 
 	credentialAccount := account
 	if account.IsCredentialShadow() {
@@ -144,10 +143,35 @@ func (s *AccountTestService) IntelligenceTestAccount(c *gin.Context, accountID i
 	if isOAuth {
 		req.Header.Set("Authorization", "Bearer "+authToken)
 	}
+	// Credentials/model preparation can overlap a Host change. Refresh binding
+	// state at dispatch, including for manual tests of unschedulable accounts.
+	account, err = s.accountRepo.GetByID(ctx, accountID)
+	if err != nil || account == nil {
+		return s.sendIntelligenceError(c, caseName, prompt, "无法读取账号最新 Cookie Host 绑定")
+	}
+	credentialAccount = account
+	if account.IsCredentialShadow() {
+		credentialAccount, err = resolveCredentialAccount(ctx, s.accountRepo, account)
+		if err != nil {
+			return s.sendIntelligenceError(c, caseName, prompt, err.Error())
+		}
+	}
+	host = openAICodexCookieHostFromAccount(credentialAccount)
 	credentialAccount.ApplyHeaderOverrides(req.Header)
 	s.applyOpenAIAccountBoundRequestState(credentialAccount, req.Header)
 	if isOAuth && s.openaiGatewayService != nil {
-		if cookie := s.openaiGatewayService.openAICodexCookieForAccount(credentialAccount); cookie != "" {
+		cookie := s.openaiGatewayService.openAICodexCookieForAccount(credentialAccount)
+		if host != "" && cookie == "" {
+			s.sendEvent(c, metadata("test_start"))
+			return s.sendIntelligenceError(c, caseName, prompt, "当前绑定 Host 的 Cookie 不存在或已过期，请轮换后重新测试")
+		}
+		// Freeze this dispatch's resolved Cookie so repeated header preparation
+		// cannot mix a later library update into the recorded Host snapshot.
+		copy := *credentialAccount
+		copy.openaiCookieValidationCookie = cookie
+		credentialAccount = &copy
+		deleteOpenAIHeaderEqualFold(req.Header, "Cookie")
+		if cookie != "" {
 			req.Header.Set("Cookie", cookie)
 		}
 	}
@@ -156,11 +180,10 @@ func (s *AccountTestService) IntelligenceTestAccount(c *gin.Context, accountID i
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
+	s.sendEvent(c, metadata("test_start"))
 	var resp *http.Response
-	if s.tlsFPProfileService != nil {
-		resp, err = s.doOpenAIAccountTestUpstream(req, proxyURL, account, true)
-	} else if s.httpUpstream != nil {
-		resp, err = s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
+	if s.httpUpstream != nil {
+		resp, err = s.doOpenAIAccountTestUpstream(req, proxyURL, credentialAccount, s.tlsFPProfileService != nil)
 	} else {
 		err = fmt.Errorf("HTTP upstream not configured")
 	}

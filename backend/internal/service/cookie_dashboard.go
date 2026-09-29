@@ -38,7 +38,7 @@ func (s *OpenAIGatewayService) CookieDashboard(ctx context.Context) (*CookieDash
 		byHost[normalizeOpenAICookieHost(entry.Host)] = entry
 	}
 	result := &CookieDashboard{
-		Harvest: s.CookieHarvestRunning(), HarvestEnabled: settings.Enabled,
+		Harvest: s.CookieHarvestRunning(), HarvestEnabled: settings.Enabled && !settings.LocalHarvestDisabled && (len(settings.AccountIDs) > 0 || settings.AccountID > 0 || len(settings.GroupIDs) > 0),
 		RotationEnabled:    settings.Enabled && settings.CookieRotationEnabled,
 		HarvestConcurrency: settings.CookieHarvestConcurrency, UpdatedAt: time.Now(),
 	}

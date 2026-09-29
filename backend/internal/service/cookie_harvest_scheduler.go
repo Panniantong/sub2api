@@ -245,6 +245,9 @@ func (r *cookieHarvestRuntime) plan(now time.Time, settings *OpenAICookieSetting
 }
 
 func (s *OpenAIGatewayService) dispatchOpenAICookieHarvest(ctx context.Context, settings *OpenAICookieSettings) {
+	if settings == nil || settings.LocalHarvestDisabled || (len(settings.AccountIDs) == 0 && settings.AccountID == 0 && len(settings.GroupIDs) == 0) {
+		return
+	}
 	r := &s.cookieHarvestRuntime
 	r.mu.Lock()
 	defer r.mu.Unlock()

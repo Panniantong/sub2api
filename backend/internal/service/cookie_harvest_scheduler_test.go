@@ -178,7 +178,7 @@ func TestCookieHarvestSlowWorkerDoesNotBlockRefill(t *testing.T) {
 	upstream := &cookieSlowHarvestUpstream{entered: make(chan int64, 10), release: make(chan struct{})}
 	svc := &OpenAIGatewayService{cfg: &config.Config{}, settingService: &SettingService{settingRepo: &cookieConcurrentSettings{cookieTestRepo: cookieTestRepo{values: map[string]string{}}}}, accountRepo: cookieMonitorRepo{schedulerTestOpenAIAccountRepo{accounts: accounts}}, httpUpstream: upstream}
 	defer func() { close(upstream.release); svc.cookieHarvestRuntime.wg.Wait() }()
-	settings := &OpenAICookieSettings{Enabled: true, Model: "gpt-6-astra", CookieHarvestConcurrency: 2, IntervalSeconds: 60, CookieProxyLearningAttempts: 40, CookieProxyScheduleMode: "dynamic", HarvestPolicy: defaultCookieHarvestPolicy(), ProxyURLs: []string{"http://p1.example:80", "http://p2.example:80"}}
+	settings := &OpenAICookieSettings{Enabled: true, AccountIDs: []int64{1, 2, 3}, Model: "gpt-6-astra", CookieHarvestConcurrency: 2, IntervalSeconds: 60, CookieProxyLearningAttempts: 40, CookieProxyScheduleMode: "dynamic", HarvestPolicy: defaultCookieHarvestPolicy(), ProxyURLs: []string{"http://p1.example:80", "http://p2.example:80"}}
 	svc.dispatchOpenAICookieHarvest(ctx, settings)
 	seen := map[int64]bool{}
 	for len(seen) < 2 {

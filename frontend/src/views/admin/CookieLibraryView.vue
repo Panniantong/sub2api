@@ -84,13 +84,27 @@
       <form v-if="tab === 'settings'" class="card space-y-5 p-6" @submit.prevent="save">
         <p v-if="!settingsLoaded" class="text-sm text-gray-500">配置尚未加载，点击刷新重试。</p>
         <fieldset :disabled="!settingsLoaded || saving" class="space-y-5">
+          <section class="space-y-3 rounded-lg border border-gray-200 p-4 dark:border-dark-700">
+            <h3 class="font-semibold">运行开关</h3>
+            <label class="flex items-center gap-2 text-sm"><input v-model="form.enabled" type="checkbox" />启用 Cookie 后台任务（本地采集 / Host 轮换）</label>
+            <p class="text-xs text-gray-500">仅使用远程 Cookie 并自动轮换时，保持后台任务开启，关闭下面的本地账号采集。远程同步独立运行。</p>
+          </section>
+          <section class="space-y-3 rounded-lg border border-gray-200 p-4 dark:border-dark-700">
+            <h3 class="font-semibold">来源一：本地账号采集</h3>
+            <label class="flex items-center gap-2 text-sm"><input v-model="form.local_harvest_disabled" type="checkbox" :true-value="false" :false-value="true" />启用本地账号打 Cookie</label>
+            <p class="text-xs text-gray-500">仅使用下方明确选择的获取账号或分组；两项都未配置时不采集，不会自动抽取其他账号。关闭后停止派发新采集任务，已发出的任务完成后退出，不影响 Host 轮换和远程同步。</p>
+            <p v-if="!form.account_ids.length && !form.group_ids.length" class="text-sm text-amber-600">尚未配置本地采集账号或分组，本地采集不会运行。</p>
+          </section>
           <section class="space-y-3 rounded-lg border p-4">
-            <label class="flex items-center gap-2"><input v-model="form.remote_sync_enabled" type="checkbox" />允许远程获取 Cookie</label>
+            <h3 class="font-semibold">来源二：远程 Cookie 同步</h3>
+            <label class="flex items-center gap-2"><input v-model="form.remote_sync_enabled" type="checkbox" />启用远程同步</label>
             <p class="text-xs text-gray-500">按 Host 合并远程 Cookie，采集时间较新的记录优先，时间相同保留本地。同步独立于本地采集开关运行。</p>
+            <div v-if="form.remote_sync_enabled" class="grid gap-4 md:grid-cols-2">
             <label class="block text-sm">远程服务器地址<input v-model="form.remote_sync_url" class="input mt-1 w-full" placeholder="https://sub2api.example.com" /></label>
             <label class="block text-sm">远程 Admin Key<input v-model="form.remote_sync_admin_key" type="password" autocomplete="new-password" class="input mt-1 w-full" placeholder="输入管理员 API Key；留空保留已保存的 Key" /></label>
             <label class="block text-sm">同步频率（秒）<input v-model.number="form.remote_sync_interval_seconds" type="number" min="10" max="86400" class="input mt-1 w-full" placeholder="默认 60 秒" /></label>
-            <p class="text-xs text-gray-500">保存后自动同步，在“同步日志”查看结果；失败时保留本地 Cookie。</p>
+            </div>
+            <p class="text-xs text-gray-500">保存后生效，在“获取日志”查看同步结果；关闭时保留连接配置，失败时保留已有 Cookie。</p>
           </section>
           <section class="space-y-5 rounded border border-gray-200 p-4 dark:border-dark-700">
             <div>
@@ -98,7 +112,6 @@
               <p class="mt-1 text-xs text-gray-500">Cookie 获取模型只用于采集 Host Cookie；智力测试模型单独保存，不会影响 Cookie 获取。</p>
             </div>
             <div class="grid gap-4 md:grid-cols-2">
-              <label class="flex items-center gap-2 rounded bg-gray-50 px-3 py-2 text-sm dark:bg-dark-800"><input v-model="form.enabled" type="checkbox" />启用 Cookie 获取（与打票独立）</label>
               <label class="flex items-center gap-2 rounded bg-gray-50 px-3 py-2 text-sm dark:bg-dark-800"><input v-model="form.auto_validate_host" type="checkbox" />自动验证 Host 是否降智</label>
               <label class="space-y-2"><span class="block text-sm">Cookie 获取模型</span><input v-model="form.model" required maxlength="128" class="input w-full" placeholder="gpt-6-astra" /><span class="block text-xs text-gray-500">仅用于获取 Cookie 的请求。</span></label>
               <label class="space-y-2"><span class="block text-sm">同账号采集间隔（秒）</span><input v-model.number="form.interval_seconds" required type="number" min="1" max="3600" class="input w-full" /><span class="block text-xs text-gray-500">账号完成一次采集后的最短休息时间；其他空闲账号可继续采集，不再等待整批结束。</span></label>
@@ -113,8 +126,8 @@
               <p class="mt-1 text-xs text-gray-500">获取账号负责采集 Cookie；轮换账号负责已有 Host 的自动切换。两套范围互不覆盖。</p>
             </div>
             <div class="grid gap-4 md:grid-cols-2">
-              <label class="space-y-2"><span class="block text-sm">Cookie 获取分组（可多选）</span><button type="button" class="input flex min-h-11 w-full items-center justify-between text-left" @click="openPicker('groups')"><span v-if="pickerDisplayNames('groups').length" class="flex min-w-0 flex-wrap gap-1"><span v-for="name in pickerDisplayNames('groups')" :key="name" class="max-w-full truncate rounded bg-primary-50 px-2 py-0.5 text-xs text-primary-700 dark:bg-primary-900/30 dark:text-primary-300">{{ name }}</span></span><span v-else class="truncate text-gray-500">未选择分组</span><span class="ml-3 shrink-0 text-gray-400">⌄</span></button><span class="block text-xs text-gray-500">使用所选分组账号采集 Cookie，也包含当前临时降级到所选分组的账号；恢复后自动退出降级组的采集范围。未绑定且没有可轮换 Host 时也可临时降级。分组和账号均未选择时，轮询所有可用账号。</span></label>
-              <label class="space-y-2"><span class="block text-sm">Cookie 获取账号（可多选）</span><button type="button" class="input flex min-h-11 w-full items-center justify-between text-left" @click="openPicker('accounts')"><span v-if="pickerDisplayNames('accounts').length" class="flex min-w-0 flex-wrap gap-1"><span v-for="name in pickerDisplayNames('accounts')" :key="name" class="max-w-full truncate rounded bg-primary-50 px-2 py-0.5 text-xs text-primary-700 dark:bg-primary-900/30 dark:text-primary-300">{{ name }}</span></span><span v-else class="truncate text-gray-500">未指定账号（自动轮询）</span><span class="ml-3 shrink-0 text-gray-400">⌄</span></button><span class="block text-xs text-gray-500">指定账号只负责采集 Cookie，不会因此获得轮换权限。</span></label>
+              <label class="space-y-2"><span class="block text-sm">Cookie 获取分组（可多选）</span><button type="button" class="input flex min-h-11 w-full items-center justify-between text-left" @click="openPicker('groups')"><span v-if="pickerDisplayNames('groups').length" class="flex min-w-0 flex-wrap gap-1"><span v-for="name in pickerDisplayNames('groups')" :key="name" class="max-w-full truncate rounded bg-primary-50 px-2 py-0.5 text-xs text-primary-700 dark:bg-primary-900/30 dark:text-primary-300">{{ name }}</span></span><span v-else class="truncate text-gray-500">未选择分组</span><span class="ml-3 shrink-0 text-gray-400">⌄</span></button><span class="block text-xs text-gray-500">使用所选分组账号采集 Cookie，也包含当前临时降级到所选分组的账号；恢复后自动退出降级组的采集范围。未绑定且没有可轮换 Host 时也可临时降级。分组和账号均未选择时，不执行本地采集。</span></label>
+              <label class="space-y-2"><span class="block text-sm">Cookie 获取账号（可多选）</span><button type="button" class="input flex min-h-11 w-full items-center justify-between text-left" @click="openPicker('accounts')"><span v-if="pickerDisplayNames('accounts').length" class="flex min-w-0 flex-wrap gap-1"><span v-for="name in pickerDisplayNames('accounts')" :key="name" class="max-w-full truncate rounded bg-primary-50 px-2 py-0.5 text-xs text-primary-700 dark:bg-primary-900/30 dark:text-primary-300">{{ name }}</span></span><span v-else class="truncate text-gray-500">未指定账号（仅使用所选分组）</span><span class="ml-3 shrink-0 text-gray-400">⌄</span></button><span class="block text-xs text-gray-500">指定账号只负责采集 Cookie，不会因此获得轮换权限。</span></label>
               <label class="space-y-2"><span class="block text-sm">Host 轮换分组（可多选）</span><button type="button" class="input flex min-h-11 w-full items-center justify-between text-left" @click="openPicker('rotation-groups')"><span v-if="pickerDisplayNames('rotation-groups').length" class="flex min-w-0 flex-wrap gap-1"><span v-for="name in pickerDisplayNames('rotation-groups')" :key="name" class="max-w-full truncate rounded bg-primary-50 px-2 py-0.5 text-xs text-primary-700 dark:bg-primary-900/30 dark:text-primary-300">{{ name }}</span></span><span v-else class="truncate text-gray-500">未选择分组</span><span class="ml-3 shrink-0 text-gray-400">⌄</span></button><span class="block text-xs text-gray-500">只有这些分组中的账号会自动轮换 Host。</span></label>
               <label class="space-y-2"><span class="block text-sm">Host 轮换账号（可多选）</span><button type="button" class="input flex min-h-11 w-full items-center justify-between text-left" @click="openPicker('rotation-accounts')"><span v-if="pickerDisplayNames('rotation-accounts').length" class="flex min-w-0 flex-wrap gap-1"><span v-for="name in pickerDisplayNames('rotation-accounts')" :key="name" class="max-w-full truncate rounded bg-primary-50 px-2 py-0.5 text-xs text-primary-700 dark:bg-primary-900/30 dark:text-primary-300">{{ name }}</span></span><span v-else class="truncate text-gray-500">未指定轮换账号（不限制）</span><span class="ml-3 shrink-0 text-gray-400">⌄</span></button><span class="block text-xs text-gray-500">指定账号可单独加入轮换范围；未选择账号和分组时不会自动轮换任何账号。</span></label>
             </div>
@@ -282,7 +295,7 @@ const notice = ref('')
 const now = ref(Date.now())
 const detail = ref<string | null>(null)
 const detailTitle = ref('')
-const form = reactive<cookies.CookieSettings>({ harvest_policy: cookies.defaultHarvestPolicy(), enabled: false, model: 'gpt-6-astra', interval_seconds: 5, account_ids: [], group_ids: [], rotation_account_ids: [], rotation_group_ids: [], cookie_host_scheduling_guard_enabled: false, proxy_urls: [], managed_proxy_ids: [], use_all_managed_proxies: false, cookie_proxy_schedule_mode: 'round_robin', cookie_harvest_concurrency: 1, cookie_proxy_learning_attempts: 100, dynamic_proxy_fill_host_cookie: false, host_whitelist: [], auto_validate_host: false, ws_enabled: false, ws_connections: 10, ws_ttl_seconds: 3600, ws_host_cooldown_seconds: 14400, cookie_host_validation_failure_cooldown_seconds: 120, cookie_refresh_before_seconds: 600, cookie_rotation_enabled: false, cookie_host_binding_seconds: 240, cookie_host_rotation_before_seconds: 10 })
+const form = reactive<cookies.CookieSettings>({ local_harvest_disabled: false, harvest_policy: cookies.defaultHarvestPolicy(), enabled: false, model: 'gpt-6-astra', interval_seconds: 5, account_ids: [], group_ids: [], rotation_account_ids: [], rotation_group_ids: [], cookie_host_scheduling_guard_enabled: false, proxy_urls: [], managed_proxy_ids: [], use_all_managed_proxies: false, cookie_proxy_schedule_mode: 'round_robin', cookie_harvest_concurrency: 1, cookie_proxy_learning_attempts: 100, dynamic_proxy_fill_host_cookie: false, host_whitelist: [], auto_validate_host: false, ws_enabled: false, ws_connections: 10, ws_ttl_seconds: 3600, ws_host_cooldown_seconds: 14400, cookie_host_validation_failure_cooldown_seconds: 120, cookie_refresh_before_seconds: 600, cookie_rotation_enabled: false, cookie_host_binding_seconds: 240, cookie_host_rotation_before_seconds: 10 })
 const policyTotal = computed(() => { const p = form.harvest_policy; return p ? p.explore_percent + p.fill_percent + p.refresh_percent : 100 })
 const harvestRunning = ref<Record<string, number>>({})
 const dashboard = ref<cookies.CookieDashboard | null>(null)
@@ -502,7 +515,7 @@ function handleWSToggle() {
 function pickerSummary(kind: PickerKind) {
   const ids = kind === 'groups' ? form.group_ids : kind === 'accounts' ? form.account_ids : kind === 'rotation-groups' ? form.rotation_group_ids : kind === 'rotation-accounts' ? form.rotation_account_ids : form.managed_proxy_ids
   if (kind === 'managed-proxies') return ids.length ? `已选择 ${ids.length} 个代理` : '未选择 IP 管理代理'
-  if (!ids.length) return kind === 'groups' || kind === 'rotation-groups' ? '未选择分组' : kind === 'accounts' ? '未指定账号（自动轮询）' : '未指定轮换账号（不限制）'
+  if (!ids.length) return kind === 'groups' || kind === 'rotation-groups' ? '未选择分组' : kind === 'accounts' ? '未指定账号（仅使用所选分组）' : '未指定轮换账号（不限制）'
   return `已选择 ${ids.length} 项`
 }
 function pickerDisplayNames(kind: PickerKind) {

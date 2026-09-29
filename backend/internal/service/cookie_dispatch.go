@@ -13,14 +13,17 @@ func (s *OpenAIGatewayService) refreshCookieDispatchAccount(ctx context.Context,
 	if s == nil || s.settingService == nil || !isOpenAICodexTicketAccount(account) || account.openaiCookieValidationCookie != "" {
 		return account, nil
 	}
-	settings, err := s.settingService.GetOpenAICookieSettings(ctx)
+	// Keep account admission bounded while the background rotation validates a
+	// replacement. A slow repository causes quick reselection, never a long
+	// request wait; binding and schedulability checks remain authoritative.
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	_, err := s.settingService.GetOpenAICookieSettings(ctx)
 	if err != nil {
 		return nil, cookieDispatchUnavailable()
 	}
-	guarded, _ := openAICookieSchedulingStatus(account, settings, time.Now())
-	if !guarded && account.GetExtraString(openAICodexCookieHostExtraKey) == "" && !account.openaiCookieDegraded && !settings.CookieRotationEnabled {
-		return account, nil
-	}
+	// Even an unbound snapshot may predate a manual binding. Always reload
+	// eligible accounts so that the first binding is visible without rotation.
 	if s.accountRepo == nil {
 		return nil, cookieDispatchUnavailable()
 	}

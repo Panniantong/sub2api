@@ -334,14 +334,14 @@
               <span v-if="row.cookie_binding?.host" :class="cookieHostRemaining(row) > 0 ? 'text-emerald-600' : 'text-red-600'">绑定剩余 {{ cookieHostRemaining(row) }}s</span>
               <span v-else class="text-gray-500">未绑定 Cookie Host</span>
               <button
-                v-if="row.cookie_binding.rotation_at || row.cookie_binding.rotation_status"
+                v-if="row.cookie_binding.host && (row.cookie_binding.rotation_at || row.cookie_binding.rotation_status)"
                 type="button"
                 class="block max-w-full truncate text-left text-gray-500 hover:text-primary-600 dark:hover:text-primary-400"
                 :class="row.cookie_binding.rotation_status === 'running' || cookieHostRotationDue(row) ? 'text-amber-600 dark:text-amber-400' : ''"
                 @click="openCookieRotationLogs(row)"
               >{{ rotationLabel(row) }}</button>
               <span v-if="row.cookie_binding.available_host_count !== undefined" class="block text-gray-500">可绑定 Host {{ row.cookie_binding.available_host_count }}</span>
-              <CookieBindingEstimate :binding="row.cookie_binding" />
+              <CookieBindingEstimate v-if="row.cookie_binding.host" :binding="row.cookie_binding" />
             </div>
             <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
           </template>

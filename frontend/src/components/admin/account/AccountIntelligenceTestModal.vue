@@ -4,7 +4,8 @@
       <div class="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm dark:border-dark-600 dark:bg-dark-800">
         <span class="font-medium">账号：</span>{{ account?.name || '-' }}
         <span class="ml-4 font-medium">当前 Cookie Host：</span>
-        <code class="break-all">{{ account?.cookie_binding?.host || '未绑定' }}</code>
+        <code class="break-all">{{ currentAccount?.cookie_binding?.host || '未绑定' }}</code>
+        <div class="mt-1 text-xs text-gray-500">每次发送使用账号最新绑定；已发出的流式请求保持发送时的 Cookie，实际 Host 见交互日志。</div>
       </div>
       <label class="block text-sm text-gray-600 dark:text-gray-300">测试模型
         <input v-model="modelId" class="mt-1 w-full rounded border px-3 py-2 dark:border-dark-600 dark:bg-dark-700" placeholder="例如 gpt-5.3-codex" />
@@ -87,6 +88,7 @@ import { computed, ref, watch, onUnmounted } from 'vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import intelligenceTestAPI, { type IntelligenceTestResult } from '@/api/admin/intelligenceTest'
+import { getById } from '@/api/admin/accounts'
 import type { Account } from '@/types'
 
 const prompts = {
@@ -103,6 +105,34 @@ const props = defineProps<{ show: boolean; account: Account | null }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
 const tests = ref<TestItem[]>([])
 const modelId = ref('gpt-6-astra')
+const currentAccount = ref<Account | null>(null)
+let accountTimer: ReturnType<typeof setInterval> | null = null
+let accountLoading = false
+const refreshAccount = async () => {
+  const id = props.account?.id
+  if (!props.show || !id || accountLoading) return
+  accountLoading = true
+  try {
+    const latest = await getById(id)
+    if (props.show && props.account?.id === id) currentAccount.value = latest
+  } catch (error) {
+    console.error('Failed to refresh intelligence test account:', error)
+  } finally {
+    accountLoading = false
+  }
+}
+const stopAccountPolling = () => {
+  if (accountTimer) clearInterval(accountTimer)
+  accountTimer = null
+}
+watch(() => [props.show, props.account?.id] as const, () => {
+  stopAccountPolling()
+  currentAccount.value = props.account
+  if (props.show) {
+    void refreshAccount()
+    accountTimer = setInterval(() => { void refreshAccount() }, 3000)
+  }
+}, { immediate: true })
 const pollTimer = ref<ReturnType<typeof setInterval> | null>(null)
 const running = computed(() => tests.value.some(item => item.status === 'running'))
 const htmlTest = computed(() => tests.value.find(item => item.case === 'html'))
@@ -189,5 +219,5 @@ const stopPolling = () => {
   pollTimer.value = null
 }
 const handleClose = () => emit('close')
-onUnmounted(stopPolling)
+onUnmounted(() => { stopPolling(); stopAccountPolling() })
 </script>

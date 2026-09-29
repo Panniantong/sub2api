@@ -37,6 +37,8 @@ func TestCookieValidationFailureCooldown(t *testing.T) {
 		want    int
 	}{
 		{"http_401", 401, "", nil, 0, 120},
+		{"http_400_default", 400, "invalid request", nil, 0, 120},
+		{"http_400_custom", 400, "invalid request", nil, 300, 300},
 		{"http_503", 503, "", nil, 0, 120},
 		{"unexpected_answer", 200, "maybe", nil, 0, 120},
 		{"timeout", 0, "", context.DeadlineExceeded, 0, 120},
@@ -53,6 +55,7 @@ func TestCookieValidationFailureCooldown(t *testing.T) {
 			repo := &cookieGuardBindingRepo{}
 			svc := &OpenAIGatewayService{settingService: settingsService, accountRepo: repo, httpUpstream: cookieFailureTestUpstream{status: tc.status, body: fmt.Sprintf(`{"output_text":%q}`, tc.answer), err: tc.err}}
 			account := cookieGuardTestAccount("old.example", time.Now().Add(time.Minute))
+			repo.account = &account
 			start := time.Now()
 			_, err = svc.validateBindAndBuildOpenAICookieHost(context.Background(), &account, settings, "candidate.example", "candidate=cookie", "", "ignored", "token")
 			require.NoError(t, err)
@@ -90,4 +93,32 @@ func TestCookieValidationCooldownSettings(t *testing.T) {
 		v.CookieHostValidationFailureCooldownSeconds = invalid
 		require.Error(t, s.SetOpenAICookieSettings(context.Background(), v))
 	}
+}
+
+func TestCookieValidationModelRejectionUsesConfiguredCooldown(t *testing.T) {
+	settingsService := cookieGuardTestSettings(t)
+	settings, err := settingsService.GetOpenAICookieSettings(context.Background())
+	require.NoError(t, err)
+	settings.CookieHostValidationFailureCooldownSeconds = 300
+	repo := &cookieGuardBindingRepo{}
+	account := cookieGuardTestAccount("old.example", time.Now().Add(time.Minute))
+	repo.account = &account
+	svc := &OpenAIGatewayService{settingService: settingsService, accountRepo: repo, httpUpstream: cookieFailureTestUpstream{status: 400, body: `{"detail":"The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account."}`}}
+	result, err := svc.validateBindAndBuildOpenAICookieHost(context.Background(), &account, settings, "candidate.example", "candidate=cookie", "", "ignored", "token")
+	require.NoError(t, err)
+	require.Equal(t, "error", result)
+	require.WithinDuration(t, time.Now().Add(300*time.Second), openAICodexCookieHostCooldownUntil(&account, "candidate.example"), 2*time.Second)
+	require.NotEmpty(t, repo.updates)
+	logs, err := settingsService.GetOpenAICookieValidationLogs(context.Background())
+	require.NoError(t, err)
+	require.Contains(t, logs[0].Message, "model is not supported")
+	require.Contains(t, logs[0].Message, "冷却 300 秒")
+	require.Equal(t, "validation_failed", logs[0].Stage)
+	require.Equal(t, "cooldown", logs[0].BindingStatus)
+}
+
+func TestCookieValidationUpstreamErrorSummary(t *testing.T) {
+	require.Equal(t, "unsupported parameter", cookieValidationUpstreamError(`{"error":{"message":"unsupported parameter"}}`))
+	require.Equal(t, "invalid request", cookieValidationUpstreamError("invalid\nrequest"))
+	require.Contains(t, cookieValidationUpstreamError(strings.Repeat("错", 600)), "完整内容见 validation_response")
 }
