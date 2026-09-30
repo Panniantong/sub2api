@@ -90,9 +90,11 @@ func TestCookieWSHTTPContinuationReusesFixedConnection(t *testing.T) {
 			_, bound := svc.getOpenAIWSStateStore().GetResponseConn(id)
 			require.True(t, bound, "connection affinity must be ready before completion")
 		}}
-		prevField := ""
-		if previous != "" {
-			prevField = fmt.Sprintf(`,"previous_response_id":%q`, previous)
+		// Downstream IDs are deliberately unrelated, including a message ID.
+		// The selected socket, not this field, must supply the continuation.
+		prevField := `,"previous_response_id":"msg_untrusted_client_value"`
+		if turn == 2 {
+			prevField = "" // A tool continuation also works without a client ID.
 		}
 		input := `[{"role":"user","content":"ping"}]`
 		if turn == 2 {

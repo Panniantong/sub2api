@@ -352,6 +352,26 @@
           <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
         </template>
 
+        <template #cell-downstream_request_cookie="{ row }">
+          <button
+            v-if="row.downstream_request_cookie"
+            type="button"
+            class="inline-flex items-center rounded border border-sky-200 bg-sky-50 px-2 py-1 text-[10px] font-medium text-sky-700 hover:bg-sky-100 dark:border-sky-500/40 dark:bg-sky-500/10 dark:text-sky-300"
+            @click="openCookieDetails(row.downstream_request_cookie, 'downstreamRequestCookie')"
+          >{{ cookieHost(row.downstream_request_cookie) || t('admin.usage.downstreamRequestCookie') }} · {{ row.downstream_request_cookie.length }}</button>
+          <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
+        </template>
+
+        <template #cell-downstream_response_cookie="{ row }">
+          <button
+            v-if="row.downstream_response_cookie"
+            type="button"
+            class="inline-flex items-center rounded border border-sky-200 bg-sky-50 px-2 py-1 text-[10px] font-medium text-sky-700 hover:bg-sky-100 dark:border-sky-500/40 dark:bg-sky-500/10 dark:text-sky-300"
+            @click="openCookieDetails(row.downstream_response_cookie, 'downstreamResponseCookie')"
+          >{{ cookieHost(row.downstream_response_cookie) || t('admin.usage.downstreamResponseCookie') }} · {{ row.downstream_response_cookie.length }}</button>
+          <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
+        </template>
+
         <template #cell-session_id="{ row }">
           <button
             v-if="row.session_id"
@@ -720,7 +740,7 @@ const showAccountBilling = props.showAccountBilling
 const showUpstreamEndpoint = props.showUpstreamEndpoint
 const ipGeoBatchLoading = ref(false)
 
-type StateDetailKind = 'request' | 'response' | 'cookie' | 'responseCookie' | 'session' | 'headers' | 'responseHeaders'
+type StateDetailKind = 'request' | 'response' | 'cookie' | 'responseCookie' | 'downstreamRequestCookie' | 'downstreamResponseCookie' | 'session' | 'headers' | 'responseHeaders'
 const stateDetails = ref<{ kind: StateDetailKind; value: string; payload?: Record<string, unknown> | null } | null>(null)
 
 const stateBadgeClass = (state: string): string => state.length === 780
@@ -732,6 +752,8 @@ const detailTitle = (kind: StateDetailKind): string => {
   if (kind === 'response') return t('admin.usage.responseState')
   if (kind === 'cookie') return t('admin.usage.requestCookie')
   if (kind === 'responseCookie') return t('admin.usage.responseCookie')
+  if (kind === 'downstreamRequestCookie') return t('admin.usage.downstreamRequestCookie')
+  if (kind === 'downstreamResponseCookie') return t('admin.usage.downstreamResponseCookie')
   if (kind === 'headers') return t('admin.usage.requestHeaders')
   if (kind === 'responseHeaders') return t('admin.usage.responseHeaders')
   return t('admin.usage.sessionId')
@@ -766,7 +788,7 @@ const cookieHost = (value: string): string => {
   return typeof host === 'string' ? host : ''
 }
 
-const openCookieDetails = (value: string, kind: 'cookie' | 'responseCookie' = 'cookie') => {
+const openCookieDetails = (value: string, kind: 'cookie' | 'responseCookie' | 'downstreamRequestCookie' | 'downstreamResponseCookie' = 'cookie') => {
   const payload = cookiePayload(value)
   stateDetails.value = { kind, value, payload }
 }

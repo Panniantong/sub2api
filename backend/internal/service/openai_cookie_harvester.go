@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -130,6 +131,9 @@ func openAICookieRotationDue(account *Account, now time.Time) bool {
 	if account == nil || account.Extra == nil {
 		return true
 	}
+	if until, err := time.Parse(time.RFC3339Nano, account.GetExtraString("codex_cookie_validation_resume_at")); err == nil && until.After(now) {
+		return false
+	}
 	value := strings.TrimSpace(account.GetExtraString(openAICodexCookieRotationNextExtraKey))
 	if value == "" {
 		return true
@@ -222,6 +226,9 @@ func (s *OpenAIGatewayService) rotateDueOpenAICookieHost(ctx context.Context, ac
 		attempted++
 		s.appendOpenAICookieValidationLog(ctx, OpenAICookieAcquisitionLog{ID: uuid.NewString(), AttemptID: baseLog.AttemptID, AccountID: account.ID, AccountName: account.Name, Model: validationModel, CreatedAt: time.Now(), Host: host, Kind: "validation", BindingHost: host, BindingStatus: "rotation_candidate", ValidationEnabled: true, Message: fmt.Sprintf("轮换尝试 Host %s（模型 %s）", host, validationModel)})
 		result, _ := s.validateBindAndBuildOpenAICookieHostLocked(ctx, account, settings, host, entry.Cookie, "", validationModel, "")
+		if result == "usage_limited" {
+			return false
+		}
 		if result == "yes" {
 			s.setOpenAICookieRotationState(ctx, account, "success", fmt.Sprintf("已切换到 Host %s", host))
 			return true
@@ -339,6 +346,22 @@ func (s *OpenAIGatewayService) validateBindAndBuildOpenAICookieHostLocked(ctx co
 	result, responseBody, statusCode := "error", "", 0
 	for attempt := 0; attempt < 3; attempt++ {
 		result, responseBody, statusCode = s.validateOpenAICodexCookieHost(ctx, &candidate, token, cookie, "", model)
+		if until, limited := cookieValidationUsageResume(statusCode, responseBody, time.Now()); limited {
+			base.StatusCode = statusCode
+			base.ValidationResult = "usage_limited"
+			base.ValidationResponse = truncateOpenAICodexValidationResponse(responseBody)
+			if account.Extra == nil {
+				account.Extra = map[string]any{}
+			}
+			account.Extra["codex_cookie_validation_resume_at"] = until.Format(time.RFC3339Nano)
+			if err := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{"codex_cookie_validation_resume_at": until.Format(time.RFC3339Nano)}); err != nil {
+				return "usage_limited", err
+			}
+			message := fmt.Sprintf("验证模型 %s 用量已耗尽，暂停 Host 尝试至 %s", model, until.Format(time.RFC3339))
+			s.setOpenAICookieRotationState(ctx, account, "waiting", message)
+			s.appendOpenAICookieValidationStage(ctx, base, "validation_usage_limited", message)
+			return "usage_limited", nil
+		}
 		if result == "yes" || result == "no" || cookieValidationConfigurationError(OpenAICookieAcquisitionLog{StatusCode: statusCode, ValidationResponse: responseBody}) || attempt == 2 {
 			break
 		}
@@ -416,6 +439,30 @@ func (s *OpenAIGatewayService) validateBindAndBuildOpenAICookieHostLocked(ctx co
 		return "error", err
 	}
 	return result, nil
+}
+
+func cookieValidationUsageResume(status int, body string, now time.Time) (time.Time, bool) {
+	if status != 429 {
+		return time.Time{}, false
+	}
+	var payload struct {
+		Error struct {
+			Type     string `json:"type"`
+			ResetsAt int64  `json:"resets_at"`
+			ResetsIn int64  `json:"resets_in_seconds"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(body), &payload) != nil || payload.Error.Type != "usage_limit_reached" {
+		return time.Time{}, false
+	}
+	until := time.Unix(payload.Error.ResetsAt, 0)
+	if !until.After(now) && payload.Error.ResetsIn > 0 {
+		until = now.Add(time.Duration(payload.Error.ResetsIn) * time.Second)
+	}
+	if !until.After(now) {
+		until = now.Add(120 * time.Second)
+	}
+	return until, true
 }
 
 // ValidateAndBindOpenAICookieHost is the manual-selection counterpart of the
@@ -524,7 +571,7 @@ func (s *OpenAIGatewayService) rotateDueOpenAICookieAccounts(ctx context.Context
 			continue
 		}
 		if openAICookieRotationDue(account, time.Now()) {
-			go s.rotateDueOpenAICookieHost(context.Background(), account, settings)
+			go s.rotateDueOpenAICookieHost(ctx, account, settings)
 		}
 	}
 }

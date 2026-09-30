@@ -70,6 +70,31 @@ func (s *OpenAIGatewayService) openAICookieSchedulingBlockReason(ctx context.Con
 
 type cookieSchedulingGroupKey struct{}
 
+// Rotation changes eligibility without changing persistent group membership.
+// Read these small, explicitly selected pools from the database so stale
+// scheduler buckets cannot hide recovered accounts or delay degradation.
+func (s *OpenAIGatewayService) cookieGroupNeedsLiveAccounts(ctx context.Context, groupID *int64, platform string) (bool, error) {
+	if platform != PlatformOpenAI || s.settingService == nil {
+		return false, nil
+	}
+	settings, err := s.settingService.GetOpenAICookieSettings(ctx)
+	if err != nil {
+		return false, err
+	}
+	if groupID == nil {
+		return false, nil
+	}
+	if settings.DegradedGroupID > 0 && *groupID == settings.DegradedGroupID {
+		return true, nil
+	}
+	for _, id := range settings.RotationGroupIDs {
+		if id == *groupID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func withCookieSchedulingGroup(ctx context.Context, groupID *int64) context.Context {
 	return context.WithValue(ctx, cookieSchedulingGroupKey{}, derefGroupID(groupID))
 }

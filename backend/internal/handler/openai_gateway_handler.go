@@ -494,41 +494,54 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	}
 	reqLog = reqLog.With(zap.String("model", reqModel), zap.Bool("stream", reqStream))
 	previousResponseID := strings.TrimSpace(gjson.GetBytes(body, "previous_response_id").String())
-	if previousResponseID != "" {
-		previousResponseIDKind := service.ClassifyOpenAIPreviousResponseIDKind(previousResponseID)
-		reqLog = reqLog.With(
-			zap.Bool("has_previous_response_id", true),
-			zap.String("previous_response_id_kind", previousResponseIDKind),
-			zap.Int("previous_response_id_len", len(previousResponseID)),
-		)
-		if previousResponseIDKind == service.OpenAIPreviousResponseIDKindMessageID {
-			reqLog.Warn("openai.request_validation_failed",
-				zap.String("reason", "previous_response_id_looks_like_message_id"),
+	continuationValidated := false
+	validateClientContinuation := func() bool {
+		if continuationValidated {
+			return true
+		}
+		if previousResponseID != "" {
+			previousResponseIDKind := service.ClassifyOpenAIPreviousResponseIDKind(previousResponseID)
+			reqLog = reqLog.With(
+				zap.Bool("has_previous_response_id", true),
+				zap.String("previous_response_id_kind", previousResponseIDKind),
+				zap.Int("previous_response_id_len", len(previousResponseID)),
 			)
-			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "previous_response_id must be a response.id (resp_*), not a message id")
-			return
+			if previousResponseIDKind == service.OpenAIPreviousResponseIDKindMessageID {
+				reqLog.Warn("openai.request_validation_failed",
+					zap.String("reason", "previous_response_id_looks_like_message_id"),
+				)
+				h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "previous_response_id must be a response.id (resp_*), not a message id")
+				return false
+			}
+			groupID := int64(0)
+			if apiKey.GroupID != nil {
+				groupID = *apiKey.GroupID
+			}
+			owned, ownershipErr := h.gatewayService.ValidateOpenAIHTTPResponseOwner(
+				c.Request.Context(),
+				groupID,
+				previousResponseID,
+				subject.UserID,
+				apiKey.ID,
+			)
+			if ownershipErr != nil {
+				reqLog.Warn("openai.previous_response_owner_lookup_failed", zap.Error(ownershipErr))
+			}
+			if !owned {
+				reqLog.Warn("openai.request_validation_failed", zap.String("reason", "previous_response_owner_mismatch"))
+				h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "previous_response_id is not available for this user")
+				return false
+			}
 		}
-		groupID := int64(0)
-		if apiKey.GroupID != nil {
-			groupID = *apiKey.GroupID
-		}
-		owned, ownershipErr := h.gatewayService.ValidateOpenAIHTTPResponseOwner(
-			c.Request.Context(),
-			groupID,
-			previousResponseID,
-			subject.UserID,
-			apiKey.ID,
-		)
-		if ownershipErr != nil {
-			reqLog.Warn("openai.previous_response_owner_lookup_failed", zap.Error(ownershipErr))
-		}
-		if !owned {
-			reqLog.Warn("openai.request_validation_failed", zap.String("reason", "previous_response_owner_mismatch"))
-			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "previous_response_id is not available for this user")
-			return
-		}
+		continuationValidated = true
+		return true
 	}
+
 	service.SetOpenAIHTTPResponseOwner(c, subject.UserID, apiKey.ID)
+	deferContinuationValidation := h.gatewayService.CookieWSContinuationEnabled(c.Request.Context())
+	if !deferContinuationValidation && !validateClientContinuation() {
+		return
+	}
 
 	setOpsRequestContext(c, reqModel, reqStream)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(reqStream, false)))
@@ -570,7 +583,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	))
 
 	// 提前校验 function_call_output 是否具备可关联上下文，避免上游 400。
-	if !h.validateFunctionCallOutputRequest(c, body, reqLog) {
+	if !deferContinuationValidation && !h.validateFunctionCallOutputRequest(c, body, reqLog) {
 		return
 	}
 
@@ -715,6 +728,16 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			zap.Float64("load_skew", scheduleDecision.LoadSkew),
 		)
 		account := selection.Account
+		// Cookie WS continuation is managed by the selected socket. Native
+		// upstream continuation still requires the original ownership checks.
+		if !h.gatewayService.UsesServerManagedCookieWS(account) &&
+			(!validateClientContinuation() || (deferContinuationValidation && !h.validateFunctionCallOutputRequest(c, body, reqLog))) {
+			if selection.ReleaseFunc != nil {
+				selection.ReleaseFunc()
+				selection.ReleaseFunc = nil
+			}
+			return
+		}
 		if previousResponseID != "" && requestPlatform == service.PlatformOpenAI && !h.gatewayService.SupportsOpenAIHTTPContinuation(account) {
 			// Native HTTP OAuth upstreams do not support continuation. Cookie-bound
 			// WSv2 accounts do, even when the client entered through HTTP/SSE.
@@ -2410,10 +2433,11 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	}
 	previousResponseID := strings.TrimSpace(gjson.GetBytes(firstMessage, "previous_response_id").String())
 	previousResponseIDKind := service.ClassifyOpenAIPreviousResponseIDKind(previousResponseID)
-	if previousResponseID != "" && previousResponseIDKind == service.OpenAIPreviousResponseIDKindMessageID {
+	if !h.gatewayService.CookieWSContinuationEnabled(ctx) && previousResponseIDKind == service.OpenAIPreviousResponseIDKindMessageID {
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "previous_response_id must be a response.id (resp_*), not a message id")
 		return
 	}
+
 	firstMessageToolCoverage := service.AnalyzeToolCallOutputContextCoverageBytes(firstMessage)
 	previousResponseCanMove := !firstMessageToolCoverage.HasFunctionCallOutput || firstMessageToolCoverage.ContextCoversAllCallIDs
 	reqLog = reqLog.With(
@@ -2658,6 +2682,14 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		}
 
 		account := selection.Account
+		if !h.gatewayService.UsesServerManagedCookieWS(account) && previousResponseIDKind == service.OpenAIPreviousResponseIDKindMessageID {
+			if selection.ReleaseFunc != nil {
+				selection.ReleaseFunc()
+			}
+			closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "previous_response_id must be a response.id (resp_*), not a message id")
+			return
+		}
+
 		accountMaxConcurrency := account.Concurrency
 		if selection.WaitPlan != nil && selection.WaitPlan.MaxConcurrency > 0 {
 			accountMaxConcurrency = selection.WaitPlan.MaxConcurrency

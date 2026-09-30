@@ -243,7 +243,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 			ServiceTier:                 resolvedOpenAIUpstreamServiceTier(c, serviceTier),
 			Stream:                      true,
 			Duration:                    time.Since(startTime),
-			FirstTokenMs:                scan.FirstTokenMs,
+			FirstTokenMs:                s.openAIHTTPFirstTokenMs(resp, scan.FirstTokenMs),
 		}, fmt.Errorf("stream usage incomplete: %w", scan.Err)
 	}
 	if err := state.ValidateToolCallArguments(); err != nil {
@@ -259,7 +259,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 			ServiceTier:                 resolvedOpenAIUpstreamServiceTier(c, serviceTier),
 			Stream:                      true,
 			Duration:                    time.Since(startTime),
-			FirstTokenMs:                scan.FirstTokenMs,
+			FirstTokenMs:                s.openAIHTTPFirstTokenMs(resp, scan.FirstTokenMs),
 		}, fmt.Errorf("invalid tool call arguments from upstream: %w", err)
 	}
 
@@ -291,7 +291,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 		ServiceTier:                 resolvedOpenAIUpstreamServiceTier(c, serviceTier),
 		Stream:                      true,
 		Duration:                    time.Since(startTime),
-		FirstTokenMs:                scan.FirstTokenMs,
+		FirstTokenMs:                s.openAIHTTPFirstTokenMs(resp, scan.FirstTokenMs),
 	}, nil
 }
 

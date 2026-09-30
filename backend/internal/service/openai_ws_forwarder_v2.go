@@ -63,6 +63,10 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	)
 
 	payload := s.buildOpenAIWSCreatePayload(reqBody, account)
+	managedContinuation := s.UsesServerManagedCookieWS(account)
+	if managedContinuation {
+		delete(payload, "previous_response_id")
+	}
 	payloadStrategy, removedKeys := applyOpenAIWSRetryPayloadStrategy(payload, attempt)
 	turnState := ""
 	turnMetadata := ""
@@ -129,6 +133,11 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	// store=false 的连接绑定必须按线程隔离，同一线程在两条路径之间也才能共享状态。
 	// 作用域由 Forward 从改写前的原始请求算出后传入，reqBody 此时已带账号 namespace。
 	if executionScope = strings.TrimSpace(executionScope); executionScope != "" {
+		sessionHash = executionScope
+	}
+	if managedContinuation {
+		// Content-derived hashes and shared prompt-cache keys are not identities.
+		// An unidentified HTTP request must start a fresh chain.
 		sessionHash = executionScope
 	}
 	if turnState == "" && stateStore != nil && sessionHash != "" {
@@ -209,9 +218,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		HeadersFactory: func(factoryCtx context.Context, headers http.Header) (http.Header, error) {
 			return s.refreshOpenAIAgentIdentityHeaders(factoryCtx, account, headers)
 		},
-		PreferredConnID:    preferredConnID,
-		ForceNewConn:       forceNewConn,
-		ForcePreferredConn: openAICodexCookieHostFromAccount(account) != "" && previousResponseID != "",
+		PreferredConnID:  preferredConnID,
+		CookieSessionKey: sessionHash,
+		ForceNewConn:     forceNewConn,
 		ProxyURL: func() string {
 			if account.ProxyID != nil && account.Proxy != nil {
 				return account.Proxy.URL()
@@ -268,6 +277,12 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		lease.Release()
 	}()
 	connID := strings.TrimSpace(lease.ConnID())
+	if managedContinuation {
+		lease.conn.applyCookieContinuation(payload, sessionHash)
+		previousResponseID = openAIWSPayloadString(payload, "previous_response_id")
+		previousResponseIDKind = ClassifyOpenAIPreviousResponseIDKind(previousResponseID)
+		payloadBytes = -1
+	}
 	logOpenAIWSModeDebug(
 		"connected account_id=%d account_type=%s transport=%s conn_id=%s conn_reused=%v conn_idle_ms=%d conn_age_ms=%d upstream_pings=%d conn_pick_ms=%d queue_wait_ms=%d has_previous_response_id=%v",
 		account.ID,
@@ -770,6 +785,9 @@ readLoop:
 			return nil, fmt.Errorf("openai ws error event: %s", errMsg)
 		}
 
+		if isTerminalEvent && managedContinuation {
+			lease.conn.rememberCookieContinuation(sessionHash, openAIWSPayloadString(payload, "model"), responseID)
+		}
 		if isTerminalEvent && responseID != "" && stateStore != nil {
 			// Publish both ownership and connection affinity BEFORE the terminal
 			// frame. Clients may submit their next turn as soon as it is flushed.

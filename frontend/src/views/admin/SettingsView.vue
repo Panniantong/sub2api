@@ -5432,6 +5432,9 @@
                   class="input mt-2 w-full"
                   data-testid="openai-ttft-mode"
                 >
+                  <option value="cpa">
+                    {{ t("admin.settings.gatewayForwarding.openaiTTFTModeCPA") }}
+                  </option>
                   <option value="semantic">
                     {{ t("admin.settings.gatewayForwarding.openaiTTFTModeSemantic") }}
                   </option>
@@ -11596,7 +11599,7 @@ async function saveSettings() {
       max_claude_code_version: form.max_claude_code_version,
       allow_ungrouped_key_scheduling: form.allow_ungrouped_key_scheduling,
       openai_ttft_mode:
-        form.openai_ttft_mode === "visible" ? "visible" : "semantic",
+        ["cpa", "visible"].includes(form.openai_ttft_mode) ? form.openai_ttft_mode : "semantic",
       enable_fingerprint_unification: form.enable_fingerprint_unification,
       enable_metadata_passthrough: form.enable_metadata_passthrough,
       enable_cch_signing: form.enable_cch_signing,

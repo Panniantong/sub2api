@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -77,6 +78,9 @@ type openAIWSAcquireRequest struct {
 	HeadersFactory  func(context.Context, http.Header) (http.Header, error)
 	ProxyURL        string
 	PreferredConnID string
+	// CookieSessionKey identifies a downstream conversation independently of
+	// its response IDs. A busy socket owned by this session must be awaited.
+	CookieSessionKey string
 	// ForceNewConn: 强制本次获取新连接（避免复用导致连接内续链状态互相污染）。
 	ForceNewConn bool
 	// ForcePreferredConn: 强制本次只使用 PreferredConnID，禁止漂移到其它连接。
@@ -309,6 +313,14 @@ type openAIWSConn struct {
 	lastUsedNano  atomic.Int64
 	prewarmed     atomic.Bool
 	maxAge        time.Duration
+
+	// Cookie WS continuation is owned by the socket and reset whenever another
+	// session borrows it or the upstream model changes. A model switch starts a
+	// new chain on the same socket; input/history remains the caller's responsibility.
+	continuationMu          sync.Mutex
+	continuationSessionHash string
+	continuationModel       string
+	continuationResponseID  string
 }
 
 func newOpenAIWSConn(id string, _ int64, ws openAIWSClientConn, handshakeHeaders http.Header, maxAges ...time.Duration) *openAIWSConn {
@@ -807,6 +819,70 @@ func (c *openAIWSConn) markPrewarmed() {
 		return
 	}
 	c.prewarmed.Store(true)
+}
+
+func (c *openAIWSConn) cookieContinuationPayload(payload []byte, sessionHash string) ([]byte, error) {
+	if c == nil {
+		return payload, errOpenAIWSConnClosed
+	}
+	var request map[string]any
+	if err := decodeOpenAIJSONUseNumber(payload, &request); err != nil {
+		return nil, err
+	}
+	c.applyCookieContinuation(request, sessionHash)
+	return json.Marshal(request)
+}
+
+func (c *openAIWSConn) applyCookieContinuation(request map[string]any, sessionHash string) {
+	sessionHash = strings.TrimSpace(sessionHash)
+	// The payload has already passed through account model mapping. Aliases
+	// of the same upstream model therefore share the same continuation chain.
+	model := openAIWSPayloadString(request, "model")
+	c.continuationMu.Lock()
+	responseID := ""
+	if sessionHash != "" && c.continuationSessionHash == sessionHash && model != "" && c.continuationModel == model {
+		responseID = c.continuationResponseID
+	}
+	if sessionHash == "" || model == "" || sessionHash != c.continuationSessionHash || model != c.continuationModel {
+		c.continuationSessionHash = sessionHash
+		c.continuationModel = model
+		c.continuationResponseID = ""
+	}
+	c.continuationMu.Unlock()
+	delete(request, "previous_response_id")
+	if responseID != "" {
+		request["previous_response_id"] = responseID
+	}
+}
+
+func (c *openAIWSConn) ownsCookieSession(sessionHash string) bool {
+	if c == nil || sessionHash == "" {
+		return false
+	}
+	c.continuationMu.Lock()
+	defer c.continuationMu.Unlock()
+	return c.continuationSessionHash == sessionHash
+}
+
+func (c *openAIWSConn) assignCookieSession(sessionHash string) {
+	c.continuationMu.Lock()
+	defer c.continuationMu.Unlock()
+	if sessionHash == "" || c.continuationSessionHash != sessionHash {
+		c.continuationSessionHash = sessionHash
+		c.continuationModel = ""
+		c.continuationResponseID = ""
+	}
+}
+
+func (c *openAIWSConn) rememberCookieContinuation(sessionHash, model, responseID string) {
+	if c == nil {
+		return
+	}
+	c.continuationMu.Lock()
+	c.continuationSessionHash = strings.TrimSpace(sessionHash)
+	c.continuationModel = strings.TrimSpace(model)
+	c.continuationResponseID = strings.TrimSpace(responseID)
+	c.continuationMu.Unlock()
 }
 
 type openAIWSAccountPool struct {

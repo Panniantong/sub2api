@@ -1817,6 +1817,8 @@ export interface AdminUsageLog extends UsageLog {
   request_cookie?: string | null
   request_headers?: string | null
   response_cookie?: string | null
+  downstream_request_cookie?: string | null
+  downstream_response_cookie?: string | null
   response_headers?: string | null
 
   // 账号计费倍率（仅管理员可见）

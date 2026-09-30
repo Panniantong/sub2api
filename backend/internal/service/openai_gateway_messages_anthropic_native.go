@@ -101,6 +101,7 @@ func (s *OpenAIGatewayService) forwardAnthropicViaNativeAnthropicEndpoint(
 	}
 
 	resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
+	captureOpenAIDownstreamResponseCookie(c, resp)
 	if err != nil {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, true)
 	}
@@ -549,7 +550,7 @@ func (s *OpenAIGatewayService) nativeAnthropicStreamResult(
 		Stream:           true,
 		ReasoningEffort:  reasoningEffort,
 		Duration:         time.Since(startTime),
-		FirstTokenMs:     firstTokenMs,
+		FirstTokenMs:     s.openAIHTTPFirstTokenMs(resp, firstTokenMs),
 		ClientDisconnect: clientDisconnect,
 	}
 }

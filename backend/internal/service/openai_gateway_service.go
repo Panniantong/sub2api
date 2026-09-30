@@ -272,24 +272,26 @@ type OpenAIForwardResult struct {
 	OpenAIWSMode             bool
 	// UpstreamTerminalEvent is the normalized terminal event observed on an
 	// upstream Responses WebSocket turn. Empty preserves legacy/non-WS success.
-	UpstreamTerminalEvent string
-	ResponseHeaders       http.Header
-	RequestState          string
-	ResponseState         string
-	RequestCookie         string
-	RequestHeaders        string
-	Duration              time.Duration
-	FirstTokenMs          *int
-	ClientDisconnect      bool
-	ImageCount            int
-	ImageSize             string
-	ImageInputSize        string
-	ImageOutputSize       string
-	ImageOutputSizes      []string
-	ImageSizeSource       string
-	ImageSizeBreakdown    map[string]int
-	VideoCount            int
-	VideoResolution       string
+	UpstreamTerminalEvent    string
+	ResponseHeaders          http.Header
+	RequestState             string
+	ResponseState            string
+	DownstreamRequestCookie  string
+	DownstreamResponseCookie string
+	RequestCookie            string
+	RequestHeaders           string
+	Duration                 time.Duration
+	FirstTokenMs             *int
+	ClientDisconnect         bool
+	ImageCount               int
+	ImageSize                string
+	ImageInputSize           string
+	ImageOutputSize          string
+	ImageOutputSizes         []string
+	ImageSizeSource          string
+	ImageSizeBreakdown       map[string]int
+	VideoCount               int
+	VideoResolution          string
 	// VideoDurationSeconds 是提交时请求的生成时长（xAI 按输出秒数计费），已归一化到 1-15 秒。
 	VideoDurationSeconds int
 	// WebSearchCalls 是 Codex alpha/search 网页搜索调用次数（每次成功请求为 1）。
@@ -536,6 +538,7 @@ type OpenAIGatewayService struct {
 	openaiCookieRotationLocks           sync.Map // key: int64(accountID), value: *sync.Mutex
 	openaiCookieRotationRunning         sync.Map // account ID -> active rotation task
 	cookieHarvestRuntime                cookieHarvestRuntime
+	responseCookieSync                  responseCookieSyncRuntime
 	// openaiCodexTurnStateOrigins: 下游会话 seed → openAICodexTurnStateOrigin，
 	// 记录最近一次向该会话下发 x-codex-turn-state 的铸造账号，供出站守卫
 	// 剥离跨账号回带（openai_codex_turn_state.go）。

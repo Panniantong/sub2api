@@ -3,6 +3,7 @@ import type { OpenAICodexCookieLibraryEntry } from './settings'
 import type { PaginatedResponse } from '@/types'
 
 export interface CookieSettings {
+  response_cookie_sync_enabled?: boolean
   local_harvest_disabled?: boolean
   remote_sync_enabled?: boolean
   remote_sync_url?: string

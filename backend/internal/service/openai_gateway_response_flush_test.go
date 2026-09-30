@@ -193,6 +193,40 @@ func TestOpenAIResponseFlush_DataQueuedButBlankDrainsFlushesOnce(t *testing.T) {
 	require.Equal(t, first+second, flushes[1], "blank line that drains the queue must flush the complete event exactly once")
 }
 
+func TestOpenAIResponseFlush_FirstVisibleOutputFlushesAfterSemanticProgress(t *testing.T) {
+	progress := "data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"web_search_call\",\"status\":\"in_progress\"}}\n\n"
+	visible := "data: {\"type\":\"response.output_text.delta\",\"delta\":\"first\"}\n\n"
+	tail := "data: {\"type\":\"response.output_text.delta\",\"delta\":\"later\"}\n\ndata: [DONE]\n\n"
+	allowBurst := make(chan struct{})
+	releaseFlush := make(chan struct{})
+	var burstOnce, flushOnce sync.Once
+	t.Cleanup(func() {
+		burstOnce.Do(func() { close(allowBurst) })
+		flushOnce.Do(func() { close(releaseFlush) })
+	})
+	eofReached := make(chan struct{})
+	reader := &stagedOpenAISSEReadCloser{
+		segments:   [][]byte{[]byte(progress), []byte(visible + tail)},
+		gates:      []<-chan struct{}{nil, allowBurst},
+		eofReached: eofReached,
+	}
+	recorder := newOpenAIResponseFlushRecorder()
+	recorder.blockFlush = 1
+	recorder.flushBlocked = make(chan struct{})
+	recorder.releaseFlush = releaseFlush
+	resultCh, errCh := runOpenAIResponseFlushTestAsync(recorder, reader, config.GatewayConfig{StreamDataIntervalTimeout: 30})
+	waitOpenAIResponseFlushSignal(t, recorder.flushBlocked)
+	burstOnce.Do(func() { close(allowBurst) })
+	waitOpenAIResponseFlushSignal(t, eofReached)
+	flushOnce.Do(func() { close(releaseFlush) })
+	require.NoError(t, <-errCh)
+	require.NotNil(t, (<-resultCh).firstTokenMs)
+	body, flushes := recorder.snapshot()
+	require.Equal(t, progress+visible+tail, body)
+	require.GreaterOrEqual(t, len(flushes), 3)
+	require.Equal(t, progress+visible, flushes[1], "first visible event must bypass a queued burst even when semantic TTFT is already recorded")
+}
+
 func TestOpenAIResponseFlush_BurstDoesNotIncreaseFlushes(t *testing.T) {
 	first := "data: {\"type\":\"response.output_text.delta\",\"delta\":\"first\"}\n\n"
 	burst := strings.Join([]string{

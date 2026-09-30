@@ -499,6 +499,7 @@ func (s *OpenAIGatewayService) probeOpenAICodexTicket(ctx context.Context, accou
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.HarvestAttemptTimeoutSeconds)*time.Second)
 	defer cancel()
+	refreshCookie := cookieLog != nil && cookieLog.Task == "refresh"
 	token, _, err := s.GetAccessToken(probeCtx, account)
 	if err != nil || strings.TrimSpace(token) == "" {
 		if cookieLog != nil {
@@ -558,7 +559,7 @@ func (s *OpenAIGatewayService) probeOpenAICodexTicket(ctx context.Context, accou
 	}
 	// A scheduled proxy discovery must actually use its reserved proxy. Relay
 	// mint has no selectable egress and cannot contribute proxy route samples.
-	if cfg.RelayEnabled && cfg.RelayAllowMint && strings.EqualFold(strings.TrimSpace(cfg.RelayMode), "mint") && (cookieLog == nil || cookieSettings[0].harvestProxy == "") {
+	if !refreshCookie && cfg.RelayEnabled && cfg.RelayAllowMint && strings.EqualFold(strings.TrimSpace(cfg.RelayMode), "mint") && (cookieLog == nil || cookieSettings[0].harvestProxy == "") {
 		relayResult, relayErr := s.mintOpenAICodexViaRelay(probeCtx, account, token, harvestModel, body, cfg)
 		if relayErr == nil && s.acceptOpenAICodexRelayMint(probeCtx, account, token, harvestModel, probeSessionID, cfg, func() *OpenAICookieSettings {
 			if len(cookieSettings) > 0 {
@@ -600,6 +601,27 @@ func (s *OpenAIGatewayService) probeOpenAICodexTicket(ctx context.Context, accou
 	deleteOpenAIHeaderEqualFold(req.Header, openAICodexTurnStateHeader)
 	deleteOpenAIHeaderEqualFold(req.Header, "session-id")
 	deleteOpenAIHeaderEqualFold(req.Header, "Cookie")
+	if refreshCookie {
+		// Reload at dispatch time so a queued task cannot send an older snapshot.
+		entry, lookupErr := s.settingService.LookupOpenAICodexCookie(probeCtx, cookieLog.TargetHost)
+		if lookupErr != nil || entry == nil {
+			cookieLog.Stage, cookieLog.Message = "ignored_invalid", "目标 Host Cookie 已过期或不可用，等待缺失补齐任务"
+			return
+		}
+		targetHost := normalizeOpenAICookieHost(cookieLog.TargetHost)
+		host, _ := openAICodexCookieJWTInfo(entry.Cookie)
+		if targetHost == "" || normalizeOpenAICookieHost(host) != targetHost {
+			cookieLog.Stage, cookieLog.Message = "ignored_invalid", "目标 Host 与 Cookie 不匹配，未发送刷新请求"
+			return
+		}
+		if before := cookieSettings[0].CookieRefreshBeforeSeconds; before > 0 && entry.ExpiresAt.After(time.Now().Add(time.Duration(before)*time.Second)) {
+			cookieLog.Host = targetHost
+			cookieLog.Success = true
+			cookieLog.Stage, cookieLog.Message = "ignored_fresh", "目标 Cookie 已续期且尚未进入刷新窗口，跳过重复请求"
+			return
+		}
+		req.Header.Set("Cookie", entry.Cookie)
+	}
 	req.Header.Set("session_id", probeSessionID)
 	proxyURL, proxySource := strings.TrimSpace(cfg.HarvestProxyURL), "dedicated"
 	if cookieLog != nil {
@@ -630,7 +652,9 @@ func (s *OpenAIGatewayService) probeOpenAICodexTicket(ctx context.Context, accou
 		if cookieSettings[0].HarvestPolicy != nil {
 			sampleTarget = cookieSettings[0].HarvestPolicy.LearningSamples
 		}
-		learningAttempt = s.recordOpenAICookieProxyAttempt(probeCtx, proxyURL, cfg.CookieProxyLearningAttempts, sampleTarget)
+		if !refreshCookie {
+			learningAttempt = s.recordOpenAICookieProxyAttempt(probeCtx, proxyURL, cfg.CookieProxyLearningAttempts, sampleTarget)
+		}
 		cookieLog.harvestAttempted = true
 	}
 	proxyScheme, proxyHost := openAICodexHarvestProxyInfo(proxyURL)
@@ -703,18 +727,41 @@ func (s *OpenAIGatewayService) probeOpenAICodexTicket(ctx context.Context, accou
 		if cookieLog.Host == "" || !ok || exp <= float64(now.Unix()) {
 			return
 		}
+		if refreshCookie && normalizeOpenAICookieHost(cookieLog.Host) != normalizeOpenAICookieHost(cookieLog.TargetHost) {
+			cookieLog.Stage, cookieLog.Message = "ignored_host", "响应 Host 与刷新目标不一致，保留目标 Cookie"
+			return
+		}
 		postResponseCtx, postResponseCancel := newOpenAICookiePostResponseContext(ctx)
 		defer postResponseCancel()
-		s.recordOpenAICookieProxyHost(postResponseCtx, proxyURL, cookieLog.Host, learningAttempt)
+		if !refreshCookie {
+			s.recordOpenAICookieProxyHost(postResponseCtx, proxyURL, cookieLog.Host, learningAttempt)
+		}
 		entry := OpenAICodexCookieLibraryEntry{Host: cookieLog.Host, Cookie: cookieLog.Cookie, Payload: cookieLog.Payload, CapturedAt: now, ExpiresAt: time.Unix(int64(exp), 0)}
 		persistCtx, persistCancel := context.WithTimeout(postResponseCtx, openAICookiePersistTimeout)
-		err := s.settingService.UpsertOpenAICodexCookie(persistCtx, entry)
+		updated, err := s.settingService.UpsertOpenAICodexCookieIfNewer(persistCtx, entry)
 		persistCancel()
 		if err != nil {
 			cookieLog.Message = "Cookie 保存失败: " + err.Error()
 			return
 		}
 		cookieLog.Success, cookieLog.Message = true, "已保存到 Cookie 库（按 host 去重）"
+		if refreshCookie {
+			cookieLog.Stage, cookieLog.Message = "updated", "已携带目标 Cookie 请求并刷新对应 Host"
+			if !updated {
+				cookieLog.Stage, cookieLog.Message = "ignored_older", "响应 Cookie 相同或时间不更新，保留目标 Host Cookie"
+			}
+			return // Refresh only the library; never rebind the collector account.
+		}
+		if !updated {
+			cookieLog.Stage, cookieLog.Message = "ignored_older", "响应 Cookie 相同或时间不更新，使用库中最新 Cookie 进行后续验证"
+			current, lookupErr := s.settingService.LookupOpenAICodexCookie(postResponseCtx, cookieLog.Host)
+			if lookupErr != nil || current == nil {
+				cookieLog.Success = false
+				cookieLog.Stage, cookieLog.Message = "failed", "无法读取库中有效 Cookie，已跳过绑定验证"
+				return
+			}
+			responseCookie = current.Cookie
+		}
 		// Acquisition and validation have separate logs. Only unbound accounts
 		// start a validation attempt; bound/cooldown skips remain silent.
 		boundHost := openAICodexCookieHostFromAccount(account)
@@ -1840,7 +1887,13 @@ func openAICodexResponseCookieHeader(response *http.Response) string {
 	values := make(map[string]string)
 	now := time.Now()
 	for _, cookie := range response.Cookies() {
-		if cookie == nil || strings.TrimSpace(cookie.Name) == "" || cookie.MaxAge < 0 || (!cookie.Expires.IsZero() && !now.Before(cookie.Expires)) || strings.ContainsAny(cookie.Value, "\r\n") {
+		if cookie == nil || strings.TrimSpace(cookie.Name) == "" || strings.ContainsAny(cookie.Value, "\r\n") {
+			continue
+		}
+		if cookie.MaxAge < 0 || (cookie.MaxAge == 0 && !cookie.Expires.IsZero() && !now.Before(cookie.Expires)) {
+			// A later deletion for the same name invalidates an earlier value.
+			// Positive Max-Age takes precedence over Expires (RFC 6265).
+			delete(values, cookie.Name)
 			continue
 		}
 		values[cookie.Name] = cookie.Value

@@ -178,7 +178,7 @@ func (s *OpenAIGatewayService) acceptOpenAICodexRelayMint(ctx context.Context, a
 		}
 		entry := OpenAICodexCookieLibraryEntry{Host: host, Cookie: responseCookie, Payload: payload, CapturedAt: now, ExpiresAt: time.Unix(int64(exp), 0)}
 		persistCtx, persistCancel := context.WithTimeout(postResponseCtx, openAICookiePersistTimeout)
-		err := s.settingService.UpsertOpenAICodexCookie(persistCtx, entry)
+		updated, err := s.settingService.UpsertOpenAICodexCookieIfNewer(persistCtx, entry)
 		persistCancel()
 		if err != nil {
 			if cookieLog != nil {
@@ -189,6 +189,20 @@ func (s *OpenAIGatewayService) acceptOpenAICodexRelayMint(ctx context.Context, a
 		if cookieLog != nil {
 			cookieLog.Success = true
 			cookieLog.Message = "Relay Cookie 已保存，等待本地 Host 验证"
+		}
+		if !updated {
+			if cookieLog != nil {
+				cookieLog.Stage, cookieLog.Message = "ignored_older", "Relay Cookie 相同或时间不更新，使用库中最新 Cookie 进行后续验证"
+			}
+			current, lookupErr := s.settingService.LookupOpenAICodexCookie(postResponseCtx, host)
+			if lookupErr != nil || current == nil {
+				if cookieLog != nil {
+					cookieLog.Success = false
+					cookieLog.Stage, cookieLog.Message = "failed", "无法读取库中有效 Cookie，已跳过绑定验证"
+				}
+				return true // Do not retry a mint just because a saved cookie expired.
+			}
+			responseCookie = current.Cookie
 		}
 		boundHost := openAICodexCookieHostFromAccount(account)
 		rotationDue := cookieSettings.CookieRotationEnabled && openAICookieRotationDue(account, now)

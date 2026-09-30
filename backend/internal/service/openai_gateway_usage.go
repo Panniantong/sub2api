@@ -497,6 +497,8 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	usageLog.RequestState = optionalTrimmedStringPtr(requestState)
 	usageLog.ResponseState = optionalTrimmedStringPtr(responseState)
 	usageLog.RequestCookie = optionalTrimmedStringPtr(requestCookie)
+	usageLog.DownstreamRequestCookie = optionalTrimmedStringPtr(result.DownstreamRequestCookie)
+	usageLog.DownstreamResponseCookie = optionalTrimmedStringPtr(result.DownstreamResponseCookie)
 	requestHeaders := input.RequestHeaders
 	if strings.TrimSpace(requestHeaders) == "" {
 		requestHeaders = result.RequestHeaders

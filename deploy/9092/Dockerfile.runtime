@@ -1,0 +1,12 @@
+# Reuse an existing immutable runtime layer without modifying its tag or container.
+ARG RUNTIME_IMAGE
+FROM ${RUNTIME_IMAGE}
+USER root
+COPY --chown=sub2api:sub2api sub2api /app/sub2api
+COPY --chown=sub2api:sub2api resources/ /app/resources/
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod 755 /app/sub2api /app/docker-entrypoint.sh
+LABEL deployment="sub2api-piao-9092"
+WORKDIR /app
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+CMD ["/app/sub2api"]

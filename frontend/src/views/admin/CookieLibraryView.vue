@@ -87,7 +87,7 @@
           <section class="space-y-3 rounded-lg border border-gray-200 p-4 dark:border-dark-700">
             <h3 class="font-semibold">运行开关</h3>
             <label class="flex items-center gap-2 text-sm"><input v-model="form.enabled" type="checkbox" />启用 Cookie 后台任务（本地采集 / Host 轮换）</label>
-            <p class="text-xs text-gray-500">仅使用远程 Cookie 并自动轮换时，保持后台任务开启，关闭下面的本地账号采集。远程同步独立运行。</p>
+            <p class="text-xs text-gray-500">仅使用远程 Cookie 并自动轮换时，保持后台任务开启，关闭下面的本地账号采集。远程同步与上游响应同步独立运行。</p>
           </section>
           <section class="space-y-3 rounded-lg border border-gray-200 p-4 dark:border-dark-700">
             <h3 class="font-semibold">来源一：本地账号采集</h3>
@@ -95,16 +95,29 @@
             <p class="text-xs text-gray-500">仅使用下方明确选择的获取账号或分组；两项都未配置时不采集，不会自动抽取其他账号。关闭后停止派发新采集任务，已发出的任务完成后退出，不影响 Host 轮换和远程同步。</p>
             <p v-if="!form.account_ids.length && !form.group_ids.length" class="text-sm text-amber-600">尚未配置本地采集账号或分组，本地采集不会运行。</p>
           </section>
-          <section class="space-y-3 rounded-lg border p-4">
+          <section class="space-y-3 rounded-lg border border-gray-200 p-4 dark:border-dark-700">
             <h3 class="font-semibold">来源二：远程 Cookie 同步</h3>
             <label class="flex items-center gap-2"><input v-model="form.remote_sync_enabled" type="checkbox" />启用远程同步</label>
-            <p class="text-xs text-gray-500">按 Host 合并远程 Cookie，采集时间较新的记录优先，时间相同保留本地。同步独立于本地采集开关运行。</p>
+            <p class="text-xs text-gray-500">按 Host 合并远程 Cookie，优先比较签发时间，其次到期时间，旧格式回退采集时间；相同时间保留本地。同步独立于本地采集开关运行。</p>
             <div v-if="form.remote_sync_enabled" class="grid gap-4 md:grid-cols-2">
             <label class="block text-sm">远程服务器地址<input v-model="form.remote_sync_url" class="input mt-1 w-full" placeholder="https://sub2api.example.com" /></label>
             <label class="block text-sm">远程 Admin Key<input v-model="form.remote_sync_admin_key" type="password" autocomplete="new-password" class="input mt-1 w-full" placeholder="输入管理员 API Key；留空保留已保存的 Key" /></label>
             <label class="block text-sm">同步频率（秒）<input v-model.number="form.remote_sync_interval_seconds" type="number" min="10" max="86400" class="input mt-1 w-full" placeholder="默认 60 秒" /></label>
             </div>
             <p class="text-xs text-gray-500">保存后生效，在“获取日志”查看同步结果；关闭时保留连接配置，失败时保留已有 Cookie。</p>
+          </section>
+          <section class="space-y-4 rounded-lg border border-sky-200 bg-sky-50/40 p-4 dark:border-sky-900 dark:bg-sky-950/20" aria-labelledby="response-cookie-source-title">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div><h3 id="response-cookie-source-title" class="font-semibold">来源三：上游响应 Cookie 同步</h3><p class="mt-1 text-xs text-gray-500">从正常 HTTP 请求的上游响应中获取 Cookie，流式与非流式请求均适用。</p></div>
+              <span class="rounded-full px-2.5 py-1 text-xs" :class="form.response_cookie_sync_enabled ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300' : 'bg-gray-100 text-gray-500 dark:bg-dark-800'">{{ form.response_cookie_sync_enabled ? '已启用' : '未启用' }}</span>
+            </div>
+            <label class="flex items-center gap-2 text-sm"><input v-model="form.response_cookie_sync_enabled" type="checkbox" />启用上游响应 Cookie 自动入库</label>
+            <div class="grid gap-3 text-xs sm:grid-cols-3">
+              <div class="rounded-lg bg-white/70 p-3 dark:bg-dark-800/60"><div class="font-medium">按 Host 去重</div><p class="mt-1 text-gray-500">每个 Host 只保留一条 Cookie。仅接受成功响应中的有效 Cookie，并遵循 Host 白名单。</p></div>
+              <div class="rounded-lg bg-white/70 p-3 dark:bg-dark-800/60"><div class="font-medium">最新时间优先</div><p class="mt-1 text-gray-500">优先比较签发时间，其次到期时间，旧格式回退采集时间。相同或更旧的 Cookie 不覆盖。</p></div>
+              <div class="rounded-lg bg-white/70 p-3 dark:bg-dark-800/60"><div class="font-medium">异步更新</div><p class="mt-1 text-gray-500">请求无需等待入库。更新、跳过及失败结果写入获取日志；队列繁忙时跳过同步并记录。</p></div>
+            </div>
+            <div class="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500"><span>保存后生效，独立于本地采集与远程同步开关。下游 Cookie 回传规则保持原样。</span><button type="button" class="text-sky-700 hover:underline dark:text-sky-300" @click="tab = 'logs'">查看获取日志 →</button></div>
           </section>
           <section class="space-y-5 rounded border border-gray-200 p-4 dark:border-dark-700">
             <div>
@@ -153,7 +166,7 @@
               <fieldset :disabled="form.cookie_proxy_schedule_mode !== 'dynamic'" class="grid gap-4 md:grid-cols-3 disabled:opacity-50">
                 <label class="space-y-1"><span class="block text-sm">探索新 Host（%）</span><input v-model.number="form.harvest_policy.explore_percent" required type="number" min="1" max="100" class="input w-full" /></label>
                 <label class="space-y-1"><span class="block text-sm">缺失 Host 补齐（%）</span><input v-model.number="form.harvest_policy.fill_percent" required type="number" min="0" max="99" class="input w-full" /></label>
-                <label class="space-y-1"><span class="block text-sm">即将过期刷新（%）</span><input v-model.number="form.harvest_policy.refresh_percent" required type="number" min="0" max="99" class="input w-full" /></label>
+                <label class="space-y-1"><span class="block text-sm">即将过期刷新（%）</span><input v-model.number="form.harvest_policy.refresh_percent" required type="number" min="0" max="99" class="input w-full" /><span class="block text-xs text-gray-500">使用获取账号携带目标 Host 当前 Cookie 发起请求，仅将同 Host、时间更新的响应 Cookie 写回库。</span></label>
                 <label class="space-y-1"><span class="block text-sm">探索巡检周期（秒）</span><input v-model.number="form.harvest_policy.exploration_revisit_seconds" required type="number" min="30" max="86400" class="input w-full" /><span class="text-xs text-gray-500">超过该时间未被使用的代理优先探索；实际速度受并发、账号和退避限制。</span></label>
                 <label class="space-y-1"><span class="block text-sm">同目标连续未命中次数</span><input v-model.number="form.harvest_policy.target_miss_limit" required type="number" min="1" max="100" class="input w-full" /></label>
                 <label class="space-y-1"><span class="block text-sm">目标未命中退避（秒）</span><input v-model.number="form.harvest_policy.target_backoff_seconds" required type="number" min="1" max="86400" class="input w-full" /><span class="text-xs text-gray-500">只暂停该代理补这个 Host，换其他代理尝试；获得的其他有效 Host 仍入库。</span></label>
@@ -203,7 +216,7 @@
         <div class="card flex flex-wrap gap-x-6 gap-y-2 px-4 py-3 text-sm"><span>正在采集 {{ harvestRunning.total || 0 }} / {{ form.cookie_harvest_concurrency }}</span><span>探索 {{ harvestRunning.explore || 0 }}</span><span>补齐 {{ harvestRunning.fill || 0 }}</span><span>刷新 {{ harvestRunning.refresh || 0 }}</span><span>轮询 {{ harvestRunning.round_robin || 0 }}</span></div>
         <div class="overflow-hidden rounded border border-gray-800 bg-[#0b1220] text-gray-200 shadow-sm">
           <div class="flex flex-wrap items-center justify-between gap-3 border-b border-gray-700 bg-[#111827] px-4 py-2 text-xs">
-            <div class="flex items-center gap-2 font-mono"><span class="h-2.5 w-2.5 rounded-full" :class="!form.enabled ? 'bg-gray-500' : liveAcquisitionPaused ? 'bg-amber-400' : 'bg-emerald-400'"></span><span>cookie acquisition live</span><span class="text-gray-400">· {{ !form.enabled ? 'Cookie 获取未启用' : liveAcquisitionPaused ? '已暂停' : '实时运行中' }}</span></div>
+            <div class="flex items-center gap-2 font-mono"><span class="h-2.5 w-2.5 rounded-full" :class="!acquisitionEnabled ? 'bg-gray-500' : liveAcquisitionPaused ? 'bg-amber-400' : 'bg-emerald-400'"></span><span>cookie acquisition live</span><span class="text-gray-400">· {{ !acquisitionEnabled ? 'Cookie 获取未启用' : liveAcquisitionPaused ? '已暂停' : '实时运行中' }}</span></div>
             <div class="flex items-center gap-2"><span v-if="liveStatusError" class="text-red-300">{{ liveStatusError }}</span><button type="button" class="rounded border border-gray-600 px-2 py-1 hover:bg-gray-700" @click="toggleLive('acquisition')">{{ liveAcquisitionPaused ? '继续' : '暂停' }}</button><button type="button" class="rounded border border-gray-600 px-2 py-1 hover:bg-gray-700" @click="clearLive('acquisition')">清空窗口</button></div>
           </div>
           <div ref="acquisitionConsole" class="h-[420px] overflow-y-auto px-4 py-3 font-mono text-xs leading-6">
@@ -216,7 +229,7 @@
           <table class="w-full text-left text-sm"><thead><tr class="border-b"><th class="p-3">时间 / 账号</th><th class="p-3">结果</th><th class="p-3">Host / 代理</th><th class="p-3">详情</th></tr></thead>
             <tbody><tr v-for="log in logs" :key="log.id" class="border-b dark:border-dark-700">
               <td class="p-3 whitespace-nowrap">{{ formatTime(log.created_at) }}<br /><span class="text-xs text-gray-500">{{ isSchedulerLog(log) ? '系统调度' : (log.account_name || '—') }}<template v-if="log.account_id > 0"> #{{ log.account_id }}</template> · {{ log.model }}</span></td>
-              <td class="p-3"><span v-if="isSchedulerLog(log)" class="text-amber-600">调度提示</span><span v-else :class="log.success ? 'text-emerald-600' : 'text-red-600'">{{ log.success ? '已入库' : '未入库' }} · {{ log.status_code || '未收到响应' }}</span><p class="mt-1 text-xs">{{ log.message }}</p></td>
+              <td class="p-3"><span v-if="isSchedulerLog(log)" class="text-amber-600">调度提示</span><span v-else :class="log.stage?.startsWith('ignored_') ? 'text-amber-600' : log.success ? 'text-emerald-600' : 'text-red-600'">{{ acquisitionResultLabel(log) }} · {{ log.status_code || '未收到响应' }}</span><p class="mt-1 text-xs">{{ log.message }}</p></td>
               <td class="max-w-sm break-all p-3 font-mono text-xs"><span class="font-sans text-gray-500">{{ harvestTaskLabel(log.task) }}</span> · {{ log.host || '—' }}<p v-if="log.target_host" class="text-amber-600">目标 {{ log.target_host }}</p><p class="mt-1 text-gray-500">{{ log.proxy || '—' }}<span v-if="log.proxy_username" class="ml-2 text-gray-400">user={{ log.proxy_username }}</span></p></td>
               <td class="p-3"><button class="btn btn-secondary btn-sm whitespace-nowrap" @click="showDetail('Cookie 获取详情', log)">查看响应 / Cookie</button></td>
             </tr><tr v-if="!logs.length"><td colspan="4" class="p-6 text-gray-500">暂无获取日志</td></tr></tbody>
@@ -295,7 +308,7 @@ const notice = ref('')
 const now = ref(Date.now())
 const detail = ref<string | null>(null)
 const detailTitle = ref('')
-const form = reactive<cookies.CookieSettings>({ local_harvest_disabled: false, harvest_policy: cookies.defaultHarvestPolicy(), enabled: false, model: 'gpt-6-astra', interval_seconds: 5, account_ids: [], group_ids: [], rotation_account_ids: [], rotation_group_ids: [], cookie_host_scheduling_guard_enabled: false, proxy_urls: [], managed_proxy_ids: [], use_all_managed_proxies: false, cookie_proxy_schedule_mode: 'round_robin', cookie_harvest_concurrency: 1, cookie_proxy_learning_attempts: 100, dynamic_proxy_fill_host_cookie: false, host_whitelist: [], auto_validate_host: false, ws_enabled: false, ws_connections: 10, ws_ttl_seconds: 3600, ws_host_cooldown_seconds: 14400, cookie_host_validation_failure_cooldown_seconds: 120, cookie_refresh_before_seconds: 600, cookie_rotation_enabled: false, cookie_host_binding_seconds: 240, cookie_host_rotation_before_seconds: 10 })
+const form = reactive<cookies.CookieSettings>({ response_cookie_sync_enabled: false, local_harvest_disabled: false, harvest_policy: cookies.defaultHarvestPolicy(), enabled: false, model: 'gpt-6-astra', interval_seconds: 5, account_ids: [], group_ids: [], rotation_account_ids: [], rotation_group_ids: [], cookie_host_scheduling_guard_enabled: false, proxy_urls: [], managed_proxy_ids: [], use_all_managed_proxies: false, cookie_proxy_schedule_mode: 'round_robin', cookie_harvest_concurrency: 1, cookie_proxy_learning_attempts: 100, dynamic_proxy_fill_host_cookie: false, host_whitelist: [], auto_validate_host: false, ws_enabled: false, ws_connections: 10, ws_ttl_seconds: 3600, ws_host_cooldown_seconds: 14400, cookie_host_validation_failure_cooldown_seconds: 120, cookie_refresh_before_seconds: 600, cookie_rotation_enabled: false, cookie_host_binding_seconds: 240, cookie_host_rotation_before_seconds: 10 })
 const policyTotal = computed(() => { const p = form.harvest_policy; return p ? p.explore_percent + p.fill_percent + p.refresh_percent : 100 })
 const harvestRunning = ref<Record<string, number>>({})
 const dashboard = ref<cookies.CookieDashboard | null>(null)
@@ -315,7 +328,7 @@ async function loadDashboard() {
     if (!dashboardDisposed) dashboardError.value = '运行数据更新失败'
   } finally { dashboardPolling = false }
 }
-const harvestTaskLabel = (task?: string) => ({ explore: '探索新 Host', fill: '补齐缺失', refresh: '到期刷新', round_robin: '轮询采集' }[task || ''] || '采集')
+const harvestTaskLabel = (task?: string) => ({ explore: '探索新 Host', fill: '补齐缺失', refresh: '到期刷新', round_robin: '轮询采集', response_sync: '上游响应同步', remote_sync: '远程同步' }[task || ''] || '采集')
 const intelligenceModel = ref('gpt-6-astra')
 const intelligenceMonitorConfig = ref<IntelligenceMonitorConfig | null>(null)
 const cookieAccounts = ref<AccountListItem[]>([])
@@ -423,11 +436,13 @@ const validationStageLabel = (stage?: string) => validationStageLabels[stage || 
 const remaining = (value: string) => Math.max(0, Math.floor((new Date(value).getTime() - now.value) / 1000))
 const formatTime = (value: string) => value ? new Date(value).toLocaleString() : '—'
 const formatClock = (value: string) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '----/--/-- --:--:--'
-const isSchedulerLog = (log: cookies.CookieLog) => log.kind === 'scheduler' || log.kind === 'remote_sync' || (log.account_id <= 0 && !log.status_code)
+const acquisitionEnabled = computed(() => form.enabled || form.remote_sync_enabled || form.response_cookie_sync_enabled)
+const acquisitionResultLabel = (log: cookies.CookieLog) => log.stage?.startsWith('ignored_') ? '已跳过' : log.success ? '已入库' : '未入库'
+const isSchedulerLog = (log: cookies.CookieLog) => log.kind === 'scheduler' || log.kind === 'remote_sync' || (log.kind !== 'response_sync' && log.account_id <= 0 && !log.status_code)
 const liveAccountLabel = (log: cookies.CookieLog) => isSchedulerLog(log) ? '系统调度' : `账号 ${log.account_name || '—'} #${log.account_id}`
 const liveAcquisitionText = (log: cookies.CookieLog) => {
   if (isSchedulerLog(log)) return `${liveAccountLabel(log)} · ${log.message}`
-  const result = log.success ? 'Cookie 已入库' : 'Cookie 未入库'
+  const result = acquisitionResultLabel(log)
   const status = log.status_code ? `HTTP ${log.status_code}` : '未收到响应'
   const host = log.host ? ` · Host ${log.host}` : ''
   return `${harvestTaskLabel(log.task)} · ${liveAccountLabel(log)} · ${result} · ${status} · ${log.message}${host}${log.target_host ? ` · 目标 ${log.target_host}` : ''}`
@@ -436,7 +451,7 @@ const liveRotationText = (log: cookies.CookieLog) => {
   const host = log.host ? ` · Host ${log.host}` : ''
   return `${liveAccountLabel(log)} · ${validationStageLabel(log.stage)} · ${log.message}${host}`
 }
-const liveAcquisitionTone = (log: cookies.CookieLog) => isSchedulerLog(log) ? 'text-amber-300' : log.success ? 'text-emerald-300' : 'text-red-300'
+const liveAcquisitionTone = (log: cookies.CookieLog) => isSchedulerLog(log) || log.stage?.startsWith('ignored_') ? 'text-amber-300' : log.success ? 'text-emerald-300' : 'text-red-300'
 const liveRotationTone = (log: cookies.CookieLog) => {
   const stage = log.stage || ''
   if (stage.includes('failed') || stage === 'validation_rejected') return 'text-red-300'

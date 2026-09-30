@@ -990,6 +990,9 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 }
 
 func normalizeOpenAITTFTMode(mode string) string {
+	if strings.EqualFold(strings.TrimSpace(mode), OpenAITTFTModeCPA) {
+		return OpenAITTFTModeCPA
+	}
 	if strings.EqualFold(strings.TrimSpace(mode), OpenAITTFTModeVisible) {
 		return OpenAITTFTModeVisible
 	}

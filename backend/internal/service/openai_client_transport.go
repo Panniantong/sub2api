@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -79,4 +80,21 @@ func (s *OpenAIGatewayService) SupportsOpenAIHTTPContinuation(account *Account) 
 	}
 	return account.IsOpenAIApiKey() || (openAICodexCookieHostFromAccount(account) != "" &&
 		s.getOpenAIWSProtocolResolver().Resolve(account).Transport == OpenAIUpstreamTransportResponsesWebsocketV2)
+}
+
+// UsesServerManagedCookieWS reports whether continuation comes from the
+// borrowed Cookie socket rather than a downstream previous_response_id.
+func (s *OpenAIGatewayService) UsesServerManagedCookieWS(account *Account) bool {
+	return s != nil && account != nil && openAICodexCookieHostFromAccount(account) != "" &&
+		s.getOpenAIWSProtocolResolver().Resolve(account).Transport == OpenAIUpstreamTransportResponsesWebsocketV2
+}
+
+// CookieWSContinuationEnabled allows ingress to defer native response-ID
+// validation until account selection only when Cookie WS routing is enabled.
+func (s *OpenAIGatewayService) CookieWSContinuationEnabled(ctx context.Context) bool {
+	if s == nil || s.settingService == nil {
+		return false
+	}
+	settings, err := s.settingService.GetOpenAICookieSettings(ctx)
+	return err == nil && settings.WSEnabled && !settings.CookieRotationEnabled
 }

@@ -12,7 +12,7 @@ import (
 )
 
 // runCookieRemoteSync periodically merges a remote library by host. Newer
-// captured_at entries win; the local library is never replaced wholesale.
+// token timestamps win (capture time for legacy entries); never replace wholesale.
 func (s *SettingService) runCookieRemoteSync(ctx context.Context) {
 	var last time.Time
 	ticker := time.NewTicker(time.Second)
@@ -92,7 +92,7 @@ func (s *SettingService) syncRemoteCookieLibrary(ctx context.Context, settings *
 		if old, ok := byHost[e.Host]; !ok {
 			added++
 			byHost[e.Host] = e
-		} else if e.CapturedAt.After(old.CapturedAt) {
+		} else if openAICodexCookieIsNewer(e, old) {
 			updated++
 			byHost[e.Host] = e
 		} else {
@@ -103,6 +103,6 @@ func (s *SettingService) syncRemoteCookieLibrary(ctx context.Context, settings *
 	for _, e := range byHost {
 		merged = append(merged, e)
 	}
-	_, err = s.SetOpenAICodexCookieLibrary(ctx, merged)
+	_, err = s.setOpenAICodexCookieLibraryLocked(ctx, merged)
 	return err
 }

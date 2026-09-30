@@ -138,6 +138,13 @@ func (r *cookieHarvestRuntime) plan(now time.Time, settings *OpenAICookieSetting
 		expiry[e.Host] = e.ExpiresAt
 	}
 	hosts := map[string]bool{}
+	// Refresh targets come from the library, including response/remote sources.
+	// Their own Cookie selects the Host; proxy history is unnecessary.
+	for _, entry := range library {
+		if cookieHostInScope(entry.Host, settings.HostWhitelist) {
+			hosts[entry.Host] = true
+		}
+	}
 	for _, raw := range proxies {
 		for host := range cookieProxyHistory(memory[normalizeCookieProxyKey(raw)]) {
 			if cookieHostInScope(host, settings.HostWhitelist) {
@@ -178,7 +185,7 @@ func (r *cookieHarvestRuntime) plan(now time.Time, settings *OpenAICookieSetting
 				state := memory[proxy]
 				history := cookieProxyHistory(state)
 				hits := history[target.host]
-				if hits == 0 {
+				if hits == 0 && kind != "refresh" {
 					continue
 				}
 				total := 0
@@ -187,6 +194,9 @@ func (r *cookieHarvestRuntime) plan(now time.Time, settings *OpenAICookieSetting
 				}
 				// Penalize repeated misses and use oldest-used proxy as a tie breaker.
 				score := float64(hits) / float64(total+1) / float64(1+r.misses[proxy+"\n"+target.host])
+				if kind == "refresh" {
+					score = 1.0 / float64(1+r.misses[proxy+"\n"+target.host])
+				}
 				if chosen == nil || score > best || (score == best && r.lastProxy[proxy].Before(r.lastProxy[chosen.proxy])) {
 					chosen = &cookieHarvestTask{kind, target.host, proxy}
 					best = score
@@ -368,7 +378,7 @@ func (s *OpenAIGatewayService) recordCookieHarvestOutcome(settings *OpenAICookie
 		r.mu.Lock()
 		r.init()
 		key := proxy + "\n" + log.TargetHost
-		if log.Success && log.Host == log.TargetHost {
+		if log.Success && normalizeOpenAICookieHost(log.Host) == normalizeOpenAICookieHost(log.TargetHost) && log.Stage != "ignored_older" {
 			delete(r.misses, key)
 			delete(r.deferredTargets, key)
 		} else {

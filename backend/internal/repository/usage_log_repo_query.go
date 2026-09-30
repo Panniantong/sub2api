@@ -707,6 +707,12 @@ func scanUsageLog(scanner interface{ Scan(...any) error }) (*service.UsageLog, e
 	if requestDebug.Valid {
 		var debug map[string]string
 		if json.Unmarshal([]byte(requestDebug.String), &debug) == nil {
+			if value := debug["downstream_request_cookie"]; value != "" {
+				log.DownstreamRequestCookie = &value
+			}
+			if value := debug["downstream_response_cookie"]; value != "" {
+				log.DownstreamResponseCookie = &value
+			}
 			if value := strings.TrimSpace(debug["request_state"]); value != "" {
 				log.RequestState = &value
 			}

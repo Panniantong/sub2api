@@ -1515,7 +1515,11 @@ func (s *OpenAIGatewayService) listSchedulableAccounts(ctx context.Context, grou
 
 func (s *OpenAIGatewayService) listCookieBaseSchedulableAccounts(ctx context.Context, groupID *int64, platform string) ([]Account, error) {
 	platform = NormalizeOpenAICompatiblePlatform(platform)
-	if s.schedulerSnapshot != nil {
+	live, err := s.cookieGroupNeedsLiveAccounts(ctx, groupID, platform)
+	if err != nil {
+		return nil, err
+	}
+	if s.schedulerSnapshot != nil && !live {
 		accounts, _, err := s.schedulerSnapshot.ListSchedulableAccounts(ctx, groupID, platform, false)
 		if err != nil {
 			return accounts, err
@@ -1527,7 +1531,6 @@ func (s *OpenAIGatewayService) listCookieBaseSchedulableAccounts(ctx context.Con
 		return accounts, nil
 	}
 	var accounts []Account
-	var err error
 	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
 		accounts, err = s.accountRepo.ListSchedulableByPlatform(ctx, platform)
 	} else if groupID != nil {
@@ -1702,6 +1705,14 @@ func (s *OpenAIGatewayService) getSchedulableAccount(ctx context.Context, accoun
 	}
 	if err != nil || account == nil {
 		return account, err
+	}
+	// Sticky and continuation selection must not reject a recovered binding
+	// using the old cached deadline, or retain a superseded Host.
+	if s.schedulerSnapshot != nil && s.accountRepo != nil && isOpenAICodexTicketAccount(account) {
+		account, err = s.accountRepo.GetByID(ctx, accountID)
+		if err != nil || account == nil {
+			return account, err
+		}
 	}
 	if s.isOpenAIAccountBlockedBySchedulingThreshold(ctx, account) {
 		return nil, nil

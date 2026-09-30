@@ -1314,6 +1314,12 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 	if log.ResponseHeaders != nil {
 		requestDebug["response_headers"] = strings.TrimSpace(*log.ResponseHeaders)
 	}
+	if log.DownstreamRequestCookie != nil {
+		requestDebug["downstream_request_cookie"] = *log.DownstreamRequestCookie
+	}
+	if log.DownstreamResponseCookie != nil {
+		requestDebug["downstream_response_cookie"] = *log.DownstreamResponseCookie
+	}
 	requestDebugJSON, _ := json.Marshal(requestDebug)
 	requestedModel := strings.TrimSpace(log.RequestedModel)
 	if requestedModel == "" {

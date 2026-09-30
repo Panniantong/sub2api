@@ -381,7 +381,7 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 			ServiceTier:                   resolvedOpenAIUpstreamServiceTier(c, serviceTier),
 			Stream:                        true,
 			Duration:                      time.Since(startTime),
-			FirstTokenMs:                  firstTokenMs,
+			FirstTokenMs:                  s.openAIHTTPFirstTokenMs(resp, firstTokenMs),
 		}
 	}
 

@@ -22,7 +22,9 @@ func shouldUseOpenAIExcelFullMode(account *Account, transport OpenAIUpstreamTran
 }
 
 // Forward forwards request to OpenAI API
-func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (forwardedResult *OpenAIForwardResult, forwardErr error) {
+	finishDownstreamCookie := beginOpenAIDownstreamCookie(c, account)
+	defer func() { finishDownstreamCookie(forwardedResult) }()
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)
 	if shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
@@ -44,6 +46,13 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		return nil, bindingErr
 	}
 	account = currentAccount
+	if s.UsesServerManagedCookieWS(account) {
+		var stripErr error
+		body, _, stripErr = dropPreviousResponseIDFromRawPayload(body)
+		if stripErr != nil {
+			return nil, stripErr
+		}
+	}
 	if _, err := s.prepareCodexAccountIdentitySource(ctx, c, account); err != nil {
 		return nil, err
 	}
@@ -57,6 +66,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	// 请求体里的 client_metadata / prompt_cache_key，用改写后的值取键会让不同会话
 	// 落到同一个键，也会与 WS 接入路径按原始报文算出的键对不上。
 	wsExecutionScope, _ := resolveOpenAIWSExecutionScope(c, body, apiKeyID)
+	if s.UsesServerManagedCookieWS(account) {
+		wsExecutionScope = resolveCookieWSSessionScope(c, body)
+	}
 	logCodexCLIOnlyDetection(ctx, c, account, apiKeyID, restrictionResult, body)
 	if restrictionResult.Enabled && !restrictionResult.Matched {
 		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalPolicyDenied)
@@ -711,7 +723,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		if decodeErr != nil {
 			return nil, decodeErr
 		}
-		if input, ok := decoded["input"].([]any); ok && sanitizeOpenAIResponsesOrphanToolOutputs(
+		if input, ok := decoded["input"].([]any); ok && !s.UsesServerManagedCookieWS(account) && sanitizeOpenAIResponsesOrphanToolOutputs(
 			decoded,
 			input,
 			strings.TrimSpace(firstNonEmptyString(decoded["previous_response_id"])) != "",
@@ -1090,6 +1102,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		// Send request
 		upstreamStart := time.Now()
 		resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
+		captureOpenAIDownstreamResponseCookie(c, resp)
 		SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 		if headerGuard != nil && headerGuard.stopHeaderWait() {
 			if resp != nil && resp.Body != nil {

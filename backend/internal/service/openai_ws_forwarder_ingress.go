@@ -14,6 +14,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -139,6 +140,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	}
 	hooks = &dispatchHooks
 	wsDecision := s.getOpenAIWSProtocolResolver().Resolve(account)
+	managedContinuation := s.UsesServerManagedCookieWS(account)
 	forceHTTPBridge := account.Platform == PlatformGrok || wsDecision.Reason == "cookie_ws_disabled" ||
 		(s.pluginManager != nil && s.pluginManager.ShouldRouteOpenAIOAuth(account))
 	modeRouterV2Enabled := s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.ModeRouterV2Enabled
@@ -266,6 +268,13 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", errors.New("invalid json"))
 		}
 
+		if managedContinuation {
+			var stripErr error
+			trimmed, _, stripErr = dropPreviousResponseIDFromRawPayload(trimmed)
+			if stripErr != nil {
+				return openAIWSClientPayload{}, stripErr
+			}
+		}
 		values := gjson.GetManyBytes(trimmed, "type", "model", "prompt_cache_key", "previous_response_id")
 		eventType := strings.TrimSpace(values[0].String())
 		normalized := trimmed
@@ -298,7 +307,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			normalized = next
 		}
 		responsesLite := isOpenAIResponsesLiteWebSocketPayload(normalized)
-		if compatibilityBody, compatibilityChanged, compatibilityErr := normalizeOpenAIResponsesWebSocketCompatibilityBody(normalized, account, responsesLite); compatibilityErr != nil {
+		if compatibilityBody, compatibilityChanged, compatibilityErr := normalizeOpenAIResponsesWebSocketCompatibilityBody(normalized, account, responsesLite, managedContinuation); compatibilityErr != nil {
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", compatibilityErr)
 		} else if compatibilityChanged {
 			normalized = compatibilityBody
@@ -550,7 +559,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		return err
 	}
 
-	useHTTPBridge := forceHTTPBridge || s.shouldBridgeOpenAIWSHTTP(account, firstPayload.payloadBytes, firstPayload.previousResponseID)
+	useHTTPBridge := forceHTTPBridge || (!managedContinuation && s.shouldBridgeOpenAIWSHTTP(account, firstPayload.payloadBytes, firstPayload.previousResponseID))
 	turnState := strings.TrimSpace(c.GetHeader(openAIWSTurnStateHeader))
 	stateStore := s.getOpenAIWSStateStore()
 	groupID := getOpenAIGroupIDFromContext(c)
@@ -559,11 +568,21 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	sessionHash := ""
 	preferredConnID := ""
 	storeDisabled := false
+	// Without an explicit identity, a single downstream WS is still a session;
+	// its random identity must never survive into an unrelated connection.
+	anonymousCookieSession := uuid.NewString()
 	refreshIngressRouteState := func(payload openAIWSClientPayload) {
 		// 会话级状态按执行作用域隔离：codex 多智能体共用 session-id，只有线程标识能把
 		// 父线程与子智能体区分开；没有声明身份时沿用原会话哈希。账号粘性仍由 handler 决定。
 		sessionHash = s.GenerateSessionHash(c, payload.rawForHash)
 		if scope, _ := resolveOpenAIWSExecutionScope(c, payload.rawForHash, apiKeyID); scope != "" {
+			sessionHash = scope
+		}
+		if managedContinuation {
+			scope := resolveCookieWSSessionScope(c, payload.rawForHash)
+			if scope == "" {
+				scope = anonymousCookieSession
+			}
 			sessionHash = scope
 		}
 		preferredConnID = ""
@@ -893,6 +912,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		req := cloneOpenAIWSAcquireRequest(baseAcquireReq)
 		req.PreferredConnID = strings.TrimSpace(preferred)
 		req.ForcePreferredConn = forcePreferredConn
+		if managedContinuation {
+			req.CookieSessionKey = sessionHash
+		}
 		// dedicated 模式下每次获取均新建连接，避免跨会话复用残留上下文；
 		// 上游读写失败后的重试同样新建，避免再拿到同批陈旧的空闲连接。
 		req.ForceNewConn = dedicatedMode || forceNewConn
@@ -992,6 +1014,14 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		turnStart := time.Now()
 		wroteDownstream := false
+		if managedContinuation {
+			var err error
+			payload, err = lease.conn.cookieContinuationPayload(payload, sessionHash)
+			if err != nil {
+				return nil, err
+			}
+			payloadBytes = len(payload)
+		}
 		if err := lease.WriteJSONWithContextTimeout(ctx, json.RawMessage(payload), s.openAIWSWriteTimeout()); err != nil {
 			return nil, wrapOpenAIWSIngressTurnError(
 				"write_upstream",
@@ -1179,6 +1209,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			isTerminalEvent := isOpenAIWSTerminalEvent(eventType)
 			if isTerminalEvent {
 				terminalEventCount++
+				if managedContinuation {
+					lease.conn.rememberCookieContinuation(sessionHash, openAIWSPayloadStringFromRaw(payload, "model"), responseID)
+				}
 			}
 			if firstTokenMs == nil && isTokenEvent {
 				ms := int(time.Since(turnStart).Milliseconds())
@@ -1307,6 +1340,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	currentPayloadBytes := firstPayload.payloadBytes
 	currentRequestedReasoningEffort := firstPayload.requestedReasoningEffort
 	isStrictAffinityTurn := func(payload []byte) bool {
+		if managedContinuation {
+			return false
+		}
 		if !storeDisabled {
 			return false
 		}
@@ -1526,7 +1562,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		hasFunctionCallOutput := toolSignals.HasFunctionCallOutput
 		// store=false + function_call_output 场景必须有续链锚点。
 		// 若客户端未传 previous_response_id，优先回填上一轮响应 ID，避免上游报 call_id 无法关联。
-		if shouldInferIngressFunctionCallOutputPreviousResponseID(
+		if !managedContinuation && shouldInferIngressFunctionCallOutputPreviousResponseID(
 			storeDisabled,
 			turn,
 			toolSignals,
@@ -1579,7 +1615,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		replayHasFunctionCallOutput := currentTurnReplayInputExists &&
 			openAIWSRawItemsHasFunctionCallOutput(currentTurnReplayInput)
 		hasFunctionCallOutput = hasFunctionCallOutput || replayHasFunctionCallOutput
-		if storeDisabled && turn > 1 && currentPreviousResponseID != "" {
+		if !managedContinuation && storeDisabled && turn > 1 && currentPreviousResponseID != "" {
 			shouldKeepPreviousResponseID := false
 			strictReason := ""
 			var strictErr error

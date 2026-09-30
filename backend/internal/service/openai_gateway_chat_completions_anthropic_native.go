@@ -119,6 +119,7 @@ func (s *OpenAIGatewayService) forwardChatCompletionsViaNativeAnthropic(
 	}
 
 	resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
+	captureOpenAIDownstreamResponseCookie(c, resp)
 	if err != nil {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, true)
 	}
@@ -348,7 +349,7 @@ func (s *OpenAIGatewayService) handleCCStreamingFromNativeAnthropic(
 			ReasoningEffort:  reasoningEffort,
 			Stream:           true,
 			Duration:         time.Since(startTime),
-			FirstTokenMs:     firstTokenMs,
+			FirstTokenMs:     s.openAIHTTPFirstTokenMs(resp, firstTokenMs),
 			ClientDisconnect: clientDisconnected,
 		}
 	}

@@ -154,3 +154,21 @@ func resolveOpenAIWSExecutionScope(c *gin.Context, body []byte, apiKeyID int64) 
 	}
 	return "", ""
 }
+
+// Cookie continuation requires an explicit conversation identity. In particular,
+// a shared prompt_cache_key alone must not join independent HTTP requests.
+func resolveCookieWSSessionScope(c *gin.Context, body []byte) string {
+	if resolveOpenAIWSClientThreadID(c, body) == "" && explicitOpenAIHeaderSessionID(c) == "" {
+		return ""
+	}
+	apiKeyID := getAPIKeyIDFromContext(c)
+	if apiKeyID == 0 && c != nil {
+		if raw, ok := c.Get(openAIHTTPResponseOwnerContextKey); ok {
+			if owner, ok := raw.(openAIHTTPResponseOwner); ok {
+				apiKeyID = owner.apiKeyID
+			}
+		}
+	}
+	scope, _ := resolveOpenAIWSExecutionScope(c, body, apiKeyID)
+	return fmt.Sprintf("cookie:%d:%s", getOpenAIGroupIDFromContext(c), scope)
+}

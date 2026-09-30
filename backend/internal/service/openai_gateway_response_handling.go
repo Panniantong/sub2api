@@ -119,6 +119,10 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		maxLineSize = s.cfg.Gateway.MaxLineSize
 	}
 	var firstTokenMs *int
+	// Flush scheduling must not depend on the configurable TTFT accounting mode.
+	// A structural event can set firstTokenMs before any usable content arrives.
+	firstVisibleOutputFlushed := false
+	visibleOutputPending := false
 	ttftMode := s.openAITTFTMode(ctx)
 	firstOutputProgressObserved := false
 	bufferedWriter := bufio.NewWriterSize(w, 4*1024)
@@ -154,6 +158,10 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			}
 		}
 		flusher.Flush()
+		if visibleOutputPending {
+			firstVisibleOutputFlushed = true
+			visibleOutputPending = false
+		}
 		return nil
 	}
 
@@ -348,7 +356,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	resultWithUsage := func() *openaiStreamingResult {
 		return &openaiStreamingResult{
 			usage:            usage,
-			firstTokenMs:     firstTokenMs,
+			firstTokenMs:     s.openAIHTTPFirstTokenMs(resp, firstTokenMs),
 			responseID:       responseID,
 			imageCount:       imageCounter.Count(),
 			imageOutputSizes: imageCounter.Sizes(),
@@ -695,9 +703,10 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			// 写入客户端（客户端断开后继续 drain 上游）
 			if !clientDisconnected && !failureDelivered && !suppressCurrentEvent {
 				shouldFlush := queueDrained && (clientOutputStarted || startsClientOutput)
-				if firstTokenMs == nil && startsVisibleOutput {
+				if !firstVisibleOutputFlushed && startsVisibleOutput {
 					// 保证首个 token 事件尽快出站，避免影响 TTFT。
 					shouldFlush = true
+					visibleOutputPending = true
 				}
 				eventShouldFlush = eventShouldFlush || shouldFlush
 				if _, err := writePendingString(line); err != nil {

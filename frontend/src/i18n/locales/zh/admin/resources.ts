@@ -555,6 +555,8 @@ export default {
       responseState: '响应 state',
       requestCookie: '请求 Cookie',
       responseCookie: '响应 Cookie',
+      downstreamRequestCookie: '下游请求 Cookie',
+      downstreamResponseCookie: '响应回下游 Cookie',
       responseHeaders: '响应头',
       sessionId: 'session_id',
       requestHeaders: '请求头',

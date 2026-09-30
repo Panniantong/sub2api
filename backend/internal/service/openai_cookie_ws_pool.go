@@ -468,11 +468,25 @@ func (p *openAIWSConnPool) acquireCookieWS(ctx context.Context, req openAIWSAcqu
 		var lease *openAIWSConnLease
 		var dead []*openAIWSConn
 		preferred := strings.TrimSpace(req.PreferredConnID)
+		ownedConnID := ""
+		if req.CookieSessionKey != "" {
+			for id, conn := range ap.conns {
+				if conn != nil && !conn.isClosed() && !conn.isUnusable() && !conn.readerLoopClosedByPeer() && conn.ownsCookieSession(req.CookieSessionKey) {
+					ownedConnID = id
+					preferred = id
+					break
+				}
+			}
+		}
 		choose := func(conn *openAIWSConn) {
 			if conn == nil || conn.isClosed() || conn.isUnusable() || conn.readerLoopClosedByPeer() {
 				return
 			}
+			if ownedConnID != "" && conn.id != ownedConnID {
+				return
+			}
 			if lease == nil && (!req.ForcePreferredConn || conn.id == preferred) && conn.tryAcquire() {
+				conn.assignCookieSession(req.CookieSessionKey)
 				lease = &openAIWSConnLease{pool: p, accountID: req.Account.ID, conn: conn, reused: true, queueWait: time.Since(started)}
 				lease.idleBefore, lease.ageBefore = conn.idleDuration(time.Now()), conn.age(time.Now())
 			}
@@ -494,6 +508,10 @@ func (p *openAIWSConnPool) acquireCookieWS(ctx context.Context, req openAIWSAcqu
 		}
 		pending := batch.pending
 		live := len(ap.conns)
+		ownedConnLost := ownedConnID != "" && ap.conns[ownedConnID] == nil
+		if len(dead) > 0 {
+			ap.signalChangedLocked()
+		}
 		changed := ap.changeChannelLocked()
 		ap.mu.Unlock()
 		closeOpenAIWSConns(dead)
@@ -504,6 +522,11 @@ func (p *openAIWSConnPool) acquireCookieWS(ctx context.Context, req openAIWSAcqu
 			}
 			p.metrics.acquireReuseTotal.Add(1)
 			return lease, nil
+		}
+		if ownedConnLost {
+			// tryAcquire can discover buffered data and invalidate the owned
+			// socket. Re-select now instead of waiting for an unrelated release.
+			continue
 		}
 		if req.ForcePreferredConn && preferred != "" {
 			ap.mu.Lock()

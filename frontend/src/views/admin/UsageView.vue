@@ -590,7 +590,7 @@ const exportToExcel = async () => {
       t('usage.rate'), t('usage.accountMultiplier'), t('usage.original'), t('usage.userBilled'), t('usage.accountBilled'),
       t('usage.firstToken'), t('usage.duration'),
       t('admin.usage.requestId'), t('admin.usage.upstreamRequestId'), t('usage.userAgent'), t('admin.usage.ipAddress')
-      , t('admin.usage.requestState'), t('admin.usage.responseState'), t('admin.usage.requestCookie'), t('admin.usage.sessionId')
+      , t('admin.usage.requestState'), t('admin.usage.responseState'), t('admin.usage.requestCookie'), t('admin.usage.downstreamRequestCookie'), t('admin.usage.downstreamResponseCookie'), t('admin.usage.sessionId')
     ]
     const ws = XLSX.utils.aoa_to_sheet([headers])
     while (true) {
@@ -610,7 +610,7 @@ const exportToExcel = async () => {
         log.total_cost?.toFixed(6) || '0.000000', log.actual_cost?.toFixed(6) || '0.000000',
         ((log.account_stats_cost ?? log.total_cost) * (log.account_rate_multiplier ?? 1)).toFixed(6), log.first_token_ms ?? '', log.duration_ms,
         log.request_id || '', log.upstream_request_id || '', log.user_agent || '', log.ip_address || '',
-        log.request_state || '', log.response_state || '', log.request_cookie || '', log.session_id || ''
+        log.request_state || '', log.response_state || '', log.request_cookie || '', log.downstream_request_cookie || '', log.downstream_response_cookie || '', log.session_id || ''
       ])
       if (rows.length) {
         XLSX.utils.sheet_add_aoa(ws, rows, { origin: -1 })
@@ -661,6 +661,8 @@ const allColumns = computed(() => [
   { key: 'response_state', label: t('admin.usage.responseState'), sortable: false },
   { key: 'request_cookie', label: t('admin.usage.requestCookie'), sortable: false },
   { key: 'response_cookie', label: t('admin.usage.responseCookie'), sortable: false },
+  { key: 'downstream_request_cookie', label: t('admin.usage.downstreamRequestCookie'), sortable: false },
+  { key: 'downstream_response_cookie', label: t('admin.usage.downstreamResponseCookie'), sortable: false },
   { key: 'session_id', label: t('admin.usage.sessionId'), sortable: false },
   { key: 'request_headers', label: t('admin.usage.requestHeaders'), sortable: false },
   { key: 'response_headers', label: t('admin.usage.responseHeaders'), sortable: false }

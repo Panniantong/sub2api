@@ -32,7 +32,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	body []byte,
 	promptCacheKey string,
 	defaultMappedModel string,
-) (*OpenAIForwardResult, error) {
+) (forwardedResult *OpenAIForwardResult, forwardErr error) {
+	finishDownstreamCookie := beginOpenAIDownstreamCookie(c, account)
+	defer func() { finishDownstreamCookie(forwardedResult) }()
 	rememberOpenCodeInboundBody(c, body)
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)
@@ -413,6 +415,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 			}
 		}
 		resp, err = s.doOpenAIUpstream(upstreamReq, proxyURL, account)
+		captureOpenAIDownstreamResponseCookie(c, resp)
 		if err != nil {
 			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 		}
@@ -989,7 +992,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			UpstreamResponseServiceTier:   observedUpstreamResponseServiceTier(c),
 			Stream:                        true,
 			Duration:                      time.Since(startTime),
-			FirstTokenMs:                  firstTokenMs,
+			FirstTokenMs:                  s.openAIHTTPFirstTokenMs(resp, firstTokenMs),
 			ClientDisconnect:              clientDisconnected,
 		}
 		if searchCount > 0 {

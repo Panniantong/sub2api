@@ -558,6 +558,8 @@ export default {
       responseState: 'Response state',
       requestCookie: 'Request Cookie',
       responseCookie: 'Response Cookie',
+      downstreamRequestCookie: 'Downstream Request Cookie',
+      downstreamResponseCookie: 'Downstream Response Cookie',
       responseHeaders: 'Response headers',
       sessionId: 'session_id',
       requestHeaders: 'Request headers',

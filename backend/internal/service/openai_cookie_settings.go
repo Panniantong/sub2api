@@ -16,7 +16,8 @@ const cookieLogsKey = "openai_cookie_acquisition_logs"
 const intelligenceMonitorSettingKey = "openai_intelligence_monitor"
 
 type OpenAICookieSettings struct {
-	LocalHarvestDisabled bool `json:"local_harvest_disabled"`
+	ResponseCookieSyncEnabled bool   `json:"response_cookie_sync_enabled"`
+	LocalHarvestDisabled      bool   `json:"local_harvest_disabled"`
 	RemoteSyncEnabled         bool   `json:"remote_sync_enabled"`
 	RemoteSyncURL             string `json:"remote_sync_url"`
 	RemoteSyncAdminKey        string `json:"remote_sync_admin_key"`
