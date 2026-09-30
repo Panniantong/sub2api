@@ -521,6 +521,11 @@ func (s *OpenAIGatewayService) LogOpenAICookieHostBinding(ctx context.Context, a
 // Independent schedule and settings, sharing only lifecycle cancellation with
 // the ticket worker. A slow ticket probe cannot block Cookie acquisition.
 func (s *OpenAIGatewayService) runOpenAICookieHarvester(ctx context.Context) {
+	// Cookie workers require persisted settings. Lightweight gateways without
+	// that optional service must still handle ordinary requests normally.
+	if s == nil || s.settingService == nil || s.accountRepo == nil {
+		return
+	}
 	defer s.cookieHarvestRuntime.wg.Wait()
 	go s.runCookieHostMonitor(ctx)
 	go s.settingService.runCookieRemoteSync(ctx)

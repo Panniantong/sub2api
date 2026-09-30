@@ -35,6 +35,15 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 ) (forwardedResult *OpenAIForwardResult, forwardErr error) {
 	finishDownstreamCookie := beginOpenAIDownstreamCookie(c, account)
 	defer func() { finishDownstreamCookie(forwardedResult) }()
+	// 工具 Schema 清洗必须先于所有分流：下游每条路径（原生 Anthropic 直通、
+	// Chat Completions 转换、Responses 转换）都会把 tools 原样带给上游，而
+	// xAI / Moonshot 等严格校验方会因 input_schema 里的 required:null 或
+	// type:null 直接 400。
+	if sanitized, changed, err := sanitizeOpenAIResponsesToolSchemasForPlatform(body, account.Platform); err != nil {
+		return nil, err
+	} else if changed {
+		body = sanitized
+	}
 	rememberOpenCodeInboundBody(c, body)
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)
@@ -96,6 +105,10 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	// 2. Model mapping
 	billingModel := resolveOpenAIForwardModel(account, normalizedModel, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
+	if err := validateGPT61SolCompatRequest(body, upstreamModel); err != nil {
+		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return nil, err
+	}
 	promptCacheKey = strings.TrimSpace(promptCacheKey)
 	apiKeyID := getAPIKeyIDFromContext(c)
 	anthropicDigestChain := ""
@@ -147,6 +160,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	}
 
 	// 3. Convert Anthropic → Responses after compatibility-only replay guard.
+	anthropicReq.Model = upstreamModel
 	responsesReq, err := apicompat.AnthropicToResponses(&anthropicReq)
 	if err != nil {
 		return nil, fmt.Errorf("convert anthropic to responses: %w", err)

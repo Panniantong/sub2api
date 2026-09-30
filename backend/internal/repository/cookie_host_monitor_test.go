@@ -13,7 +13,7 @@ import (
 )
 
 func TestCookieHostMonitorRejectsAllHostWriteEntrypoints(t *testing.T) {
-	for _, operation := range []string{"extra", "bulk", "full"} {
+	for _, operation := range []string{"extra", "bulk", "full", "full_omitted_host", "billing_omitted_host"} {
 		t.Run(operation, func(t *testing.T) {
 			db, mock, err := sqlmock.New()
 			require.NoError(t, err)
@@ -29,6 +29,10 @@ func TestCookieHostMonitorRejectsAllHostWriteEntrypoints(t *testing.T) {
 				_, err = repo.BulkUpdate(context.Background(), []int64{21}, service.AccountBulkUpdate{Extra: extra})
 			case "full":
 				err = repo.Update(context.Background(), &service.Account{ID: 21, Extra: extra})
+			case "full_omitted_host":
+				err = repo.Update(context.Background(), &service.Account{ID: 21, Extra: map[string]any{}})
+			case "billing_omitted_host":
+				err = repo.UpdateWithAccountBillingSettings(context.Background(), &service.Account{ID: 21, Extra: map[string]any{}}, nil, nil, nil)
 			}
 			require.ErrorContains(t, err, "先关闭监控")
 			require.NoError(t, mock.ExpectationsWereMet())

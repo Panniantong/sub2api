@@ -251,6 +251,10 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 	if state := service.OllamaCloudUsageStateFromAccount(a); state.Eligible {
 		ollamaCloudUsage = state
 	}
+	var openCodeGoUsage *service.OpenCodeGoUsageState
+	if state := service.OpenCodeGoUsageStateFromAccount(a); state.Eligible {
+		openCodeGoUsage = state
+	}
 	out := &Account{
 		ID:                      a.ID,
 		Name:                    a.Name,
@@ -261,6 +265,7 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		CredentialsStatus:       credsStatus,
 		Extra:                   extra,
 		OllamaCloudUsage:        ollamaCloudUsage,
+		OpenCodeGoUsage:         openCodeGoUsage,
 		ProxyID:                 a.ProxyID,
 		ProxyFallbackOriginID:   a.ProxyFallbackOriginID,
 		ProxyFallbackOriginName: a.ProxyFallbackOriginName,
@@ -427,7 +432,9 @@ func redactAccountManagedExtra(extra map[string]any) map[string]any {
 		switch key {
 		case service.OllamaCloudUsageSessionExtraKey,
 			service.OllamaCloudUsageAutoRefreshExtraKey,
-			service.OllamaCloudUsageSnapshotExtraKey:
+			service.OllamaCloudUsageSnapshotExtraKey,
+			service.OpenCodeGoUsageAutoRefreshExtraKey,
+			service.OpenCodeGoUsageSnapshotExtraKey:
 			continue
 		default:
 			if service.IsOpenAICodexTicketPrivateExtraKey(key) {
@@ -474,7 +481,8 @@ func AccountListItemFromAccount(a *Account) *AccountListItem {
 		OllamaCloudUsage: a.OllamaCloudUsage,
 		CodexTurnTickets: a.CodexTurnTickets, CodexTurnTicketHistory: a.CodexTurnTicketHistory,
 		CookieBinding: a.CookieBinding, WSConnections: a.WSConnections,
-		ProxyID: a.ProxyID, ProxyFallbackOriginID: a.ProxyFallbackOriginID, ProxyFallbackOriginName: a.ProxyFallbackOriginName,
+		OpenCodeGoUsage: a.OpenCodeGoUsage,
+		ProxyID:         a.ProxyID, ProxyFallbackOriginID: a.ProxyFallbackOriginID, ProxyFallbackOriginName: a.ProxyFallbackOriginName,
 		Concurrency: a.Concurrency, LoadFactor: a.LoadFactor, Priority: a.Priority, RateMultiplier: a.RateMultiplier,
 		Status: a.Status, ErrorMessage: accountErrorMessageForDisplay(a.ErrorMessage), LastUsedAt: a.LastUsedAt, ExpiresAt: a.ExpiresAt,
 		AutoPauseOnExpired: a.AutoPauseOnExpired, CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt,
