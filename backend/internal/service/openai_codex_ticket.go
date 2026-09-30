@@ -1785,9 +1785,9 @@ func (s *OpenAIGatewayService) openAICodexCookieForAccount(account *Account) str
 	if host == "" || s == nil || s.settingService == nil {
 		return openAICodexCookieFromAccount(account)
 	}
-	entry, err := s.settingService.LookupOpenAICodexCookie(context.Background(), host)
-	if err == nil && entry != nil {
-		return entry.Cookie
+	cookie, err := s.settingService.lookupOpenAIRequestCookie(context.Background(), host)
+	if err == nil {
+		return cookie
 	}
 	// A request may hold an old Host while rotation has already saved a new
 	// binding. Cookie lookup must never clear the authoritative database binding.

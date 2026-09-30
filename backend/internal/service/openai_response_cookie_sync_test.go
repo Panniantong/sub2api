@@ -49,6 +49,9 @@ func TestResponseCookieFreshnessAndHostDedup(t *testing.T) {
 				want = incoming.Cookie
 			}
 			require.Equal(t, want, entries[0].Cookie)
+			requestCookie, err := s.lookupOpenAIRequestCookie(context.Background(), "host.example")
+			require.NoError(t, err)
+			require.Equal(t, want, requestCookie, "inference must immediately use the newest persisted response cookie")
 		})
 	}
 }

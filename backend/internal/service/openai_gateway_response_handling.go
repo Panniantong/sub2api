@@ -123,6 +123,8 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	// A structural event can set firstTokenMs before any usable content arrives.
 	firstVisibleOutputFlushed := false
 	visibleOutputPending := false
+	firstTextOutputFlushed := false
+	textOutputPending := false
 	ttftMode := s.openAITTFTMode(ctx)
 	firstOutputProgressObserved := false
 	bufferedWriter := bufio.NewWriterSize(w, 4*1024)
@@ -161,6 +163,10 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		if visibleOutputPending {
 			firstVisibleOutputFlushed = true
 			visibleOutputPending = false
+		}
+		if textOutputPending {
+			firstTextOutputFlushed = true
+			textOutputPending = false
 		}
 		return nil
 	}
@@ -293,7 +299,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	completeGuardedEvent := func(queueDrained bool) {
 		completedProgressEvent := eventStartsClientOutput
 		completedTTFTEvent := eventStartsTTFTOutput
-		shouldFlush := eventShouldFlush || (queueDrained && clientOutputStarted)
+		shouldFlush := eventShouldFlush || (completedProgressEvent && !clientOutputStarted) || (queueDrained && clientOutputStarted)
 		eventInProgress = false
 		if !clientDisconnected {
 			if completedProgressEvent {
@@ -712,6 +718,12 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 					// 保证首个 token 事件尽快出站，避免影响 TTFT。
 					shouldFlush = true
 					visibleOutputPending = true
+				}
+				if !firstTextOutputFlushed && openAIStreamDataHasText(dataBytes, eventType) {
+					// Reasoning/tool output may already have been flushed. Clients
+					// that display only text must not wait for the queued burst.
+					shouldFlush = true
+					textOutputPending = true
 				}
 				eventShouldFlush = eventShouldFlush || shouldFlush
 				if _, err := writePendingString(line); err != nil {

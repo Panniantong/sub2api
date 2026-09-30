@@ -86,9 +86,14 @@ func (s *SettingService) setOpenAICodexCookieLibraryLocked(ctx context.Context, 
 	if err != nil {
 		return nil, err
 	}
+	// Serialize snapshot refresh with persistence so a slow reader cannot
+	// publish the old library after a successful acquisition or deletion.
+	s.requestCookieMu.Lock()
+	defer s.requestCookieMu.Unlock()
 	if err := s.settingRepo.Set(ctx, SettingKeyOpenAICodexCookieLibrary, string(b)); err != nil {
 		return nil, err
 	}
+	s.storeOpenAIRequestCookies(entries)
 	s.cookieCandidatesMu.Lock()
 	s.cookieCandidatesCache = nil
 	s.cookieCandidatesMu.Unlock()

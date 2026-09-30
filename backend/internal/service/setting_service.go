@@ -132,6 +132,8 @@ type SettingService struct {
 	openAICodexVersionSF        singleflight.Group
 	openAICodexTicketCache      atomic.Value // *cachedOpenAICodexTicketSettings
 	openAICookieCache           atomic.Value // *cachedOpenAICookieSettings
+	requestCookieCache         atomic.Pointer[openAIRequestCookieSnapshot]
+	requestCookieMu            sync.Mutex
 	cookieCandidatesMu          sync.Mutex
 	cookieCandidatesCache       *cookieCandidateSnapshot
 	claudeCodeVersionCache      atomic.Value // *cachedClaudeCodeClientVersion

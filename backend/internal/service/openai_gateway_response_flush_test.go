@@ -194,7 +194,15 @@ func TestOpenAIResponseFlush_DataQueuedButBlankDrainsFlushesOnce(t *testing.T) {
 }
 
 func TestOpenAIResponseFlush_FirstVisibleOutputFlushesAfterSemanticProgress(t *testing.T) {
-	progress := "data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"web_search_call\",\"status\":\"in_progress\"}}\n\n"
+	testOpenAIFirstTextFlush(t, "data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"web_search_call\",\"status\":\"in_progress\"}}\n\n")
+}
+
+func TestOpenAIResponseFlush_FirstTextFlushesAfterReasoning(t *testing.T) {
+	testOpenAIFirstTextFlush(t, "data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"thinking\"}\n\n")
+}
+
+func testOpenAIFirstTextFlush(t *testing.T, progress string) {
+	t.Helper()
 	visible := "data: {\"type\":\"response.output_text.delta\",\"delta\":\"first\"}\n\n"
 	tail := "data: {\"type\":\"response.output_text.delta\",\"delta\":\"later\"}\n\ndata: [DONE]\n\n"
 	allowBurst := make(chan struct{})
