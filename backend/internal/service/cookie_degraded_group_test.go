@@ -38,7 +38,9 @@ func TestCookieDegradedUnboundRequiresExhaustedCandidates(t *testing.T) {
 	require.Equal(t, 1, status.AvailableHostCount)
 	_, err = svc.SetOpenAICodexCookieLibrary(ctx, nil)
 	require.NoError(t, err)
-	require.Equal(t, int64(3), cookieDegradedTarget(&a, cfg, now), "empty library is exhausted")
+	require.Zero(t, cookieDegradedTarget(&a, cfg, now), "empty library cannot prove that Hosts were exhausted")
+	_, err = svc.SetOpenAICodexCookieLibrary(ctx, []OpenAICodexCookieLibraryEntry{{Host: "candidate.example", Cookie: "cookie", ExpiresAt: now.Add(time.Hour)}})
+	require.NoError(t, err)
 	cfg.GroupIDs = []int64{3}
 	require.True(t, isOpenAICookieCollector(&a, cfg), "exhausted unbound accounts can collect for the degraded group")
 	a.GroupIDs = []int64{4}
@@ -81,7 +83,11 @@ func TestCookieDegradedRotationCandidateMatchesAccountState(t *testing.T) {
 
 func TestCookieDegradedGroupCollectorsFollowTransientMembership(t *testing.T) {
 	a := cookieGuardTestAccount("old.example", time.Now().Add(-time.Minute))
-	settings := &OpenAICookieSettings{DegradedGroupID: 3, RotationGroupIDs: []int64{2}, GroupIDs: []int64{3}, CookieRotationEnabled: true}
+	settings := &OpenAICookieSettings{DegradedGroupID: 3, RotationGroupIDs: []int64{2}, GroupIDs: []int64{3}, CookieRotationEnabled: true,
+		rotationCandidates: func() ([]OpenAICodexCookieLibraryEntry, error) {
+			return []OpenAICodexCookieLibraryEntry{{Host: "candidate.example", Cookie: "cookie", ExpiresAt: time.Now().Add(time.Hour)}}, nil
+		}}
+	exhaustCookieTestCandidates(&a)
 	require.True(t, isOpenAICookieCollector(&a, settings))
 	require.True(t, isExplicitOpenAICookieCollector(&a, settings))
 	require.True(t, openAICookieProbeSettings(&a, settings).CookieRotationEnabled, "degraded collectors must retain their original rotation scope")
@@ -90,6 +96,7 @@ func TestCookieDegradedGroupCollectorsFollowTransientMembership(t *testing.T) {
 	require.False(t, isOpenAICookieCollector(&a, settings), "recovered accounts leave degraded-only collection scope")
 	require.False(t, isExplicitOpenAICookieCollector(&a, settings))
 	delete(a.Extra, openAICodexCookieHostExtraKey)
+	delete(a.Extra, openAICodexCookieCooldownsExtraKey)
 	require.False(t, isOpenAICookieCollector(&a, settings), "unbound accounts do not become degraded collectors")
 	settings.AccountIDs = []int64{a.ID}
 	require.True(t, isOpenAICookieCollector(&a, settings), "directly selected collectors keep their existing behavior")
@@ -131,7 +138,7 @@ func TestCookieDegradedGroupSelectionAndAutomaticRecovery(t *testing.T) {
 					require.Nil(t, selection)
 				}
 				selection, err := selectGroup(&target)
-				if state == "unbound" {
+				if state != "exhausted" {
 					require.Error(t, err)
 					require.Nil(t, selection, "unbound accounts must never enter the degraded group")
 				} else {
@@ -146,10 +153,10 @@ func TestCookieDegradedGroupSelectionAndAutomaticRecovery(t *testing.T) {
 				require.True(t, repo.accounts[0].Schedulable)
 				require.False(t, repo.accounts[0].openaiCookieDegraded)
 				status := svc.settingService.OpenAICookieBinding(ctx, &repo.accounts[0])
-				if state == "unbound" {
+				if state != "exhausted" {
 					require.Zero(t, status.DegradedGroupID)
 					require.True(t, status.SchedulingBlocked)
-					require.Equal(t, "cookie_host_unbound", status.SchedulingBlockReason)
+					require.Contains(t, []string{"cookie_host_unbound", "cookie_host_binding_expired", "cookie_host_binding_invalid"}, status.SchedulingBlockReason)
 				} else {
 					require.Equal(t, int64(3), status.DegradedGroupID)
 					require.False(t, status.SchedulingBlocked)
@@ -177,6 +184,7 @@ func TestCookieDegradedGroupHonorsIsolationAndFinalAdmission(t *testing.T) {
 	target := int64(3)
 	targetCtx := withCookieSchedulingGroup(ctx, &target)
 	a := cookieGuardTestAccount("expired.example", time.Now().Add(-time.Minute))
+	exhaustCookieTestCandidates(&a)
 	svc := &OpenAIGatewayService{settingService: cookieDegradedTestSettings()}
 	clone := svc.cookieDegradedRequestAccount(targetCtx, &a)
 	require.NotSame(t, &a, clone)
@@ -253,6 +261,7 @@ func TestCookieDegradedFreshDBAndWSRecovery(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, selection.Account.openaiCookieDegraded)
 	repo.accounts[0].Extra["codex_cookie_host_binding_expires_at"] = time.Now().Add(-time.Minute).Format(time.RFC3339Nano)
+	exhaustCookieTestCandidates(&repo.accounts[0])
 	id, account, _, _ := svc.resolveAccountByPreviousResponseIDForCapability(ctx, &target, "resp_degraded", "", nil, "", false)
 	require.Equal(t, stale.ID, id)
 	require.True(t, account.openaiCookieDegraded)
@@ -260,4 +269,8 @@ func TestCookieDegradedFreshDBAndWSRecovery(t *testing.T) {
 	selection, err = svc.newSelectionResult(withCookieSchedulingGroup(ctx, &target), &stale, false, nil, nil)
 	require.ErrorIs(t, err, ErrNoAvailableAccounts)
 	require.Nil(t, selection)
+}
+
+func exhaustCookieTestCandidates(a *Account) {
+	a.Extra[openAICodexCookieCooldownsExtraKey] = map[string]string{"candidate.example": time.Now().Add(time.Hour).Format(time.RFC3339Nano)}
 }

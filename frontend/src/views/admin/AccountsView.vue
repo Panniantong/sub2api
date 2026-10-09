@@ -329,12 +329,14 @@
           </template>
           <template #cell-cookie_host="{ row }">
             <div v-if="row.cookie_binding" class="min-w-[10rem] max-w-[16rem] text-xs">
-              <span v-if="row.cookie_binding?.degraded_group_id" class="mb-1 block text-amber-600">降级到 {{ row.cookie_binding.degraded_group_name || '#' + row.cookie_binding.degraded_group_id }} 分组 · {{ row.cookie_binding.scheduling_block_reason === 'cookie_host_unbound' ? '未绑定且无可轮换 Host' : row.cookie_binding.scheduling_block_reason === 'cookie_host_binding_expired' ? 'Host 绑定已超时' : 'Host 绑定有效期无效' }}</span>
+              <span v-if="row.cookie_binding?.degraded_group_id" class="mb-1 block text-amber-600">降级到 {{ row.cookie_binding.degraded_group_name || '#' + row.cookie_binding.degraded_group_id }} 分组 · 该邮箱可用 Host 已全部耗尽</span>
+              <span v-if="row.cookie_binding.degraded_group_id" class="mb-1 block text-amber-600" :title="row.cookie_binding.degraded_since ? '本次降级开始：' + formatDateTime(row.cookie_binding.degraded_since) : ''">{{ cookieDegradedDuration(row) }}</span>
               <div v-if="row.cookie_binding?.host" class="truncate font-mono text-gray-700 dark:text-gray-300" :title="row.cookie_binding.host">{{ row.cookie_binding.host }}</div>
               <span v-if="row.cookie_binding?.host" :class="cookieHostRemaining(row) > 0 ? 'text-emerald-600' : 'text-red-600'">绑定剩余 {{ cookieHostRemaining(row) }}s</span>
               <span v-else class="text-gray-500">未绑定 Cookie Host</span>
+              <span v-if="row.cookie_binding.pool_state === 'draining'" class="block text-amber-600">本次绑定到期退出 · 不再轮换</span>
               <button
-                v-if="row.cookie_binding.host && (row.cookie_binding.rotation_at || row.cookie_binding.rotation_status)"
+                v-else-if="row.cookie_binding.host && (row.cookie_binding.rotation_at || row.cookie_binding.rotation_status)"
                 type="button"
                 class="block max-w-full truncate text-left text-gray-500 hover:text-primary-600 dark:hover:text-primary-400"
                 :class="row.cookie_binding.rotation_status === 'running' || cookieHostRotationDue(row) ? 'text-amber-600 dark:text-amber-400' : ''"
@@ -1450,6 +1452,7 @@ const shouldReplaceAutoRefreshRow = (current: Account, next: Account) => {
   return (
     current.updated_at !== next.updated_at ||
     current.current_concurrency !== next.current_concurrency ||
+    JSON.stringify(current.cookie_binding) !== JSON.stringify(next.cookie_binding) ||
     current.current_window_cost !== next.current_window_cost ||
     current.active_sessions !== next.active_sessions ||
     current.schedulable !== next.schedulable ||
@@ -2321,6 +2324,18 @@ const cookieHostRemaining = (account: Pick<AccountListItem, 'cookie_binding'>): 
   const expiresAt = account.cookie_binding?.binding_expires_at
   if (!expiresAt) return 0
   return Math.max(0, Math.floor((new Date(expiresAt).getTime() - cookieBindingNow.value) / 1000))
+}
+const cookieDegradedDuration = (account: Pick<AccountListItem, 'cookie_binding'>): string => {
+  const startedAt = account.cookie_binding?.degraded_since
+  const started = startedAt ? Date.parse(startedAt) : NaN
+  if (!Number.isFinite(started)) return '降级开始时间未记录'
+  const seconds = Math.max(0, Math.floor((cookieBindingNow.value - started) / 1000))
+  if (seconds < 60) return `已降级 ${seconds} 秒`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `已降级 ${minutes} 分钟`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `已降级 ${hours} 小时 ${minutes % 60} 分钟`
+  return `已降级 ${Math.floor(hours / 24)} 天 ${hours % 24} 小时 ${minutes % 60} 分钟`
 }
 const rotationLabel = (account: Pick<AccountListItem, 'cookie_binding'>): string => {
 	if (account.cookie_binding?.rotation_status === 'running') return '正在轮换 · 查看实时日志'

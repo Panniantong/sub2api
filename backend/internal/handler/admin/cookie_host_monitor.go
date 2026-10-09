@@ -1,6 +1,9 @@
 package admin
 
 import (
+	"net/http"
+	"strconv"
+
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -38,12 +41,33 @@ func (h *AccountHandler) GetCookieHostMonitor(c *gin.Context) {
 	response.Success(c, gin.H{"config": config, "running": service.CookieHostMonitorRunning(), "items": rows[start:end], "total": len(rows), "page": page, "page_size": size, "next_at": next, "first_no": firstNo, "last_no": lastNo, "recovered_at": recovered})
 }
 
+func (h *AccountHandler) RefreshCookieHosts(c *gin.Context) {
+	if h.openaiGatewayService == nil {
+		response.Error(c, http.StatusServiceUnavailable, "Cookie refresh service is unavailable")
+		return
+	}
+	var req struct {
+		Hosts []string `json:"hosts"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || len(req.Hosts) == 0 {
+		response.BadRequest(c, "hosts must contain at least one Cookie Host")
+		return
+	}
+	queued, err := h.openaiGatewayService.QueueOpenAICookieRefresh(c.Request.Context(), req.Hosts)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	response.Success(c, gin.H{"accepted": true, "queued": queued})
+}
+
 func (h *AccountHandler) GetCookieHarvestRuntime(c *gin.Context) {
 	response.Success(c, h.openaiGatewayService.CookieHarvestRunning())
 }
 
 func (h *AccountHandler) GetCookieDashboard(c *gin.Context) {
-	result, err := h.openaiGatewayService.CookieDashboard(c.Request.Context())
+	group, _ := strconv.ParseInt(c.Query("details_group_id"), 10, 64)
+	result, err := h.openaiGatewayService.CookieDashboard(c.Request.Context(), group)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

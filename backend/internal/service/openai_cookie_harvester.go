@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -34,7 +35,7 @@ func (s *OpenAIGatewayService) autoConfigureOpenAICookieHost(ctx context.Context
 	normalizedHost := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
 	for i := range accounts {
 		account := &accounts[i]
-		if account.ID == source.ID || account.Status != StatusActive || !isOpenAICodexTicketAccount(account) || isOpenAICookieCollector(account, settings) || !isOpenAICookieRotationAccount(account, settings) {
+		if !cookiePoolMayRotate(account, settings) || account.ID == source.ID || account.Status != StatusActive || !isOpenAICodexTicketAccount(account) || isOpenAICookieCollector(account, settings) || !isOpenAICookieRotationAccount(account, settings) {
 			continue
 		}
 		boundHost := openAICodexCookieHostFromAccount(account)
@@ -109,7 +110,7 @@ func (s *OpenAIGatewayService) appendOpenAICookieValidationLog(ctx context.Conte
 func newOpenAICookieValidationAttempt(account *Account, host, proxyURL, model string) OpenAICookieAcquisitionLog {
 	attemptID := uuid.NewString()
 	item := OpenAICookieAcquisitionLog{
-		AttemptID: attemptID, AccountID: account.ID, AccountName: account.Name,
+		AttemptID: attemptID, AccountID: account.ID, AccountName: account.Name, AccountEmail: CookieAccountEmail(account),
 		Model: model, Proxy: sanitizeOpenAICookieProxyForDisplay(proxyURL), Host: normalizeOpenAICookieHost(host),
 		ValidationEnabled: true, Kind: "validation", BindingHost: normalizeOpenAICookieHost(host),
 	}
@@ -124,6 +125,9 @@ func (s *OpenAIGatewayService) appendOpenAICookieValidationStage(ctx context.Con
 	base.CreatedAt = time.Now()
 	base.Stage = stage
 	base.Message = message
+	if current, ok := s.openaiCookieRotationRunning.Load(base.AccountID); ok {
+		s.openaiCookieRotationRunning.CompareAndSwap(base.AccountID, current, cookiePoolValidationLive{Host: base.Host, Stage: stage, UpdatedAt: base.CreatedAt})
+	}
 	s.appendOpenAICookieValidationLog(ctx, base)
 }
 
@@ -170,8 +174,19 @@ func (s *OpenAIGatewayService) rotateDueOpenAICookieHost(ctx context.Context, ac
 	if s == nil || account == nil || settings == nil || !settings.CookieRotationEnabled {
 		return false
 	}
+	// Bound the entire pass, not three independent 30-second retries per Host.
+	if cookiePoolPolicy(account, settings) != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		latest, err := s.settingService.GetOpenAICookieSettings(ctx)
+		if err != nil {
+			return false
+		}
+		settings = latest
+	}
 	current := openAICodexCookieHostFromAccount(account)
-	if !openAICookieRotationDue(account, time.Now()) {
+	if !cookiePoolRotationDue(account, settings, time.Now()) {
 		return false
 	}
 	lockValue, _ := s.openaiCookieRotationLocks.LoadOrStore(account.ID, &sync.Mutex{})
@@ -180,25 +195,46 @@ func (s *OpenAIGatewayService) rotateDueOpenAICookieHost(ctx context.Context, ac
 		return true
 	}
 	defer rotationLock.Unlock()
+	release, acquired, lockErr := s.lockCookieRotation(ctx, account)
+	if lockErr != nil || !acquired {
+		return false
+	}
+	defer release()
 	if s.accountRepo != nil {
 		fresh, err := s.accountRepo.GetByID(ctx, account.ID)
 		if err != nil || fresh == nil {
 			return false
 		}
 		account = fresh
-		if account.Status != StatusActive || !isOpenAICookieRotationAccount(account, settings) {
+		if !cookiePoolMayRotate(account, settings) || account.Status != StatusActive || !isOpenAICookieRotationAccount(account, settings) {
 			return false
 		}
 	}
+	hydrated, hydrateErr := s.settingService.cookieEmailAccount(ctx, account)
+	if hydrateErr != nil {
+		return false
+	}
+	account = hydrated
 	s.openaiCookieRotationRunning.Store(account.ID, true)
 	defer s.openaiCookieRotationRunning.Delete(account.ID)
 	// Re-read the due state after taking the account lock. The harvester and
 	// an explicit refresh can reach this function concurrently.
 	current = openAICodexCookieHostFromAccount(account)
-	if !openAICookieRotationDue(account, time.Now()) {
+	if !cookiePoolRotationDue(account, settings, time.Now()) {
 		return false
 	}
+	// Retire an expired binding once; this Host belongs to the mailbox cooldown history.
+	if current != "" {
+		expires, err := time.Parse(time.RFC3339Nano, account.GetExtraString("codex_cookie_host_binding_expires_at"))
+		if err != nil || !expires.After(time.Now()) {
+			if err := s.markOpenAICodexCookieHostCooldown(ctx, account, current, settings.WSHostCooldownSeconds); err != nil {
+				return false
+			}
+		}
+	}
 	previousRotationState := strings.TrimSpace(account.GetExtraString(openAICodexCookieRotationStatusExtraKey))
+	s.syncCookieDegradedSince(ctx, account, settings, time.Now())
+	defer func() { s.syncCookieDegradedSince(ctx, account, settings, time.Now()) }()
 	s.setOpenAICookieRotationState(ctx, account, "running", "开始尝试下一个 Cookie Host")
 	startMessage := "账号未绑定 Host，开始寻找可用 Cookie Host"
 	if current != "" {
@@ -220,12 +256,15 @@ func (s *OpenAIGatewayService) rotateDueOpenAICookieHost(ctx context.Context, ac
 			break
 		}
 		host := normalizeOpenAICookieHost(entry.Host)
-		if !openAICookieRotationCandidate(account, entry, time.Now()) {
+		if !cookieHostInScope(entry.Host, settings.HostWhitelist) || !openAICookieRotationCandidate(account, entry, time.Now()) {
 			continue
 		}
 		attempted++
 		s.appendOpenAICookieValidationLog(ctx, OpenAICookieAcquisitionLog{ID: uuid.NewString(), AttemptID: baseLog.AttemptID, AccountID: account.ID, AccountName: account.Name, Model: validationModel, CreatedAt: time.Now(), Host: host, Kind: "validation", BindingHost: host, BindingStatus: "rotation_candidate", ValidationEnabled: true, Message: fmt.Sprintf("轮换尝试 Host %s（模型 %s）", host, validationModel)})
-		result, _ := s.validateBindAndBuildOpenAICookieHostLocked(ctx, account, settings, host, entry.Cookie, "", validationModel, "")
+		result, validationErr := s.validateBindAndBuildOpenAICookieHostLocked(ctx, account, settings, host, entry.Cookie, "", validationModel, "")
+		if result == "skipped" || errors.Is(validationErr, context.DeadlineExceeded) || errors.Is(validationErr, context.Canceled) {
+			break
+		}
 		if result == "usage_limited" {
 			return false
 		}
@@ -242,7 +281,11 @@ func (s *OpenAIGatewayService) rotateDueOpenAICookieHost(ctx context.Context, ac
 	// Keep the scheduler checking frequently so a newly acquired Host is picked
 	// up quickly, but suppress duplicate start/wait records while the account
 	// remains in the same empty/cooldown state.
-	s.scheduleOpenAICookieRotation(ctx, account, 15, 0)
+	retrySeconds := 15
+	if cookiePoolPolicy(account, settings) != nil {
+		retrySeconds = 1
+	}
+	s.scheduleOpenAICookieRotation(ctx, account, retrySeconds, 0)
 	if previousRotationState != "waiting" || attempted > 0 {
 		s.appendOpenAICookieValidationLog(ctx, OpenAICookieAcquisitionLog{ID: uuid.NewString(), AccountID: account.ID, AccountName: account.Name, Model: validationModel, CreatedAt: time.Now(), Host: current, Kind: "validation", BindingHost: current, BindingStatus: "rotation_waiting", ValidationEnabled: true, Message: message})
 	}
@@ -281,6 +324,14 @@ func (s *OpenAIGatewayService) validateBindAndBuildOpenAICookieHost(ctx context.
 		return "busy", nil
 	}
 	defer lock.Unlock()
+	release, acquired, lockErr := s.lockCookieRotation(ctx, account)
+	if lockErr != nil {
+		return "error", lockErr
+	}
+	if !acquired {
+		return "busy", nil
+	}
+	defer release()
 	if s.accountRepo != nil {
 		fresh, err := s.accountRepo.GetByID(ctx, account.ID)
 		if err != nil {
@@ -301,8 +352,45 @@ func (s *OpenAIGatewayService) validateBindAndBuildOpenAICookieHost(ctx context.
 }
 
 func (s *OpenAIGatewayService) validateBindAndBuildOpenAICookieHostLocked(ctx context.Context, account *Account, settings *OpenAICookieSettings, host, cookie, proxyURL, model, token string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "skipped", err
+	}
+	if cookiePoolPolicy(account, settings) != nil {
+		latest, err := s.settingService.GetOpenAICookieSettings(ctx)
+		if err != nil {
+			return "skipped", err
+		}
+		settings = latest
+	}
 	// Host capability validation always uses the independent intelligence
 	// model. The Cookie acquisition model must never leak into this request.
+	hydrated, hydrateErr := s.settingService.cookieEmailAccount(ctx, account)
+	if hydrateErr != nil {
+		return "error", hydrateErr
+	}
+	*account = *hydrated
+	if openAICodexCookieHostCooldownUntil(account, host).After(time.Now()) {
+		return "skipped", nil
+	}
+	if cookiePoolPolicy(account, settings) != nil && !cookiePoolMayRotate(account, settings) {
+		return "skipped", nil
+	}
+	expectedMember, _ := cookiePoolMember(account, settings)
+	if p := cookiePoolPolicy(account, settings); p != nil {
+		deadline := time.Now().Add(30 * time.Second)
+		if expectedMember.State == "preparing" {
+			readyDeadline := expectedMember.Since.Add(time.Duration(p.ReadyTimeoutSeconds) * time.Second)
+			if readyDeadline.Before(deadline) {
+				deadline = readyDeadline
+			}
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, deadline)
+		defer cancel()
+	}
+	if err := ctx.Err(); err != nil {
+		return "skipped", err
+	}
 	model = s.settingService.GetOpenAIIntelligenceModel(ctx)
 	if strings.TrimSpace(proxyURL) == "" && account != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
@@ -315,6 +403,9 @@ func (s *OpenAIGatewayService) validateBindAndBuildOpenAICookieHostLocked(ctx co
 		var err error
 		token, _, err = s.GetAccessToken(ctx, account)
 		if err != nil || strings.TrimSpace(token) == "" {
+			if ctx.Err() != nil {
+				return "skipped", ctx.Err()
+			}
 			if err == nil {
 				err = fmt.Errorf("access token is empty")
 			}
@@ -345,7 +436,20 @@ func (s *OpenAIGatewayService) validateBindAndBuildOpenAICookieHostLocked(ctx co
 	// do not immediately send another request to the same failing endpoint.
 	result, responseBody, statusCode := "error", "", 0
 	for attempt := 0; attempt < 3; attempt++ {
+		if err := ctx.Err(); err != nil {
+			base.ValidationResult = "skipped"
+			base.ValidationResponse = err.Error()
+			base.BindingStatus = "skipped"
+			s.appendOpenAICookieValidationStage(ctx, base, "validation_skipped", "验证任务期限已到或已取消，未发送本次请求，不新增 Host 冷却")
+			return "skipped", err
+		}
+		if _, err := s.cookieValidationAdmission(ctx, account, settings, expectedMember); err != nil {
+			return "skipped", err
+		}
 		result, responseBody, statusCode = s.validateOpenAICodexCookieHost(ctx, &candidate, token, cookie, "", model)
+		if ctx.Err() != nil {
+			break
+		}
 		if until, limited := cookieValidationUsageResume(statusCode, responseBody, time.Now()); limited {
 			base.StatusCode = statusCode
 			base.ValidationResult = "usage_limited"
@@ -395,10 +499,24 @@ func (s *OpenAIGatewayService) validateBindAndBuildOpenAICookieHostLocked(ctx co
 	default:
 		base.Success = false
 		s.cooldownCookieValidationFailure(ctx, account, settings, base, cookieValidationFailureSummary(result, statusCode)+"；详情见 validation_response")
-		return result, nil
+		return result, ctx.Err()
 	}
 
-	if err := s.bindOpenAICodexCookieHostStartedAt(ctx, account, base.Host, validationStartedAt); err != nil {
+	// Recheck the exact admission generation after the network call.
+	if ctx.Err() != nil {
+		return "error", ctx.Err()
+	}
+	latest, admissionErr := s.cookieValidationAdmission(ctx, account, settings, expectedMember)
+	if admissionErr != nil {
+		return "skipped", admissionErr
+	}
+	settings = latest
+	if !time.Now().Before(validationStartedAt.Add(time.Duration(settings.CookieHostBindingSeconds)*time.Second)) && settings.CookieHostBindingSeconds > 0 {
+		return "skipped", fmt.Errorf("validated Host binding already expired")
+	}
+	if err := s.publishCookiePoolReady(ctx, account, settings, expectedMember, func() error {
+		return s.bindOpenAICodexCookieHostStartedAt(ctx, account, base.Host, validationStartedAt)
+	}); err != nil {
 		base.Success = false
 		base.BindingStatus = "bind_failed"
 		s.appendOpenAICookieValidationStage(ctx, base, "host_bind_failed", "验证通过，但绑定 Host 失败: "+err.Error())
@@ -570,12 +688,19 @@ func (s *OpenAIGatewayService) rotateDueOpenAICookieAccounts(ctx context.Context
 	if err != nil {
 		return
 	}
+	if err := s.reconcileCookieRotationPools(ctx, settings, accounts); err != nil {
+		slog.Warn("cookie pool reconcile failed", "error", err)
+		return
+	}
+	view := *settings
+	s.settingService.attachCookiePoolReaders(ctx, &view)
+	settings = &view
 	for i := range accounts {
 		account := &accounts[i]
-		if account.Status != StatusActive || !isOpenAICodexTicketAccount(account) || !isOpenAICookieRotationAccount(account, settings) {
+		if !cookiePoolMayRotate(account, settings) || account.Status != StatusActive || !isOpenAICodexTicketAccount(account) || !isOpenAICookieRotationAccount(account, settings) {
 			continue
 		}
-		if openAICookieRotationDue(account, time.Now()) {
+		if cookiePoolRotationDue(account, settings, time.Now()) {
 			go s.rotateDueOpenAICookieHost(ctx, account, settings)
 		}
 	}

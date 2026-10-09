@@ -2,6 +2,7 @@ package admin
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -39,6 +40,21 @@ func (h *SettingHandler) GetCookieLogs(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	if source := strings.ToLower(strings.TrimSpace(c.Query("source"))); source != "" && source != "all" {
+		if source == "missing" {
+			source = "fill"
+		}
+		if source == "request_sync" {
+			source = "response_sync"
+		}
+		filtered := logs[:0]
+		for _, item := range logs {
+			if strings.EqualFold(strings.TrimSpace(item.Task), source) || strings.EqualFold(strings.TrimSpace(item.Kind), source) {
+				filtered = append(filtered, item)
+			}
+		}
+		logs = filtered
+	}
 	if raw := c.Query("limit"); raw != "" {
 		limit, parseErr := strconv.Atoi(raw)
 		if parseErr != nil || limit < 1 || limit > 100 {
@@ -73,6 +89,15 @@ func (h *SettingHandler) GetCookieValidationLogs(c *gin.Context) {
 			return
 		}
 		response.Success(c, hosts)
+		return
+	}
+	if email := strings.ToLower(strings.TrimSpace(c.Query("email"))); email != "" {
+		logs, total, err := h.settingService.CookieValidationEmailPage(c.Request.Context(), email, c.Query("host"), page, pageSize)
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+		response.Paginated(c, logs, total, page, pageSize)
 		return
 	}
 	logs, total, err := h.settingService.GetOpenAICookieValidationLogsPage(c.Request.Context(), accountID, page, pageSize, c.Query("host"))

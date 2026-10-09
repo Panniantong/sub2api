@@ -2,7 +2,30 @@ import { apiClient } from '../client'
 import type { OpenAICodexCookieLibraryEntry } from './settings'
 import type { PaginatedResponse } from '@/types'
 
+export interface CookieRotationPoolPolicy {
+ group_id: number
+ group_ids?: number[]
+ enabled: boolean
+ demand_mode?: 'fixed' | 'dynamic'
+ scale_down_seconds?: number
+ target_concurrency: number
+ redundancy_percent: number
+ redundancy_mode?: 'percent' | 'fixed'
+ redundancy_concurrency?: number
+ min_accounts: number
+ max_accounts: number
+ ready_timeout_seconds: number
+ retry_seconds: number
+ shortage_retry_seconds?: number
+ preparation_multiplier?: number
+ max_preparing_accounts?: number
+ quota_priority?: '' | 'used_desc' | 'remaining_desc'
+}
+export interface CookieRotationPoolSnapshot {
+ groups: Record<number, { target_capacity: number; ready_capacity: number; current_demand?: number; demand_concurrency?: number; demand_unavailable?: boolean; members: Record<number, { state: string }> }>
+}
 export interface CookieSettings {
+ rotation_pools?: CookieRotationPoolPolicy[]
   response_cookie_sync_enabled?: boolean
   local_harvest_disabled?: boolean
   remote_sync_enabled?: boolean
@@ -56,6 +79,7 @@ export interface CookieHarvestPolicy {
 export const defaultHarvestPolicy = (): CookieHarvestPolicy => ({ explore_percent: 30, fill_percent: 50, refresh_percent: 20, learning_samples: 20, failure_threshold: 3, failure_backoff_seconds: 60, target_miss_limit: 3, target_backoff_seconds: 120, exploration_revisit_seconds: 900 })
 
 export interface CookieLog {
+  account_email?: string
   task?: string
   target_host?: string
   id: string
@@ -111,6 +135,10 @@ export async function getHarvestRuntime() {
 }
 
 export interface CookieDashboard {
+  pool_groups?: CookiePoolDashboardGroup[]
+  degraded_group_id?: number
+  degraded_current_requests?: number | null
+  rotation_pools?: CookieRotationPoolSnapshot
   healthy_bound_accounts: number
   harvest: Record<string, number>
   rotation_accounts: number
@@ -122,8 +150,35 @@ export interface CookieDashboard {
   updated_at: string
 }
 
-export async function getDashboard() {
-  return (await apiClient.get<CookieDashboard>('/admin/settings/cookie/dashboard')).data
+export interface CookiePoolDashboardGroup {
+  wait_reasons?: Record<string, number>
+  accounts?: CookiePoolDashboardAccount[]
+  policy: CookieRotationPoolPolicy
+  name: string
+  enabled: boolean
+  current_requests: number | null
+  window_demand: number | null
+  target_capacity: number
+  ready_capacity: number
+  active: number
+  draining: number
+  preparing: number
+  standby: number
+  exhausted: number
+  unavailable: number
+  degraded: number
+  updated_at: string | null
+}
+
+export interface CookiePoolDashboardAccount {
+  id: number; name: string; email: string; state: string; concurrency: number; reason: string
+  resume_at?: string; preparing_since?: string; preparing_deadline?: string
+  bound_host: string; binding_expires_at?: string; validation_host: string; validation_stage: string; validation_updated_at?: string
+  available_hosts: number
+  hosts: { host: string; state: string; expires_at: string; cooldown_until?: string }[]
+}
+export async function getDashboard(details_group_id?: number) {
+  return (await apiClient.get<CookieDashboard>('/admin/settings/cookie/dashboard', { params: details_group_id ? { details_group_id } : undefined })).data
 }
 export async function saveSettings(value: CookieSettings) {
   return (await apiClient.put<CookieSettings>('/admin/settings/cookie', value)).data
@@ -131,13 +186,16 @@ export async function saveSettings(value: CookieSettings) {
 export async function getLibrary() {
   return (await apiClient.get<OpenAICodexCookieLibraryEntry[]>('/admin/settings/openai-codex-cookie-library')).data
 }
-export async function getLogs(limit?: number) {
-  return (await apiClient.get<CookieLog[]>('/admin/settings/cookie/logs', { params: limit ? { limit } : undefined })).data
+export async function getLogs(limit?: number, source?: string) {
+  return (await apiClient.get<CookieLog[]>('/admin/settings/cookie/logs', { params: { ...(limit ? { limit } : {}), ...(source && source !== 'all' ? { source } : {}) } })).data
+}
+export async function refreshHosts(hosts: string[]) {
+  return (await apiClient.post<{ accepted: boolean; queued: number }>('/admin/settings/cookie/refresh', { hosts })).data
 }
 export async function getValidationHosts(account_id: number) {
   return (await apiClient.get<string[]>('/admin/settings/cookie/validation-logs', { params: { account_id, hosts_only: true } })).data
 }
-export async function getValidationLogs(params: { account_id?: number; page?: number; page_size?: number; host?: string } = {}) {
+export async function getValidationLogs(params: { account_id?: number; email?: string; page?: number; page_size?: number; host?: string } = {}) {
   return (await apiClient.get<PaginatedResponse<CookieLog>>('/admin/settings/cookie/validation-logs', {
     params: {
       account_id: params.account_id,

@@ -235,12 +235,12 @@ func (h *ConcurrencyHelper) TryAcquireUserSlot(ctx context.Context, userID int64
 	return result.ReleaseFunc, true, nil
 }
 
-func (h *ConcurrencyHelper) TryAcquireUserSlotForAPIKey(ctx context.Context, userID int64, maxConcurrency int, apiKeyID int64) (func(), bool, error) {
+func (h *ConcurrencyHelper) TryAcquireUserSlotForAPIKey(ctx context.Context, userID int64, maxConcurrency int, apiKeyID int64, groupIDs ...*int64) (func(), bool, error) {
 	releaseFunc, acquired, err := h.TryAcquireUserSlot(ctx, userID, maxConcurrency)
 	if err != nil || !acquired {
 		return releaseFunc, acquired, err
 	}
-	return h.withAPIKeySlot(ctx, apiKeyID, releaseFunc), true, nil
+	return h.withAPIKeySlot(ctx, apiKeyID, releaseFunc, groupIDs...), true, nil
 }
 
 // AcquireOpenAIWSIngressLease bounds the whole client WebSocket lifecycle,
@@ -314,14 +314,18 @@ func (h *ConcurrencyHelper) withAPIKeySlotFromGin(c *gin.Context, releaseFunc fu
 	if !ok || apiKey == nil {
 		return releaseFunc
 	}
-	return h.withAPIKeySlot(c.Request.Context(), apiKey.ID, releaseFunc)
+	return h.withAPIKeySlot(c.Request.Context(), apiKey.ID, releaseFunc, apiKey.GroupID)
 }
 
-func (h *ConcurrencyHelper) withAPIKeySlot(ctx context.Context, apiKeyID int64, releaseFunc func()) func() {
+func (h *ConcurrencyHelper) withAPIKeySlot(ctx context.Context, apiKeyID int64, releaseFunc func(), groupIDs ...*int64) func() {
 	if h == nil || h.concurrencyService == nil || apiKeyID <= 0 {
 		return releaseFunc
 	}
 	apiKeyReleaseFunc := h.concurrencyService.TrackAPIKeySlot(ctx, apiKeyID)
+	groupReleaseFunc := func() {}
+	if len(groupIDs) > 0 && groupIDs[0] != nil {
+		groupReleaseFunc = h.concurrencyService.TrackCookieGroupDemand(ctx, *groupIDs[0])
+	}
 	return func() {
 		if releaseFunc != nil {
 			releaseFunc()
@@ -329,6 +333,7 @@ func (h *ConcurrencyHelper) withAPIKeySlot(ctx context.Context, apiKeyID int64, 
 		if apiKeyReleaseFunc != nil {
 			apiKeyReleaseFunc()
 		}
+		groupReleaseFunc()
 	}
 }
 

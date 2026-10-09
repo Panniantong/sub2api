@@ -163,6 +163,7 @@ func (s *OpenAIGatewayService) setStickySessionAccountID(ctx context.Context, gr
 	if err := s.cache.SetSessionAccountID(ctx, derefGroupID(groupID), primaryKey, accountID, ttl); err != nil {
 		return err
 	}
+	s.rememberCookiePoolAffinity(ctx, groupID, sessionHash, accountID)
 
 	if !s.openAISessionHashDualWriteOldEnabled() {
 		return nil
@@ -188,6 +189,9 @@ func (s *OpenAIGatewayService) refreshStickySessionTTL(ctx context.Context, grou
 	}
 
 	err := s.cache.RefreshSessionTTL(ctx, derefGroupID(groupID), primaryKey, ttl)
+	if err == nil {
+		s.rememberCookiePoolAffinity(ctx, groupID, sessionHash, 0)
+	}
 	if !s.openAISessionHashReadOldFallbackEnabled() && !s.openAISessionHashDualWriteOldEnabled() {
 		return err
 	}

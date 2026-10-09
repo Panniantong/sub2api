@@ -147,7 +147,7 @@
             :disabled="cookieHostSaving"
             @change="handleCookieHostChange"
           >
-            <option value="">未绑定</option>
+            <option value="">{{ account.cookie_binding.status === 'unavailable' ? '状态暂不可用' : '未绑定' }}</option>
             <option v-for="host in cookieHosts" :key="host" :value="host">{{ host }}{{ cookieHostCooldownLabel(host) }}</option>
           </select>
           <span v-if="cookieHostSaving" class="text-gray-400">保存中</span>
@@ -156,9 +156,11 @@
         <span v-if="account.cookie_binding.cooldown_host && account.cookie_binding.cooldown_until" class="block text-amber-600">Host 冷静中：{{ account.cookie_binding.cooldown_host }}，至 {{ new Date(account.cookie_binding.cooldown_until).toLocaleString() }}（仍可选择）</span>
         <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
           <span v-if="account.cookie_binding.host && account.cookie_binding.binding_expires_at" :class="bindingRemaining(account) > 0 ? 'text-emerald-600' : 'text-red-600'">绑定剩余 {{ bindingRemaining(account) }}s</span>
-          <button v-if="account.cookie_binding.host && account.cookie_binding.rotation_at && bindingRotationLabel(account) === '正在轮换'" type="button" class="text-amber-600 underline hover:text-amber-700" title="查看当前轮换验证日志" @click.stop="openCookieValidationLogs">正在轮换</button>
+          <span v-if="account.cookie_binding.pool_state === 'draining'" class="text-amber-600">本次绑定到期退出 · 不再轮换</span>
+          <button v-else-if="account.cookie_binding.host && account.cookie_binding.rotation_at && bindingRotationLabel(account) === '正在轮换'" type="button" class="text-amber-600 underline hover:text-amber-700" title="查看当前轮换验证日志" @click.stop="openCookieValidationLogs">正在轮换</button>
           <span v-else-if="account.cookie_binding.host && account.cookie_binding.rotation_at" class="text-gray-500">{{ bindingRotationLabel(account) }}</span>
-          <span v-if="account.cookie_binding.available_host_count !== undefined" class="text-gray-500">可绑定 Host {{ account.cookie_binding.available_host_count }}</span>
+          <span v-if="account.cookie_binding.available_host_count_known === false || account.cookie_binding.status === 'unavailable'" class="text-amber-600">可绑定 Host 待确认</span>
+          <span v-else-if="account.cookie_binding.available_host_count !== undefined" class="text-gray-500">可绑定 Host {{ account.cookie_binding.available_host_count }}</span>
           <CookieBindingEstimate v-if="account.cookie_binding.host" :binding="account.cookie_binding" />
           <span v-if="cookieSchedulingBlockLabel" class="rounded bg-amber-50 px-1.5 py-0.5 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300" title="动态调度状态；有效绑定恢复后自动回原组，不修改账号实际分组或可调度开关">{{ account.cookie_binding?.degraded_group_id ? `降级到 ${account.cookie_binding.degraded_group_name || '#' + account.cookie_binding.degraded_group_id} 分组` : '暂不调度' }} · {{ cookieSchedulingBlockLabel }}</span>
           <span v-else :class="account.cookie_binding.status === 'active' ? 'text-emerald-600' : 'text-gray-500'">{{ { active: '绑定有效', expired: 'Cookie 已过期或不存在，绑定不生效', unbound: '未绑定', unavailable: 'Cookie 状态读取失败', cooldown: 'Host 冷静中' }[account.cookie_binding.status] }}</span>
@@ -989,7 +991,17 @@ const cookieSchedulingBlockLabel = computed(() => {
   const reasons: Record<string, string> = {
 	  cookie_host_monitoring: '固定 Host 恢复监控中',
     cookie_host_unbound: binding.degraded_group_id ? '未绑定且无可轮换 Host' : '未绑定 Cookie Host',
-    cookie_host_binding_expired: 'Host 绑定已超时',
+    cookie_host_binding_expired: 'Host 绑定已超时，等待轮换',
+    cookie_host_cooldown: '当前 Host 在邮箱冷却期内',
+    cookie_pool_disabled: '账户池未启用，不调度',
+    cookie_pool_waiting: '备用排队中，不调度',
+    cookie_pool_preparing: '准备 Host 绑定，暂不调度',
+    cookie_pool_exhausted: '此邮箱的 Host 已全部耗尽',
+    cookie_pool_unavailable: '账户池状态暂不可用',
+    cookie_identity_unavailable: '邮箱冷却记录暂不可用',
+    cookie_settings_unavailable: 'Cookie 配置读取失败，暂不调度',
+    cookie_host_library_unavailable: 'Cookie 库读取失败，暂不调度',
+    cookie_host_cookie_unavailable: '当前 Host 缺少有效 Cookie，等待轮换',
     cookie_host_binding_invalid: 'Host 绑定有效期缺失或无效'
   }
   if (binding.scheduling_blocked || binding.degraded_group_id) return reasons[binding.scheduling_block_reason || ''] || '等待有效 Host 绑定'

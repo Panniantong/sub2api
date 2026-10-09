@@ -928,7 +928,7 @@ func (s *OpenAIGatewayService) selectAccountForModelWithExclusionsStickyHit(ctx 
 
 	// 3. 按优先级 + LRU 选择最佳账号
 	// Select by priority + LRU
-	selected, compactBlocked, filterStats := s.selectBestAccount(ctx, groupID, platform, accounts, requestedModel, excludedIDs, requireCompact, requiredCapability, preferLowUpstreamRate)
+	selected, compactBlocked, filterStats := s.selectBestAccount(ctx, groupID, platform, accounts, requestedModel, excludedIDs, requireCompact, requiredCapability, preferLowUpstreamRate, sessionHash)
 
 	if selected == nil {
 		return nil, false, noAvailableOpenAISelectionError(requestedModel, compactBlocked, filterStats.summary(""))
@@ -1024,7 +1024,7 @@ func (s *OpenAIGatewayService) tryStickySessionHit(ctx context.Context, groupID 
 // (only meaningful when the legacy /responses/compact requireCompact flag is
 // true); the third contains deterministic
 // exclusion diagnostics for the evaluated snapshot.
-func (s *OpenAIGatewayService) selectBestAccount(ctx context.Context, groupID *int64, platform string, accounts []Account, requestedModel string, excludedIDs map[int64]struct{}, requireCompact bool, requiredCapability OpenAIEndpointCapability, preferLowUpstreamRate bool) (*Account, bool, openAISelectionFilterStats) {
+func (s *OpenAIGatewayService) selectBestAccount(ctx context.Context, groupID *int64, platform string, accounts []Account, requestedModel string, excludedIDs map[int64]struct{}, requireCompact bool, requiredCapability OpenAIEndpointCapability, preferLowUpstreamRate bool, sessionHash ...string) (*Account, bool, openAISelectionFilterStats) {
 	platform = NormalizeOpenAICompatiblePlatform(platform)
 	compactBlocked := false
 	filterStats := openAISelectionFilterStats{pool: len(accounts)}
@@ -1091,6 +1091,7 @@ func (s *OpenAIGatewayService) selectBestAccount(ctx context.Context, groupID *i
 		}
 		return s.isBetterAccount(a, b)
 	})
+	cookiePoolQuotaOrder(ctx, s, eligible, func(a *Account) *Account { return a }, requireCompact, sessionHash...)
 	return eligible[0], compactBlocked, filterStats
 }
 
@@ -1384,6 +1385,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 			selectionOrder = append(selectionOrder, available...)
 		}
 
+		cookiePoolQuotaOrder(ctx, s, selectionOrder, func(a accountWithLoad) *Account { return a.account }, requireCompact, sessionHash)
 		for _, item := range selectionOrder {
 			fresh := s.resolveFreshSchedulableOpenAIAccount(ctx, item.account, platform, requestedModel, false, requiredCapability)
 			if fresh == nil {
@@ -1423,6 +1425,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 		if requireCompact {
 			ordered = prioritizeOpenAICompactAccounts(ordered)
 		}
+		cookiePoolQuotaOrder(ctx, s, ordered, func(a *Account) *Account { return a }, requireCompact, sessionHash)
 		for _, acc := range ordered {
 			fresh := s.resolveFreshSchedulableOpenAIAccount(ctx, acc, platform, requestedModel, false, requiredCapability)
 			if fresh == nil {

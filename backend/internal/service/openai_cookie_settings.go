@@ -16,6 +16,9 @@ const cookieLogsKey = "openai_cookie_acquisition_logs"
 const intelligenceMonitorSettingKey = "openai_intelligence_monitor"
 
 type OpenAICookieSettings struct {
+	RotationPools             []CookieRotationPoolPolicy `json:"rotation_pools"`
+	rotationPool              func() (*CookieRotationPoolSnapshot, error)
+	emailAccount              func(*Account) (*Account, error)
 	ResponseCookieSyncEnabled bool   `json:"response_cookie_sync_enabled"`
 	LocalHarvestDisabled      bool   `json:"local_harvest_disabled"`
 	RemoteSyncEnabled         bool   `json:"remote_sync_enabled"`
@@ -125,6 +128,7 @@ func (s *SettingService) GetOpenAICookieSettings(ctx context.Context) (*OpenAICo
 	}
 	if cached, ok := s.openAICookieCache.Load().(*cachedOpenAICookieSettings); ok && time.Now().Before(cached.until) {
 		copy := cached.value
+		s.attachCookiePoolReaders(ctx, &copy)
 		copy.rotationCandidates = func() ([]OpenAICodexCookieLibraryEntry, error) { return s.cookieSchedulingCandidates(ctx) }
 		return &copy, nil
 	}
@@ -193,6 +197,7 @@ func (s *SettingService) GetOpenAICookieSettings(ctx context.Context) (*OpenAICo
 	// update; keep this cache short while still avoiding a settings DB read per
 	// request.
 	s.openAICookieCache.Store(&cachedOpenAICookieSettings{value, time.Now().Add(1 * time.Second)})
+	s.attachCookiePoolReaders(ctx, &value)
 	value.rotationCandidates = func() ([]OpenAICodexCookieLibraryEntry, error) { return s.cookieSchedulingCandidates(ctx) }
 	return &value, nil
 }
@@ -229,6 +234,9 @@ func (s *SettingService) setOpenAICookieSettings(ctx context.Context, value *Ope
 		value.HarvestPolicy = defaultCookieHarvestPolicy()
 	}
 	if err := value.HarvestPolicy.validate(); err != nil {
+		return err
+	}
+	if err := s.validateCookieRotationPools(ctx, value); err != nil {
 		return err
 	}
 	if value.DegradedGroupID < 0 {
@@ -401,6 +409,7 @@ func (s *SettingService) resolveOpenAICookieProxyURLs(ctx context.Context, setti
 }
 
 type OpenAICookieAcquisitionLog struct {
+	AccountEmail       string `json:"account_email,omitempty"`
 	harvestAttempted   bool
 	Task               string         `json:"task,omitempty"`
 	TargetHost         string         `json:"target_host,omitempty"`
@@ -432,8 +441,11 @@ type OpenAICookieAcquisitionLog struct {
 var cookieLogMu sync.Mutex
 
 type OpenAICookieBindingStatus struct {
+	PoolState               string               `json:"pool_state,omitempty"`
+	PoolDrainUntil          *time.Time           `json:"pool_drain_until,omitempty"`
 	DegradedGroupID         int64                `json:"degraded_group_id,omitempty"`
 	DegradedGroupName       string               `json:"degraded_group_name,omitempty"`
+	DegradedSince           *time.Time           `json:"degraded_since,omitempty"`
 	SchedulingGuardEnabled  bool                 `json:"scheduling_guard_enabled"`
 	SchedulingBlocked       bool                 `json:"scheduling_blocked"`
 	SchedulingBlockReason   string               `json:"scheduling_block_reason,omitempty"`
@@ -443,6 +455,7 @@ type OpenAICookieBindingStatus struct {
 	BindingExpiresAt        *time.Time           `json:"binding_expires_at,omitempty"`
 	RotationAt              *time.Time           `json:"rotation_at,omitempty"`
 	CookieExpiresAt         *time.Time           `json:"cookie_expires_at,omitempty"`
+	AvailableHostCountKnown bool                 `json:"available_host_count_known"`
 	AvailableHostCount      int                  `json:"available_host_count"`
 	BindingSeconds          int                  `json:"binding_seconds"`
 	RotationBeforeSeconds   int                  `json:"rotation_before_seconds"`
@@ -460,6 +473,11 @@ func (s *SettingService) OpenAICookieBinding(ctx context.Context, account *Accou
 	if !isOpenAICodexTicketAccount(account) {
 		return nil
 	}
+	emailAccount, emailErr := s.cookieEmailAccount(ctx, account)
+	if emailErr != nil {
+		return &OpenAICookieBindingStatus{Status: "unavailable", SchedulingGuardEnabled: true, SchedulingBlocked: true, SchedulingBlockReason: "cookie_identity_unavailable"}
+	}
+	account = emailAccount
 	status := &OpenAICookieBindingStatus{Host: openAICodexCookieHostFromAccount(account), Status: "unbound"}
 	status.SchedulingGuardEnabled, status.SchedulingBlockReason = s.openAICookieSchedulingStatus(ctx, account)
 	status.SchedulingBlocked = status.SchedulingBlockReason != ""
@@ -482,13 +500,23 @@ func (s *SettingService) OpenAICookieBinding(ctx context.Context, account *Accou
 	}
 	rotationEligible := false
 	settingsLoaded := false
+	var hostWhitelist []string
 	if cfg, err := s.GetOpenAICookieSettings(ctx); err == nil {
 		settingsLoaded = true
+		if member, _ := cookiePoolMember(account, cfg); member.State != "" {
+			status.PoolState = member.State
+			if member.State == "draining" {
+				at := member.DrainUntil
+				status.PoolDrainUntil = &at
+			}
+		}
+		hostWhitelist = cfg.HostWhitelist
 		status.BindingSeconds = cfg.CookieHostBindingSeconds
 		status.RotationBeforeSeconds = cfg.CookieHostRotationBeforeSeconds
 		if cookieDegradedTarget(account, cfg, time.Now()) > 0 {
 			status.DegradedGroupID = cfg.DegradedGroupID
 			status.DegradedGroupName = cfg.DegradedGroupName
+			status.DegradedSince = cookieDegradedSince(account, time.Now())
 			status.SchedulingBlocked = false
 		}
 		status.WSEnabled = cfg.WSEnabled
@@ -514,9 +542,10 @@ func (s *SettingService) OpenAICookieBinding(ctx context.Context, account *Accou
 		status.RotationMessage = ""
 	}
 	if entries, err := s.GetOpenAICodexCookieLibrary(ctx); err == nil {
+		status.AvailableHostCountKnown = true
 		now := time.Now()
 		for _, item := range entries {
-			if openAICookieRotationCandidate(account, item, now) {
+			if cookieHostInScope(item.Host, hostWhitelist) && openAICookieRotationCandidate(account, item, now) {
 				status.AvailableHostCount++
 			}
 		}

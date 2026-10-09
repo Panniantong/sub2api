@@ -12,6 +12,7 @@ func TestCookieLivePoolsFollowDatabaseAcrossExpiryAndRecovery(t *testing.T) {
 	ctx := context.Background()
 	stale := cookieGuardTestAccount("old.example", time.Now().Add(time.Hour))
 	fresh := cookieGuardTestAccount("old.example", time.Now().Add(-time.Minute))
+	exhaustCookieTestCandidates(&fresh)
 	repo := &schedulerGroupAwareOpenAIAccountRepo{schedulerTestOpenAIAccountRepo{accounts: []Account{fresh}}}
 	svc := &OpenAIGatewayService{settingService: cookieDegradedTestSettings(), accountRepo: repo,
 		schedulerSnapshot: &SchedulerSnapshotService{cache: &openAISnapshotCacheStub{snapshotAccounts: []*Account{&stale}, accountsByID: map[int64]*Account{fresh.ID: &stale}}}}

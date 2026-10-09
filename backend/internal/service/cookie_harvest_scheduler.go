@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/google/uuid"
 )
 
@@ -120,7 +121,27 @@ func (r *cookieHarvestRuntime) plan(now time.Time, settings *OpenAICookieSetting
 			available = append(available, key)
 		}
 	}
+	dueRefreshTask := func() *cookieHarvestTask {
+		if settings.CookieRefreshBeforeSeconds <= 0 {
+			return nil
+		}
+		deadline := now.Add(time.Duration(settings.CookieRefreshBeforeSeconds) * time.Second)
+		for _, entry := range library {
+			if r.targets[entry.Host] || !cookieHostInScope(entry.Host, settings.HostWhitelist) {
+				continue
+			}
+			if entry.ExpiresAt.After(now) && !entry.ExpiresAt.After(deadline) {
+				return &cookieHarvestTask{kind: "refresh", host: entry.Host}
+			}
+		}
+		return nil
+	}
 	if len(available) == 0 {
+		// Refreshes use the gateway server egress and therefore do not need an
+		// available proxy slot. Keep discovery/fill blocked until a proxy exists.
+		if task := dueRefreshTask(); task != nil {
+			return task
+		}
 		return nil
 	}
 	if settings.CookieProxyScheduleMode != "dynamic" {
@@ -338,6 +359,97 @@ func (s *OpenAIGatewayService) dispatchOpenAICookieHarvest(ctx context.Context, 
 			s.probeOpenAICodexTicket(ctx, account, cfg, probeSettings)
 		}(a, task)
 	}
+}
+
+// QueueOpenAICookieRefresh queues explicit Host refreshes from the admin UI.
+// Refresh requests reuse the normal Codex model request and the selected
+// collector account credentials, but probeOpenAICodexTicket forces their
+// egress to the server (no configured/account proxy).
+func (s *OpenAIGatewayService) QueueOpenAICookieRefresh(ctx context.Context, hosts []string) (int, error) {
+	if s == nil || s.settingService == nil || s.accountRepo == nil {
+		return 0, fmt.Errorf("cookie refresh service is unavailable")
+	}
+	settings, err := s.settingService.GetOpenAICookieSettings(ctx)
+	if err != nil {
+		return 0, err
+	}
+	seen := make(map[string]struct{}, len(hosts))
+	targets := make([]string, 0, len(hosts))
+	for _, raw := range hosts {
+		host := normalizeOpenAICookieHost(raw)
+		if host == "" || !cookieHostInScope(host, settings.HostWhitelist) {
+			continue
+		}
+		if _, ok := seen[host]; ok {
+			continue
+		}
+		seen[host] = struct{}{}
+		targets = append(targets, host)
+	}
+	if len(targets) == 0 {
+		return 0, fmt.Errorf("no valid Cookie Host selected")
+	}
+	accounts, err := s.accountRepo.ListByPlatform(ctx, PlatformOpenAI)
+	if err != nil {
+		return 0, err
+	}
+	eligible := make([]*Account, 0, len(accounts))
+	for i := range accounts {
+		a := &accounts[i]
+		if a.Status == StatusActive && isOpenAICodexTicketAccount(a) && isOpenAICookieCollector(a, settings) {
+			eligible = append(eligible, a)
+		}
+	}
+	if len(eligible) == 0 {
+		return 0, fmt.Errorf("no active Cookie collector account is configured")
+	}
+
+	r := &s.cookieHarvestRuntime
+	r.mu.Lock()
+	r.init()
+	queued := 0
+	for _, host := range targets {
+		var account *Account
+		for i := 0; i < len(eligible); i++ {
+			candidate := eligible[(queued+i)%len(eligible)]
+			if !r.accounts[candidate.ID] {
+				account = candidate
+				break
+			}
+		}
+		if account == nil {
+			break
+		}
+		r.accounts[account.ID] = true
+		r.jobs[account.ID] = "refresh"
+		queued++
+		cfg := s.codexTicketConfig()
+		cfg.Models = []string{settings.Model}
+		cfg.HarvestProxyURL = ""
+		cfg.CookieHarvestProxyURLs = nil
+		cfg.CookieDynamicProxyFillHostCookie = false
+		cfg.CookieHostWhitelist = settings.HostWhitelist
+		optionsCopy := *openAICookieProbeSettings(account, settings)
+		optionsCopy.harvestTask = "refresh"
+		optionsCopy.harvestTarget = host
+		optionsCopy.harvestProxy = ""
+		s.cookieHarvestRuntime.wg.Add(1)
+		go func(account *Account, cfg config.OpenAICodexTicketConfig, options *OpenAICookieSettings) {
+			defer s.cookieHarvestRuntime.wg.Done()
+			defer func() {
+				r.mu.Lock()
+				delete(r.accounts, account.ID)
+				delete(r.jobs, account.ID)
+				r.mu.Unlock()
+			}()
+			s.probeOpenAICodexTicket(context.WithoutCancel(ctx), account, cfg, options)
+		}(account, cfg, &optionsCopy)
+	}
+	r.mu.Unlock()
+	if queued == 0 {
+		return 0, fmt.Errorf("all Cookie collector accounts are busy")
+	}
+	return queued, nil
 }
 
 type CookieProxyHarvestStats struct {

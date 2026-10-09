@@ -163,7 +163,7 @@ func (s *SettingService) GetOpenAICodexTicketSettings(ctx context.Context) (*Ope
 	settings := defaults
 	if strings.TrimSpace(value) != "" {
 		if err := json.Unmarshal([]byte(value), &settings); err != nil {
-			settings = defaults
+			return nil, fmt.Errorf("decode OpenAI Codex ticket settings: %w", err)
 		}
 	}
 	settings = normalizeOpenAICodexTicketSettings(settings)

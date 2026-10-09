@@ -16,11 +16,13 @@ import (
 type cookieRefreshUpstream struct {
 	HTTPUpstream
 	request *http.Request
+	proxy   string
 	cookie  string
 }
 
-func (u *cookieRefreshUpstream) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+func (u *cookieRefreshUpstream) Do(req *http.Request, proxy string, _ int64, _ int) (*http.Response, error) {
 	u.request = req
+	u.proxy = proxy
 	return &http.Response{StatusCode: 200, Header: http.Header{"Set-Cookie": {u.cookie + "; Path=/"}}, Body: io.NopCloser(strings.NewReader("data: [DONE]\n\n"))}, nil
 }
 
@@ -45,6 +47,7 @@ func TestCookieRefreshCarriesTargetCookieAndOnlyUpdatesTarget(t *testing.T) {
 			account := &Account{ID: 1, Name: "collector", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"access_token": "collector-token", "chatgpt_account_id": "collector-id"}, Extra: map[string]any{openAICodexCookieExtraKey: "bound=other", "session_id": "old-session"}}
 			svc.probeOpenAICodexTicket(context.Background(), account, cfg, &OpenAICookieSettings{harvestTask: "refresh", harvestTarget: "target.example", AutoValidateHost: true})
 			require.NotNil(t, upstream.request)
+			require.Empty(t, upstream.proxy, "target refresh must use the gateway server egress")
 			require.Equal(t, old, upstream.request.Header.Get("Cookie"))
 			require.Equal(t, "Bearer collector-token", upstream.request.Header.Get("Authorization"))
 			require.Empty(t, upstream.request.Header.Get(openAICodexTurnStateHeader))
@@ -77,6 +80,17 @@ func TestCookieRefreshTargetsLibraryWithoutProxyHistory(t *testing.T) {
 	require.NotNil(t, task)
 	require.Equal(t, "refresh", task.kind)
 	require.Equal(t, "response.example", task.host)
+}
+
+func TestCookieRefreshPlansDirectWhenProxySlotsAreUnavailable(t *testing.T) {
+	r := cookieHarvestRuntime{}
+	r.init()
+	r.proxies["proxy"] = true
+	settings := &OpenAICookieSettings{CookieProxyScheduleMode: "round_robin", CookieRefreshBeforeSeconds: 600}
+	task := r.plan(time.Now(), settings, []string{"proxy"}, nil, []OpenAICodexCookieLibraryEntry{{Host: "direct.example", ExpiresAt: time.Now().Add(time.Minute)}})
+	require.NotNil(t, task)
+	require.Equal(t, "refresh", task.kind)
+	require.Empty(t, task.proxy)
 }
 
 func TestCookieRefreshSkipsAlreadyRenewedTarget(t *testing.T) {

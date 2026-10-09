@@ -390,6 +390,11 @@ func (s *OpenAIGatewayService) codexTicketConfig() config.OpenAICodexTicketConfi
 			cfg.RelayMode = runtime.RelayMode
 			cfg.RelayTimeoutSeconds = runtime.RelayTimeoutSeconds
 			cfg.RelayAllowMint = runtime.RelayAllowMint
+		} else {
+			// A database outage must never resurrect statically enabled ticket
+			// harvesting after the administrator disabled it at runtime.
+			cfg.Enabled, cfg.OverrideTurnState = false, false
+			cfg.RelayEnabled, cfg.RelayAllowMint = false, false
 		}
 	}
 	return OpenAICodexTicketConfigDefaults(cfg)
@@ -482,6 +487,10 @@ func (s *OpenAIGatewayService) refreshOpenAICodexTickets(ctx context.Context) {
 }
 
 func (s *OpenAIGatewayService) probeOpenAICodexTicket(ctx context.Context, account *Account, cfg config.OpenAICodexTicketConfig, cookieSettings ...*OpenAICookieSettings) {
+	ticketOnly := len(cookieSettings) == 0 || cookieSettings[0] == nil
+	if ticketOnly && (!cfg.Enabled || !s.codexTicketConfig().Enabled) {
+		return
+	}
 	var cookieLog *OpenAICookieAcquisitionLog
 	if len(cookieSettings) > 0 && cookieSettings[0] != nil {
 		cookieLog = &OpenAICookieAcquisitionLog{ID: uuid.NewString(), AccountID: account.ID, AccountName: account.Name, CreatedAt: time.Now(), Model: firstOpenAICodexTicketModel(cfg.Models), Message: "Cookie 请求未完成"}
@@ -624,7 +633,12 @@ func (s *OpenAIGatewayService) probeOpenAICodexTicket(ctx context.Context, accou
 	}
 	req.Header.Set("session_id", probeSessionID)
 	proxyURL, proxySource := strings.TrimSpace(cfg.HarvestProxyURL), "dedicated"
-	if cookieLog != nil {
+	if refreshCookie {
+		// Target refreshes are deliberately sent from the gateway host. The
+		// target Cookie is an existing library value, so proxy discovery is not
+		// involved and must never change the egress for this request.
+		proxyURL, proxySource = "", "server_direct"
+	} else if cookieLog != nil {
 		proxyURL, proxySource = s.nextOpenAICodexCookieHarvestProxy(probeCtx, cfg, account)
 	} else if proxyURL == "" && account.Proxy != nil {
 		proxyURL, proxySource = account.Proxy.URL(), "account"
@@ -640,7 +654,7 @@ func (s *OpenAIGatewayService) probeOpenAICodexTicket(ctx context.Context, accou
 			cookieLog.Proxy = u.String()
 		}
 	}
-	if proxyURL == "" {
+	if proxyURL == "" && !refreshCookie {
 		if cookieLog != nil {
 			cookieLog.Message = "未配置 Cookie 采集代理，且账号无代理"
 		}
@@ -775,6 +789,11 @@ func (s *OpenAIGatewayService) probeOpenAICodexTicket(ctx context.Context, accou
 			s.autoConfigureOpenAICookieHost(postResponseCtx, account, cookieSettings[0], cookieLog.Host, responseCookie, proxyURL, harvestModel)
 		}
 		return // Cookie acquisition never mutates account ticket/session or ticket logs.
+	}
+	// Recheck after the network request: a queued/in-flight probe may have
+	// outlived the administrator's switch to disabled.
+	if !s.codexTicketConfig().Enabled {
+		return
 	}
 	ticket := s.storeOpenAICodexTicket(account, state, now, cfg)
 	if resp.StatusCode != http.StatusOK || ticket == nil || !ticket.valid(now, cfg.TargetLength) {
@@ -1079,6 +1098,15 @@ func (s *OpenAIGatewayService) bindOpenAICodexCookieHostStartedAt(ctx context.Co
 		return errors.New("account or host is empty")
 	}
 	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	if s.settingService != nil {
+		hydrated, err := s.settingService.cookieEmailAccount(ctx, account)
+		if err != nil {
+			return err
+		}
+		if openAICodexCookieHostCooldownUntil(hydrated, host).After(time.Now()) {
+			return fmt.Errorf("邮箱与此 Host 仍在冷却中")
+		}
+	}
 	bindingSeconds, rotationBeforeSeconds := 240, 10
 	if s != nil && s.settingService != nil {
 		if settings, err := s.settingService.GetOpenAICookieSettings(ctx); err == nil && settings != nil {
@@ -1124,6 +1152,9 @@ func (s *OpenAIGatewayService) bindOpenAICodexCookieHostStartedAt(ctx context.Co
 		"codex_cookie_ws_host":                 nil,
 		"codex_cookie_host_cooldown_until":     nil,
 		openAICodexCookieCooldownsExtraKey:     cooldowns,
+	}
+	if bindingExpiresAt.After(time.Now()) {
+		updates[openAICookieDegradedSinceExtraKey] = nil
 	}
 	if !startedAt.IsZero() {
 		updates[openAICodexCookieRotationNextExtraKey] = rotationAt.Format(time.RFC3339Nano)
@@ -1188,6 +1219,16 @@ func (s *OpenAIGatewayService) markOpenAICodexCookieHostCooldown(ctx context.Con
 	}
 	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
 	until := time.Now().Add(time.Duration(seconds) * time.Second)
+	if s.settingService != nil {
+		if repo, ok := s.settingService.settingRepo.(CookieEmailCooldownRepository); ok {
+			if email := CookieAccountEmail(account); email != "" {
+				if err := repo.SaveCookieEmailCooldown(ctx, email, host, until); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	if account.Extra == nil {
 		account.Extra = map[string]any{}
 	}
@@ -1648,7 +1689,7 @@ func openAICodexHarvestProxyInfo(raw string) (scheme, host string) {
 
 func (s *OpenAIGatewayService) storeOpenAICodexTicket(account *Account, state string, capturedAt time.Time, cfg config.OpenAICodexTicketConfig) *openAICodexTicket {
 	state = strings.TrimSpace(state)
-	if s == nil || account == nil || !plausibleOpenAICodexTicket(state, cfg.TargetLength) {
+	if s == nil || account == nil || !cfg.Enabled || !s.codexTicketConfig().Enabled || !plausibleOpenAICodexTicket(state, cfg.TargetLength) {
 		return nil
 	}
 	ticket := &openAICodexTicket{State: state, Length: len(state), CapturedAt: capturedAt, ExpiresAt: capturedAt.Add(time.Duration(cfg.TTLSeconds) * time.Second)}

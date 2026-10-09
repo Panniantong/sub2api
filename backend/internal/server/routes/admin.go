@@ -605,6 +605,7 @@ func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		adminSettings.GET("/cookie/logs", h.Admin.Setting.GetCookieLogs)
 		adminSettings.GET("/cookie/runtime", h.Admin.Account.GetCookieHarvestRuntime)
 		adminSettings.GET("/cookie/dashboard", h.Admin.Account.GetCookieDashboard)
+		adminSettings.POST("/cookie/refresh", h.Admin.Account.RefreshCookieHosts)
 		adminSettings.GET("/cookie/host-monitor", h.Admin.Account.GetCookieHostMonitor)
 		adminSettings.PUT("/cookie/host-monitor", h.Admin.Account.UpdateCookieHostMonitor)
 		adminSettings.POST("/cookie/host-monitor/run", h.Admin.Account.RunCookieHostMonitor)

@@ -12,6 +12,15 @@ import (
 // Schedulable or a cooldown, so collectors/rotation can recover the binding and
 // manually disabled accounts remain disabled after recovery.
 func openAICookieSchedulingStatus(account *Account, settings *OpenAICookieSettings, now time.Time) (bool, string) {
+	if isOpenAICodexTicketAccount(account) && cookiePoolPolicy(account, settings) != nil {
+		if _, reason := cookiePoolMember(account, settings); reason != "" {
+			return true, reason
+		}
+	}
+	return cookieHostBindingStatus(account, settings, now)
+}
+
+func cookieHostBindingStatus(account *Account, settings *OpenAICookieSettings, now time.Time) (bool, string) {
 	if cookieHostMonitorOwns(account, settings) {
 		return true, "cookie_host_monitoring"
 	}
@@ -19,6 +28,9 @@ func openAICookieSchedulingStatus(account *Account, settings *OpenAICookieSettin
 	// the persistent account schedulable switch and from the optional UI toggle.
 	if !isOpenAICodexTicketAccount(account) || settings == nil || !isOpenAICookieRotationGroupAccount(account, settings) {
 		return false, ""
+	}
+	if host := normalizeOpenAICookieHost(account.GetExtraString(openAICodexCookieHostExtraKey)); host != "" && openAICodexCookieHostCooldownUntil(account, host).After(now) {
+		return true, "cookie_host_cooldown"
 	}
 	if normalizeOpenAICookieHost(account.GetExtraString(openAICodexCookieHostExtraKey)) == "" {
 		return true, "cookie_host_unbound"
@@ -29,6 +41,19 @@ func openAICookieSchedulingStatus(account *Account, settings *OpenAICookieSettin
 	}
 	if !expires.After(now) {
 		return true, "cookie_host_binding_expired"
+	}
+	if cookiePoolPolicy(account, settings) != nil && settings.rotationCandidates != nil {
+		entries, err := settings.rotationCandidates()
+		if err != nil {
+			return true, "cookie_host_library_unavailable"
+		}
+		host := normalizeOpenAICookieHost(account.GetExtraString(openAICodexCookieHostExtraKey))
+		for _, entry := range entries {
+			if normalizeOpenAICookieHost(entry.Host) == host && entry.Cookie != "" && entry.ExpiresAt.After(now) && cookieHostInScope(host, settings.HostWhitelist) {
+				return true, ""
+			}
+		}
+		return true, "cookie_host_cookie_unavailable"
 	}
 	// Early rotation does not invalidate the current, still usable binding.
 	return true, ""
@@ -43,26 +68,40 @@ func (s *SettingService) openAICookieSchedulingStatus(ctx context.Context, accou
 	// a background rotation task or cache refresh.
 	settings, err := s.GetOpenAICookieSettings(ctx)
 	if err != nil {
-		// Keep a known protection policy on transient settings read failures.
-		if cached, ok := s.openAICookieCache.Load().(*cachedOpenAICookieSettings); ok {
-			settings = &cached.value
-		}
+		return true, "cookie_settings_unavailable"
 	}
-	return openAICookieSchedulingStatus(account, settings, time.Now())
+	hydrated, hydrateErr := s.cookieEmailAccount(ctx, account)
+	if hydrateErr != nil {
+		return true, "cookie_identity_unavailable"
+	}
+	return openAICookieSchedulingStatus(hydrated, settings, time.Now())
 }
 
 func (s *OpenAIGatewayService) openAICookieSchedulingBlockReason(ctx context.Context, account *Account) string {
 	if s == nil || s.settingService == nil {
 		return ""
 	}
-	_, reason := s.settingService.openAICookieSchedulingStatus(ctx, account)
+	if !isOpenAICodexTicketAccount(account) {
+		return ""
+	}
+	settings, err := s.settingService.GetOpenAICookieSettings(ctx)
+	if err != nil {
+		return "cookie_settings_unavailable"
+	}
+	if p := cookiePoolPolicy(account, settings); p != nil {
+		if group, ok := ctx.Value(cookieSchedulingGroupKey{}).(int64); ok && group != p.GroupID && group != settings.DegradedGroupID {
+			return "cookie_pool_other_group"
+		}
+	}
+	account, err = s.settingService.cookieEmailAccount(ctx, account)
+	if err != nil {
+		return "cookie_identity_unavailable"
+	}
+	_, reason := openAICookieSchedulingStatus(account, settings, time.Now())
 	if reason != "" {
-		settings, err := s.settingService.GetOpenAICookieSettings(ctx)
-		if err == nil {
-			target := cookieDegradedTarget(account, settings, time.Now())
-			if group, ok := ctx.Value(cookieSchedulingGroupKey{}).(int64); ok && target > 0 && group == target {
-				return ""
-			}
+		target := cookieDegradedTarget(account, settings, time.Now())
+		if group, ok := ctx.Value(cookieSchedulingGroupKey{}).(int64); ok && target > 0 && group == target {
+			return ""
 		}
 	}
 	return reason
@@ -100,29 +139,66 @@ func withCookieSchedulingGroup(ctx context.Context, groupID *int64) context.Cont
 }
 
 func cookieDegradedTarget(account *Account, settings *OpenAICookieSettings, now time.Time) int64 {
-	if settings == nil || settings.DegradedGroupID <= 0 {
+	if account == nil || settings == nil || settings.DegradedGroupID <= 0 || !account.IsSchedulable() || cookieHostMonitorOwns(account, settings) {
 		return 0
 	}
-	_, reason := openAICookieSchedulingStatus(account, settings, now)
-	switch reason {
-	case "cookie_host_unbound":
-		if settings.rotationCandidates == nil {
-			return 0 // Unknown library state is not proof of exhaustion.
-		}
-		entries, err := settings.rotationCandidates()
+	if settings.emailAccount != nil {
+		hydrated, err := settings.emailAccount(account)
 		if err != nil {
 			return 0
 		}
-		for _, entry := range entries {
-			if openAICookieRotationCandidate(account, entry, now) {
-				return 0
-			}
+		account = hydrated
+	}
+	if cookiePoolPolicy(account, settings) != nil {
+		m, reason := cookiePoolMember(account, settings)
+		if m.State != "active" && m.State != "preparing" && reason != "cookie_pool_exhausted" {
+			return 0
 		}
-		return settings.DegradedGroupID
-	case "cookie_host_binding_invalid", "cookie_host_binding_expired":
-		return settings.DegradedGroupID
+	}
+	_, reason := cookieHostBindingStatus(account, settings, now)
+	if reason == "cookie_host_unbound" || reason == "cookie_host_binding_invalid" || reason == "cookie_host_binding_expired" || reason == "cookie_host_cooldown" {
+		if cookieHostsExhausted(account, settings, now) {
+			return settings.DegradedGroupID
+		}
 	}
 	return 0
+}
+
+// Empty/unknown libraries and untried Hosts are not evidence that Hosts were used up.
+// Every current library Host must have a recorded cooldown for this identity.
+func cookieHostsExhausted(account *Account, settings *OpenAICookieSettings, now time.Time) bool {
+	exhausted, _ := cookieHostExhaustionStatus(account, settings, now)
+	return exhausted
+}
+
+// known is false when the library or mailbox cannot establish either exhaustion
+// or recovery. An unavailable read must not erase a persisted exhaustion state.
+func cookieHostExhaustionStatus(account *Account, settings *OpenAICookieSettings, now time.Time) (exhausted, known bool) {
+	if settings == nil || settings.rotationCandidates == nil {
+		return false, false
+	}
+	if settings.emailAccount != nil {
+		hydrated, err := settings.emailAccount(account)
+		if err != nil {
+			return false, false
+		}
+		account = hydrated
+	}
+	entries, err := settings.rotationCandidates()
+	if err != nil || len(entries) == 0 {
+		return false, false
+	}
+	found := false
+	for _, entry := range entries {
+		if !cookieHostInScope(entry.Host, settings.HostWhitelist) || entry.Cookie == "" || !entry.ExpiresAt.After(now) {
+			continue
+		}
+		found = true
+		if !openAICodexCookieHostCooldownUntil(account, entry.Host).After(now) {
+			return false, true
+		}
+	}
+	return found, found
 }
 
 // Shared by rotation, admission and the account-list count. Network failures

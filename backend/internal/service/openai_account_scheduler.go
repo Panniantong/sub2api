@@ -1178,6 +1178,7 @@ func (s *defaultOpenAIAccountScheduler) tryAcquireOpenAISelectionOrderWithBudget
 	budget *openAISelectionProbeBudget,
 ) (*AccountSelectionResult, bool, error) {
 	compactBlocked := false
+	cookiePoolQuotaOrder(ctx, s.service, selectionOrder, func(c openAIAccountCandidateScore) *Account { return c.account }, req.RequireCompact, req.SessionHash)
 	release := func(result *AcquireResult) {
 		if result != nil && result.ReleaseFunc != nil {
 			result.ReleaseFunc()
