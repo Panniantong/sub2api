@@ -3,7 +3,33 @@ package repository
 import (
 	"context"
 	"time"
+
+	"github.com/lib/pq"
 )
+
+func (r *settingRepository) CookieEmailCooldownsBatch(ctx context.Context, emails []string) (map[string]map[string]time.Time, error) {
+	result := map[string]map[string]time.Time{}
+	if len(emails) == 0 {
+		return result, nil
+	}
+	rows, err := r.client.QueryContext(ctx, `SELECT email,host,cooldown_until FROM cookie_email_host_cooldowns WHERE email=ANY($1) AND cooldown_until>now()`, pq.Array(emails))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var email, host string
+		var until time.Time
+		if err := rows.Scan(&email, &host, &until); err != nil {
+			return nil, err
+		}
+		if result[email] == nil {
+			result[email] = map[string]time.Time{}
+		}
+		result[email][host] = until
+	}
+	return result, rows.Err()
+}
 
 func (r *settingRepository) CookieEmailCooldowns(ctx context.Context, email string) (map[string]time.Time, error) {
 	rows, err := r.client.QueryContext(ctx, `SELECT host,cooldown_until FROM cookie_email_host_cooldowns WHERE email=$1 AND cooldown_until>now()`, email)

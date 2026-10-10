@@ -36,13 +36,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import type { CookieDashboard, CookiePoolDashboardGroup } from '@/api/admin/cookies'
 import CookiePoolAccountDialog from './CookiePoolAccountDialog.vue'
 const props = defineProps<{ dashboard: CookieDashboard | null }>()
-defineEmits<{ settings: [] }>()
+const emit = defineEmits<{ settings: []; detailOpen: [boolean] }>()
 const search = ref('')
 const details = ref<{ group: number; name: string; state: string } | null>(null)
+watch(details, value => emit('detailOpen', value !== null))
+onUnmounted(() => emit('detailOpen', false))
 const detailStates = ['active', 'draining', 'preparing', 'standby', 'exhausted', 'unavailable']
 const rows = computed(() => props.dashboard?.pool_groups || [])
 const filtered = computed(() => rows.value.filter(r => `${r.name} ${r.policy.group_id}`.toLowerCase().includes(search.value.toLowerCase())))

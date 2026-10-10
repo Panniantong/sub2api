@@ -1061,11 +1061,23 @@ func openAICodexCookieHostCooldownUntil(account *Account, host string) time.Time
 		return time.Time{}
 	}
 	if raw, ok := account.Extra[openAICodexCookieCooldownsExtraKey]; ok {
-		var values map[string]string
-		if data, err := json.Marshal(raw); err == nil && json.Unmarshal(data, &values) == nil {
-			if until, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(values[host])); err == nil {
-				return until
+		// Stored JSON decodes to map[string]any; hydrated mailboxes use
+		// map[string]string. Looking up one Host must not serialize the entire
+		// cooldown history for every candidate in an account/Host matrix.
+		var value string
+		switch values := raw.(type) {
+		case map[string]string:
+			value = values[host]
+		case map[string]any:
+			value, _ = values[host].(string)
+		default:
+			var decoded map[string]string
+			if data, err := json.Marshal(raw); err == nil && json.Unmarshal(data, &decoded) == nil {
+				value = decoded[host]
 			}
+		}
+		if until, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(value)); err == nil {
+			return until
 		}
 	}
 	legacyHost := normalizeOpenAICookieHost(account.GetExtraString("codex_cookie_ws_host"))

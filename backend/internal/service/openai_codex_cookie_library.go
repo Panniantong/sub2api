@@ -60,6 +60,14 @@ func decodeOpenAICodexCookieLibrary(raw string) []OpenAICodexCookieLibraryEntry 
 }
 
 func (s *SettingService) GetOpenAICodexCookieLibrary(ctx context.Context) ([]OpenAICodexCookieLibraryEntry, error) {
+	if snapshot := s.cookieAdminSnapshot(ctx); snapshot != nil {
+		snapshot.libraryOnce.Do(func() { snapshot.library, snapshot.libraryErr = s.readOpenAICodexCookieLibrary(ctx, true) })
+		return snapshot.library, snapshot.libraryErr
+	}
+	return s.readOpenAICodexCookieLibrary(ctx, false)
+}
+
+func (s *SettingService) readOpenAICodexCookieLibrary(ctx context.Context, strict bool) ([]OpenAICodexCookieLibraryEntry, error) {
 	if s == nil || s.settingRepo == nil {
 		return []OpenAICodexCookieLibraryEntry{}, nil
 	}
@@ -67,7 +75,17 @@ func (s *SettingService) GetOpenAICodexCookieLibrary(ctx context.Context) ([]Ope
 	if err != nil && !errors.Is(err, ErrSettingNotFound) {
 		return nil, err
 	}
-	entries := normalizeOpenAICodexCookieLibrary(decodeOpenAICodexCookieLibrary(raw), time.Now())
+	var decoded []OpenAICodexCookieLibraryEntry
+	if strings.TrimSpace(raw) != "" {
+		if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+			if strict {
+				return nil, fmt.Errorf("decode cookie library: %w", err)
+			}
+			// Preserve the existing non-display API behavior.
+			decoded = decodeOpenAICodexCookieLibrary(raw)
+		}
+	}
+	entries := normalizeOpenAICodexCookieLibrary(decoded, time.Now())
 	return entries, nil
 }
 

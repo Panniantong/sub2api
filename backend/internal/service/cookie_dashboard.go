@@ -43,17 +43,31 @@ type CookiePoolDashboardGroup struct {
 }
 
 func (s *OpenAIGatewayService) CookieDashboard(ctx context.Context, detailGroups ...int64) (*CookieDashboard, error) {
-	settings, err := s.settingService.GetOpenAICookieSettings(ctx)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	accounts, err := s.accountRepo.ListByPlatform(ctx, PlatformOpenAI)
 	if err != nil {
 		return nil, err
 	}
-	accounts, err := s.accountRepo.ListByPlatform(ctx, PlatformOpenAI)
+	ctx = s.settingService.WithCookieAdminSnapshot(ctx, accounts)
+	var settings *OpenAICookieSettings
+	if s.settingService.cookieAdminSnapshot(ctx) != nil {
+		settings, err = s.settingService.GetOpenAICookieSettings(ctx)
+	} else {
+		// An empty/OAuth-free dashboard still needs a cancellable settings read.
+		settings, err = s.settingService.cookieAdminSettings(ctx)
+	}
 	if err != nil {
 		return nil, err
 	}
 	// Use one consistent library snapshot for the whole dashboard. Failure is
 	// reported instead of turning unavailable data into a misleading zero.
-	entries, err := s.settingService.cookieSchedulingCandidates(ctx)
+	var entries []OpenAICodexCookieLibraryEntry
+	if s.settingService.cookieAdminSnapshot(ctx) != nil {
+		entries, err = s.settingService.GetOpenAICodexCookieLibrary(ctx)
+	} else {
+		entries, err = s.settingService.readOpenAICodexCookieLibrary(ctx, true)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -114,12 +128,12 @@ func (s *OpenAIGatewayService) CookieDashboard(ctx context.Context, detailGroups
 	}
 	for i := range accounts {
 		a := &accounts[i]
+		if seen[a.ID] || !isOpenAICodexTicketAccount(a) {
+			continue
+		}
 		a, err = s.settingService.cookieEmailAccount(ctx, a)
 		if err != nil {
 			return nil, err
-		}
-		if seen[a.ID] || !isOpenAICodexTicketAccount(a) {
-			continue
 		}
 		seen[a.ID] = true
 		if cookieDashboardHealthyBinding(a, settings, byHost, result.UpdatedAt) {

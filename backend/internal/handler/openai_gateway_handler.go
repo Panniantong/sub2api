@@ -787,6 +787,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
 		accountReleaseFunc, slotResult := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
+		if slotResult == openAISlotAcquireReselect {
+			continue
+		}
 		if slotResult == openAISlotAcquireProfitVetoed {
 			// 利润终检否决：排除该账号重新选号，全池耗尽由下一轮选号报错；
 			// 否决次数达上限则直接终止，避免排队抢槽后才终检的延迟放大。
@@ -1383,6 +1386,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
 		accountReleaseFunc, slotResult := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
+		if slotResult == openAISlotAcquireReselect {
+			continue
+		}
 		if slotResult == openAISlotAcquireProfitVetoed {
 			// 利润终检否决：排除该账号重新选号，全池耗尽由下一轮选号报错；
 			// 否决次数达上限则直接终止，避免排队抢槽后才终检的延迟放大。
@@ -2111,6 +2117,7 @@ type openAISlotAcquireResult int
 
 const (
 	openAISlotAcquireOK openAISlotAcquireResult = iota
+	openAISlotAcquireReselect
 	// openAISlotAcquireFailed：错误响应已写出，调用方直接 return。
 	openAISlotAcquireFailed
 	// openAISlotAcquireProfitVetoed：槽位获取成功后利润终检否决。槽位已释放、
@@ -2217,6 +2224,24 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlot(
 	// 门只存在于调度栈的局部 ctx，必须经选号结果重放到本函数的 ctx 上。
 	ctx := service.ContextWithSelectionProfitGate(c.Request.Context(), selection)
 	account := selection.Account
+	remaining := time.Hour // ignored until this request first needs to queue
+	if selection.WaitPlan != nil {
+		remaining = openAIAccountWaitRemaining(c, selection.WaitPlan.Timeout, true)
+	} else {
+		remaining = openAIAccountWaitRemaining(c, remaining, false)
+	}
+	if remaining <= 0 || ctx.Err() != nil {
+		if selection.ReleaseFunc != nil {
+			selection.ReleaseFunc()
+		}
+		err := ctx.Err()
+		if err == nil {
+			err = &ConcurrencyError{SlotType: "account", IsTimeout: true}
+		}
+		status, errType, code, message := concurrencyErrorResponse(err, "account")
+		writeError(status, errType, code, message)
+		return nil, openAISlotAcquireFailed
+	}
 	if selection.Acquired {
 		latest, vetoed, reason := h.gatewayService.ProfitControlVetoLatest(ctx, account)
 		if vetoed {
@@ -2293,12 +2318,20 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlot(
 		}
 	}
 	defer releaseWait()
+	if selection.WaitPlan.RecheckPool {
+		if err := h.concurrencyHelper.waitOpenAIPoolRetry(c, ctx, openAIAccountWaitRemaining(c, remaining, false), reqStream, streamStarted); err != nil {
+			status, errType, code, message := concurrencyErrorResponse(err, "account")
+			writeError(status, errType, code, message)
+			return nil, openAISlotAcquireFailed
+		}
+		return nil, openAISlotAcquireReselect
+	}
 
 	accountReleaseFunc, err := h.concurrencyHelper.AcquireAccountSlotWithWaitTimeout(
 		c,
 		account.ID,
 		selection.WaitPlan.MaxConcurrency,
-		selection.WaitPlan.Timeout,
+		openAIAccountWaitRemaining(c, remaining, false),
 		reqStream,
 		streamStarted,
 	)
@@ -2764,6 +2797,33 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		}
 
 		accountMaxConcurrency := account.Concurrency
+		if !selection.Acquired && selection.WaitPlan != nil && selection.WaitPlan.RecheckPool {
+			started := false
+			release, status := h.acquireOpenAIAccountSlot(c, apiKey.GroupID, sessionHash, selection, false, &started, reqLog,
+				func(_ int, _, _, message string) { closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, message) })
+			if status == openAISlotAcquireReselect {
+				continue
+			}
+			if status == openAISlotAcquireProfitVetoed {
+				if recordOpenAIProfitVeto(failedAccountIDs, account.ID, &profitVetoCount) {
+					continue
+				}
+				closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "no available account")
+				return
+			}
+			if status != openAISlotAcquireOK {
+				return
+			}
+			selection.Acquired, selection.ReleaseFunc = true, release
+			account = selection.Account
+		}
+		if openAIAccountWaitRemaining(c, time.Hour, false) <= 0 {
+			if selection.ReleaseFunc != nil {
+				selection.ReleaseFunc()
+			}
+			closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "account concurrency wait timeout")
+			return
+		}
 		if selection.WaitPlan != nil && selection.WaitPlan.MaxConcurrency > 0 {
 			accountMaxConcurrency = selection.WaitPlan.MaxConcurrency
 		}

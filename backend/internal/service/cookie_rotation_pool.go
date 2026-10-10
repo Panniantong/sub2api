@@ -345,9 +345,6 @@ func reconcileCookiePool(g *CookieRotationPoolGroup, p CookieRotationPoolPolicy,
 		if order(ids[i]) != order(ids[j]) {
 			return order(ids[i]) < order(ids[j])
 		}
-		if cmp := cookiePoolQuotaCompare(eligible[ids[i]], eligible[ids[j]], p.QuotaPriority, now); cmp != 0 {
-			return cmp < 0
-		}
 		return ids[i] < ids[j]
 	})
 	// Ready incumbents are considered before preparation, regardless of account ID.

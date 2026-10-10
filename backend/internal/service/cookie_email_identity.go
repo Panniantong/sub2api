@@ -18,6 +18,15 @@ func (s *SettingService) cookieEmailAccount(ctx context.Context, a *Account) (*A
 		return a, nil
 	}
 	email := CookieAccountEmail(a)
+	if snapshot := s.cookieAdminSnapshot(ctx); snapshot != nil {
+		if email == "" {
+			return a, nil
+		}
+		if snapshot.cooldownErr != nil {
+			return nil, snapshot.cooldownErr
+		}
+		return mergeCookieEmailCooldowns(a, snapshot.cooldowns[email]), nil
+	}
 	repo, ok := s.settingRepo.(CookieEmailCooldownRepository)
 	if !ok || email == "" {
 		return a, nil
@@ -26,6 +35,10 @@ func (s *SettingService) cookieEmailAccount(ctx context.Context, a *Account) (*A
 	if err != nil {
 		return nil, err
 	}
+	return mergeCookieEmailCooldowns(a, values), nil
+}
+
+func mergeCookieEmailCooldowns(a *Account, values map[string]time.Time) *Account {
 	copy := *a
 	copy.Extra = make(map[string]any, len(a.Extra)+1)
 	for k, v := range a.Extra {
@@ -45,5 +58,5 @@ func (s *SettingService) cookieEmailAccount(ctx context.Context, a *Account) (*A
 		cooldowns[host] = until.Format(time.RFC3339Nano)
 	}
 	copy.Extra[openAICodexCookieCooldownsExtraKey] = cooldowns
-	return &copy, nil
+	return &copy
 }

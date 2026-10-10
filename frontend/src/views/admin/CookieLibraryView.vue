@@ -30,7 +30,7 @@
       </section>
 
 
-      <CookiePoolCockpit v-if="tab === 'pool-cockpit'" :dashboard="dashboard" @settings="tab = 'settings'" />
+      <CookiePoolCockpit v-if="tab === 'pool-cockpit'" :dashboard="dashboard" @settings="tab = 'settings'" @detail-open="dashboardDetailOpen = $event" />
       <CookieHostMonitor v-if="tab === 'host-monitor'" :hosts="library.map(item => item.host)" />
       <section v-if="tab === 'library'" class="space-y-3">
         <input v-model="search" class="input w-full" placeholder="搜索 Host" aria-label="搜索 Host" />
@@ -350,10 +350,13 @@ const policyTotal = computed(() => { const p = form.harvest_policy; return p ? p
 const harvestRunning = ref<Record<string, number>>({})
 const dashboard = ref<cookies.CookieDashboard | null>(null)
 const dashboardError = ref('')
+const dashboardDetailOpen = ref(false)
 let dashboardPolling = false
 let dashboardDisposed = false
+let dashboardNextAt = 0
+let dashboardFailures = 0
 async function loadDashboard() {
-  if (dashboardPolling || dashboardDisposed || document.hidden) return
+  if (dashboardPolling || dashboardDisposed || document.hidden || dashboardDetailOpen.value) return
   dashboardPolling = true
   try {
     const value = await cookies.getDashboard()
@@ -361,9 +364,14 @@ async function loadDashboard() {
     dashboard.value = value
     harvestRunning.value = value.harvest
     dashboardError.value = ''
+    dashboardFailures = 0
   } catch {
     if (!dashboardDisposed) dashboardError.value = '运行数据更新失败'
-  } finally { dashboardPolling = false }
+    dashboardFailures++
+  } finally {
+    dashboardPolling = false
+    dashboardNextAt = Date.now() + Math.min(30000, 5000 * 2 ** dashboardFailures)
+  }
 }
 const harvestTaskLabel = (task?: string) => ({ explore: '探索新 Host', fill: '补齐缺失', refresh: '到期刷新', round_robin: '轮询采集', response_sync: '上游响应同步', remote_sync: '远程同步' }[task || ''] || '采集')
 const intelligenceModel = ref('gpt-6-astra')
@@ -676,13 +684,30 @@ function changeValidationPage(page: number) {
   validationPage.value = page
   void loadValidationLogs().catch(err => { error.value = message(err) })
 }
+let libraryRequest: Promise<void> | null = null
+let libraryNextAt = 0
+let libraryFailures = 0
+function loadLibrary(): Promise<void> {
+  if (libraryRequest) return libraryRequest
+  libraryRequest = cookies.getLibrary().then(value => {
+    if (!dashboardDisposed) library.value = value || []
+    libraryFailures = 0
+  }).catch(err => {
+    libraryFailures++
+    throw err
+  }).finally(() => {
+    libraryNextAt = Date.now() + Math.min(60000, 10000 * 2 ** libraryFailures)
+    libraryRequest = null
+  })
+  return libraryRequest
+}
 async function refresh() {
   if (loading.value) return
   loading.value = true
   try {
     const results = await Promise.allSettled([
       loadDashboard(),
-      cookies.getLibrary().then(value => { library.value = value || [] }),
+      loadLibrary(),
       cookies.getLogs().then(value => { logs.value = value || [] }),
       loadProxyMemories(),
       loadValidationLogs(),
@@ -725,9 +750,9 @@ let clockTimer: ReturnType<typeof setInterval> | undefined
 let liveTimer: ReturnType<typeof setInterval> | undefined
 let dashboardTimer: ReturnType<typeof setInterval> | undefined
 watch(validationAccountId, () => { validationPage.value = 1; void loadValidationLogs().catch(err => { error.value = message(err) }) })
-watch(tab, value => { if (value === 'pool-cockpit') void loadDashboard(); if (value === 'logs' || value === 'rotation-logs') void pollLiveLogs() })
-onMounted(() => { void refresh(); refreshTimer = setInterval(() => { void cookies.getLibrary().then(value => { library.value = value || [] }) }, 10000); clockTimer = setInterval(() => { now.value = Date.now() }, 1000); liveTimer = setInterval(() => { void pollLiveLogs() }, 1500) })
-onMounted(() => { dashboardTimer = setInterval(() => { void loadDashboard() }, 5000); document.addEventListener('visibilitychange', onDashboardVisibility) })
-function onDashboardVisibility() { if (!document.hidden) void loadDashboard() }
+watch(tab, value => { if (value === 'pool-cockpit' || value === 'settings') void loadDashboard(); if (value === 'logs' || value === 'rotation-logs') void pollLiveLogs() })
+onMounted(() => { void refresh(); refreshTimer = setInterval(() => { if (!document.hidden && !dashboardDisposed && (tab.value === 'library' || tab.value === 'host-monitor') && Date.now() >= libraryNextAt) void loadLibrary().catch(err => { error.value = message(err) }) }, 1000); clockTimer = setInterval(() => { now.value = Date.now() }, 1000); liveTimer = setInterval(() => { void pollLiveLogs() }, 1500) })
+onMounted(() => { dashboardTimer = setInterval(() => { if ((tab.value === 'pool-cockpit' || tab.value === 'settings') && Date.now() >= dashboardNextAt) void loadDashboard() }, 1000); document.addEventListener('visibilitychange', onDashboardVisibility) })
+function onDashboardVisibility() { if (!document.hidden && (tab.value === 'pool-cockpit' || tab.value === 'settings') && Date.now() >= dashboardNextAt) void loadDashboard() }
 onUnmounted(() => { dashboardDisposed = true; clearInterval(dashboardTimer); document.removeEventListener('visibilitychange', onDashboardVisibility); clearInterval(refreshTimer); clearInterval(clockTimer); clearInterval(liveTimer) })
 </script>

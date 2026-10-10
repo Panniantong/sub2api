@@ -120,8 +120,20 @@ func (s *SettingService) GetOpenAIIntelligenceModel(ctx context.Context) string 
 var cookieSettingsMu sync.Mutex
 
 func (s *SettingService) GetOpenAICookieSettings(ctx context.Context) (*OpenAICookieSettings, error) {
+	if snapshot := s.cookieAdminSnapshot(ctx); snapshot != nil {
+		if snapshot.settings == nil {
+			return nil, snapshot.settingsErr
+		}
+		copy := *snapshot.settings
+		return &copy, snapshot.settingsErr
+	}
 	cookieSettingsMu.Lock()
 	defer cookieSettingsMu.Unlock()
+	return s.getOpenAICookieSettingsLocked(ctx)
+}
+
+// Caller owns cookieSettingsMu; admin reads acquire it with a cancellable wait.
+func (s *SettingService) getOpenAICookieSettingsLocked(ctx context.Context) (*OpenAICookieSettings, error) {
 	value := OpenAICookieSettings{Model: openAICodexTicketHarvestModel, IntervalSeconds: 5, CookieProxyScheduleMode: "round_robin", CookieHarvestConcurrency: 1, CookieProxyLearningAttempts: openAICookieProxyDiscoveryRequests, WSConnections: 10, WSTTLSeconds: 3600, WSHostCooldownSeconds: 14400, CookieHostValidationFailureCooldownSeconds: 120, CookieRefreshBeforeSeconds: 600, CookieHostBindingSeconds: 240, CookieHostRotationBeforeSeconds: 10, ProxyURLs: []string{}, HostWhitelist: []string{}}
 	if s == nil || s.settingRepo == nil {
 		return &value, nil

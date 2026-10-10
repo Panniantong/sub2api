@@ -15,10 +15,10 @@
         <p v-if="a.state === 'unavailable' || a.state === 'exhausted'" class="text-sm text-amber-600">{{ a.reason }}<span v-if="a.resume_at"> · 最早恢复 {{ formatTime(a.resume_at) }}（{{ remaining(a.resume_at) }} 秒）</span></p>
         <p v-if="a.preparing_since" class="text-sm text-indigo-600">已准备 {{ elapsed(a.preparing_since) }} 秒 · 本轮剩余 {{ remaining(a.preparing_deadline) }} 秒</p>
         <div class="space-y-1 text-xs leading-5"><p class="break-all"><span class="text-gray-500">正式绑定：</span>{{ a.bound_host || '未绑定' }}<span v-if="a.binding_expires_at"> · 至 {{ formatTime(a.binding_expires_at) }}</span></p><p class="break-all"><span class="text-gray-500">本轮最近尝试 Host：</span>{{ a.validation_host || '当前实例暂无执行中的 Host 验证' }}</p><p v-if="a.validation_stage"><span class="text-gray-500">验证进度：</span>{{ stages[a.validation_stage] || a.validation_stage }} · {{ formatTime(a.validation_updated_at) }}</p></div>
-        <details class="rounded-lg bg-gray-50 p-3 dark:bg-dark-900">
+        <details :open="hostOpen[a.id] === true" @toggle="hostOpen[a.id] = ($event.target as HTMLDetailsElement).open" class="rounded-lg bg-gray-50 p-3 dark:bg-dark-900">
           <summary class="cursor-pointer text-sm font-medium">查看 Host（可绑定 {{ a.available_hosts }} / 库内 {{ a.hosts.length }}）</summary>
-          <div class="mt-3 flex flex-wrap gap-2"><input v-model="hostSearch" class="input min-w-0 flex-1" placeholder="搜索 Host" aria-label="搜索 Host" /><select v-model="hostState" class="input w-36" aria-label="Host 状态筛选"><option value="">全部状态</option><option v-for="(label, key) in hostLabels" :key="key" :value="key">{{ label }}</option></select></div>
-          <div class="mt-3 max-h-64 space-y-2 overflow-y-auto"><div v-for="host in visibleHosts(a)" :key="host.host" class="rounded border border-gray-200 p-2 text-xs dark:border-dark-600"><p class="break-all font-medium">{{ host.host }} <span class="ml-2 text-gray-500">{{ hostLabels[host.state] || host.state }}</span></p><p class="mt-1 text-gray-500">Cookie 有效至 {{ formatTime(host.expires_at) }}<span v-if="host.cooldown_until"> · 邮箱冷却至 {{ formatTime(host.cooldown_until) }}（{{ remaining(host.cooldown_until) }} 秒）</span></p></div><p v-if="!visibleHosts(a).length" class="text-xs text-gray-500">没有匹配的 Host。</p></div>
+          <div v-if="hostOpen[a.id]" class="mt-3 flex flex-wrap gap-2"><input v-model="hostSearch" class="input min-w-0 flex-1" placeholder="搜索 Host" aria-label="搜索 Host" /><select v-model="hostState" class="input w-36" aria-label="Host 状态筛选"><option value="">全部状态</option><option v-for="(label, key) in hostLabels" :key="key" :value="key">{{ label }}</option></select></div>
+          <div v-if="hostOpen[a.id]" class="mt-3 max-h-64 space-y-2 overflow-y-auto"><div v-for="host in visibleHosts(a)" :key="host.host" class="rounded border border-gray-200 p-2 text-xs dark:border-dark-600"><p class="break-all font-medium">{{ host.host }} <span class="ml-2 text-gray-500">{{ hostLabels[host.state] || host.state }}</span></p><p class="mt-1 text-gray-500">Cookie 有效至 {{ formatTime(host.expires_at) }}<span v-if="host.cooldown_until"> · 邮箱冷却至 {{ formatTime(host.cooldown_until) }}（{{ remaining(host.cooldown_until) }} 秒）</span></p></div><p v-if="!visibleHosts(a).length" class="text-xs text-gray-500">没有匹配的 Host。</p></div>
         </details>
       </article>
     </div>
@@ -32,6 +32,7 @@ import { getDashboard, type CookiePoolDashboardAccount } from '@/api/admin/cooki
 const props = defineProps<{ groupId: number; groupName: string; initialState: string }>()
 defineEmits<{ close: [] }>()
 const state = ref(props.initialState)
+const hostOpen = ref<Record<number, boolean>>({})
 const search = ref(''), hostSearch = ref(''), hostState = ref('')
 const accounts = ref<CookiePoolDashboardAccount[]>([])
 const loading = ref(false), loaded = ref(false), error = ref(''), now = ref(Date.now())
@@ -44,14 +45,16 @@ const formatTime = (value?: string) => value ? new Date(value).toLocaleString() 
 const remaining = (value?: string) => value ? Math.max(0, Math.ceil((Date.parse(value) - now.value) / 1000)) : 0
 const elapsed = (value: string) => Math.max(0, Math.floor((now.value - Date.parse(value)) / 1000))
 let disposed = false
+let nextRefreshAt = 0
+let failures = 0
 async function refresh() {
   if (loading.value || disposed) return
   loading.value = true
-  try { const data = await getDashboard(props.groupId); if (!disposed) { accounts.value = data.pool_groups?.find(g => g.policy.group_id === props.groupId)?.accounts || []; loaded.value = true; error.value = '' } }
-  catch { if (!disposed) error.value = '账户明细读取失败' }
-  finally { loading.value = false }
+  try { const data = await getDashboard(props.groupId); if (!disposed) { accounts.value = data.pool_groups?.find(g => g.policy.group_id === props.groupId)?.accounts || []; loaded.value = true; error.value = ''; failures = 0 } }
+  catch { failures++; if (!disposed) error.value = '账户明细读取失败' }
+  finally { loading.value = false; nextRefreshAt = Date.now() + Math.min(30000, 5000 * 2 ** failures) }
 }
 let poll: ReturnType<typeof setInterval>, clock: ReturnType<typeof setInterval>
-onMounted(() => { void refresh(); poll = setInterval(() => { if (!document.hidden) void refresh() }, 5000); clock = setInterval(() => { now.value = Date.now() }, 1000) })
+onMounted(() => { void refresh(); poll = setInterval(() => { if (!document.hidden && Date.now() >= nextRefreshAt) void refresh() }, 1000); clock = setInterval(() => { now.value = Date.now() }, 1000) })
 onUnmounted(() => { disposed = true; clearInterval(poll); clearInterval(clock) })
 </script>

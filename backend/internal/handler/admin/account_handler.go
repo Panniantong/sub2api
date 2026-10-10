@@ -355,18 +355,18 @@ type AccountSchedulerGroupScore struct {
 
 const accountListGroupUngroupedQueryValue = "ungrouped"
 
-func (h *AccountHandler) accountResponseFromService(account *service.Account) *dto.Account {
+func (h *AccountHandler) accountResponseFromService(account *service.Account, contexts ...context.Context) *dto.Account {
 	out := dto.AccountFromService(account)
-	h.enrichCodexTicketStatus(account, out)
+	h.enrichCodexTicketStatus(account, out, contexts...)
 	if h != nil && h.ollamaCloudUsage != nil && out != nil {
 		h.ollamaCloudUsage.EnrichState(out.OllamaCloudUsage)
 	}
 	return out
 }
 
-func (h *AccountHandler) accountListResponseFromService(account *service.Account) *dto.Account {
+func (h *AccountHandler) accountListResponseFromService(account *service.Account, contexts ...context.Context) *dto.Account {
 	out := dto.AccountFromServiceShallow(account)
-	h.enrichCodexTicketStatus(account, out)
+	h.enrichCodexTicketStatus(account, out, contexts...)
 	if out != nil && account != nil {
 		out.CodexTurnTicketHistory = nil
 		out.Proxy = dto.ProxyFromService(account.Proxy)
@@ -377,19 +377,25 @@ func (h *AccountHandler) accountListResponseFromService(account *service.Account
 	return out
 }
 
-func (h *AccountHandler) enrichCodexTicketStatus(account *service.Account, out *dto.Account) {
+func (h *AccountHandler) enrichCodexTicketStatus(account *service.Account, out *dto.Account, contexts ...context.Context) {
+	ctx := context.Background()
+	if len(contexts) > 0 {
+		ctx = contexts[0]
+	}
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
 	if h == nil || h.cfg == nil || out == nil {
 		return
 	}
 	out.CodexTurnTickets = service.OpenAICodexTicketStatuses(account, h.cfg.Gateway.OpenAICodexTicket, time.Now())
 	if h.settingService != nil {
-		out.CookieBinding = h.settingService.OpenAICookieBinding(context.Background(), account)
+		out.CookieBinding = h.settingService.OpenAICookieBinding(ctx, account)
 	}
 	if account != nil && account.Platform == service.PlatformOpenAI && h.openaiGatewayService != nil {
 		out.WSConnections = h.openaiGatewayService.OpenAIWSAccountStatus(account.ID)
 	}
 	if h.settingService != nil && len(out.CodexTurnTickets) > 0 && out.CodexTurnTickets[0].BoundCookieHost != "" {
-		if entry, err := h.settingService.LookupOpenAICodexCookie(context.Background(), out.CodexTurnTickets[0].BoundCookieHost); err == nil && entry != nil {
+		if entry, err := h.settingService.LookupOpenAICodexCookie(ctx, out.CodexTurnTickets[0].BoundCookieHost); err == nil && entry != nil {
 			out.CodexTurnTickets[0].Cookie = entry.Cookie
 			out.CodexTurnTickets[0].CookieHost = entry.Host
 			out.CodexTurnTickets[0].CookiePayload = entry.Payload
@@ -404,7 +410,7 @@ func (h *AccountHandler) isSimpleMode() bool {
 
 func (h *AccountHandler) buildAccountResponseWithRuntime(ctx context.Context, account *service.Account) AccountWithConcurrency {
 	item := AccountWithConcurrency{
-		Account:            h.accountResponseFromService(account),
+		Account:            h.accountResponseFromService(account, ctx),
 		simpleMode:         h.isSimpleMode(),
 		CurrentConcurrency: 0,
 	}
@@ -834,16 +840,25 @@ func (h *AccountHandler) List(c *gin.Context) {
 		_ = g.Wait()
 	}
 
+	// Build display data once per page; cancellation stops abandoned list work.
+	displayCtx, displayCancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
+	defer displayCancel()
+	if h.settingService != nil {
+		displayCtx = h.settingService.WithCookieAdminSnapshot(displayCtx, accounts)
+	}
 	// Build response with concurrency info
 	result := make([]AccountWithConcurrency, len(accounts))
 	for i := range accounts {
 		acc := &accounts[i]
-		accountResponse := h.accountResponseFromService(acc)
+		var accountResponse *dto.Account
 		if lite {
-			accountResponse = h.accountListResponseFromService(acc)
+			accountResponse = h.accountListResponseFromService(acc, displayCtx)
 			if h.isSimpleMode() {
 				accountResponse.GroupIDs = filterSimpleModeGroupIDs(accountResponse.GroupIDs, simpleModeCompositeServiceGroupIDs(acc))
 			}
+		}
+		if !lite {
+			accountResponse = h.accountResponseFromService(acc, displayCtx)
 		}
 		item := AccountWithConcurrency{
 			Account:            accountResponse,

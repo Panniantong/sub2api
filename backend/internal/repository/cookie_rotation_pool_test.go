@@ -78,6 +78,19 @@ func TestCookieEmailCooldownUsesIndependentMailboxRow(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestCookieEmailCooldownBatch(t *testing.T) {
+	client, mock := newOllamaCloudUsageRepositoryTestClient(t)
+	r := &settingRepository{client: client}
+	now := time.Now().UTC().Truncate(time.Second)
+	mock.ExpectQuery("SELECT email,host,cooldown_until.*email=ANY").WithArgs(sqlmock.AnyArg()).WillReturnRows(sqlmock.NewRows([]string{"email", "host", "cooldown_until"}).AddRow("a@example.com", "one.example", now).AddRow("b@example.com", "two.example", now))
+	values, err := r.CookieEmailCooldownsBatch(context.Background(), []string{"a@example.com", "b@example.com", "empty@example.com"})
+	require.NoError(t, err)
+	require.Equal(t, now, values["a@example.com"]["one.example"])
+	require.Empty(t, values["empty@example.com"])
+	require.Empty(t, values["a@example.com"]["two.example"])
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestCookieHistoryNewAccountIncludesOldMailboxRecords(t *testing.T) {
 	client, mock := newOllamaCloudUsageRepositoryTestClient(t)
 	r := &settingRepository{client: client}

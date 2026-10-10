@@ -569,6 +569,9 @@ func shouldClearStickySession(account *Account, requestedModel string) bool {
 }
 
 type AccountWaitPlan struct {
+	// RecheckPool returns admission to the scheduler after a short wait instead
+	// of pinning a movable request to one busy account.
+	RecheckPool    bool
 	AccountID      int64
 	MaxConcurrency int
 	Timeout        time.Duration

@@ -11,16 +11,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCookiePoolQuotaPriorityReachesBothSchedulers(t *testing.T) {
+func TestCookiePoolPreparationQuotaDoesNotOverrideRequestLoad(t *testing.T) {
 	for _, advanced := range []string{"false", "true"} {
 		t.Run(advanced, func(t *testing.T) {
 			resetOpenAIAdvancedSchedulerSettingCacheForTest()
 			defer resetOpenAIAdvancedSchedulerSettingCacheForTest()
 			now := time.Now()
 			a := cookieGuardTestAccount("one.example", now.Add(time.Hour))
-			a.ID = 1
+			a.ID, a.Concurrency = 1, 20
 			b := cookieGuardTestAccount("one.example", now.Add(time.Hour))
-			b.ID = 2
+			b.ID, b.Concurrency = 2, 20
 			a.Extra["codex_5h_used_percent"], b.Extra["codex_5h_used_percent"] = 20.0, 80.0
 			p := poolTestPolicy()
 			p.QuotaPriority = "used_desc"
@@ -29,13 +29,15 @@ func TestCookiePoolQuotaPriorityReachesBothSchedulers(t *testing.T) {
 			raw, err := json.Marshal(cfg)
 			require.NoError(t, err)
 			repo := &cookiePoolRepoStub{cookieTestRepo: &cookieTestRepo{values: map[string]string{cookieSettingsKey: string(raw), SettingKeyOpenAICodexCookieLibrary: `[{"host":"one.example","cookie":"cookie","expires_at":"2099-01-01T00:00:00Z"}]`}}, snapshot: &CookieRotationPoolSnapshot{Groups: map[int64]*CookieRotationPoolGroup{2: g}}}
-			svc := &OpenAIGatewayService{cfg: &config.Config{}, settingService: &SettingService{settingRepo: repo}, accountRepo: schedulerTestOpenAIAccountRepo{accounts: []Account{a, b}}, rateLimitService: newOpenAIAdvancedSchedulerRateLimitService(advanced), concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}), cache: &schedulerTestGatewayCache{sessionBindings: map[string]int64{}}}
+			svc := &OpenAIGatewayService{cfg: &config.Config{}, settingService: &SettingService{settingRepo: repo}, accountRepo: schedulerTestOpenAIAccountRepo{accounts: []Account{a, b}}, rateLimitService: newOpenAIAdvancedSchedulerRateLimitService(advanced), concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{loadMap: map[int64]*AccountLoadInfo{1: {AccountID: 1}, 2: {AccountID: 2, CurrentConcurrency: 14, LoadRate: 70}}}), cache: &schedulerTestGatewayCache{sessionBindings: map[string]int64{}}}
+			svc.cfg.Gateway.Scheduling.LoadBatchEnabled = true
+			svc.cfg.Gateway.OpenAIWS.LBTopK = 1
 			group := int64(2)
 			ctx := withCookieSchedulingGroup(context.Background(), &group)
 			selected, _, err := svc.SelectAccountWithScheduler(ctx, &group, "", "", "gpt-5.1", nil, OpenAIUpstreamTransportAny, false)
 			require.NoError(t, err)
 			require.NotNil(t, selected)
-			require.EqualValues(t, 2, selected.Account.ID)
+			require.EqualValues(t, 1, selected.Account.ID)
 			if selected.ReleaseFunc != nil {
 				selected.ReleaseFunc()
 			}
@@ -103,14 +105,6 @@ func TestCookiePoolQuotaPriorityAndUnknownUsage(t *testing.T) {
 	reconcileCookiePool(g, p, accounts, cfg, now, map[string]bool{})
 	require.Equal(t, "preparing", g.Members[2].State)
 	require.Empty(t, g.Members[1].State)
-	raw, err := json.Marshal(cfg)
-	require.NoError(t, err)
-	svc := &OpenAIGatewayService{settingService: &SettingService{settingRepo: &cookieTestRepo{values: map[string]string{cookieSettingsKey: string(raw)}}}}
-	order := []*Account{&accounts[2], &accounts[0], &accounts[1]}
-	cookiePoolQuotaOrder(context.Background(), svc, order, func(a *Account) *Account { return a }, false)
-	require.EqualValues(t, 2, order[0].ID)
-	require.EqualValues(t, 1, order[1].ID)
-	require.EqualValues(t, 3, order[2].ID)
 	accounts[1].Extra["codex_5h_reset_at"] = now.Add(-time.Second).Format(time.RFC3339Nano)
 	_, known := cookiePoolQuotaUsed(&accounts[1], now)
 	require.False(t, known, "expired window cannot get priority")

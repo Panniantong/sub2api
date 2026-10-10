@@ -178,7 +178,7 @@ export interface CookiePoolDashboardAccount {
   hosts: { host: string; state: string; expires_at: string; cooldown_until?: string }[]
 }
 export async function getDashboard(details_group_id?: number) {
-  return (await apiClient.get<CookieDashboard>('/admin/settings/cookie/dashboard', { params: details_group_id ? { details_group_id } : undefined })).data
+  return (await apiClient.get<CookieDashboard>('/admin/settings/cookie/dashboard', { timeout: 15000, params: details_group_id ? { details_group_id } : undefined })).data
 }
 export async function saveSettings(value: CookieSettings) {
   return (await apiClient.put<CookieSettings>('/admin/settings/cookie', value)).data
