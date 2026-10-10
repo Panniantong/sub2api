@@ -59,6 +59,7 @@ func (s *OpenAIGatewayService) refreshCookieDispatchAccount(ctx context.Context,
 
 func cookieDispatchUnavailable() *UpstreamFailoverError {
 	return &UpstreamFailoverError{StatusCode: http.StatusServiceUnavailable, RequestScopedTransient: true,
+		Reason: "cookie_binding_unavailable", NextAccountAction: NextAccountRetry,
 		ResponseBody: []byte(`{"error":{"type":"cookie_binding_changed","message":"Cookie Host binding unavailable; reselect account"}}`)}
 }
 

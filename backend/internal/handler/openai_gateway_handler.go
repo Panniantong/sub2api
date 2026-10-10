@@ -47,6 +47,7 @@ type OpenAIGatewayHandler struct {
 	concurrencyHelper          *ConcurrencyHelper
 	imageLimiter               *imageConcurrencyLimiter
 	maxAccountSwitches         int
+	retryBudgetSeconds         int
 	cfg                        *config.Config
 }
 
@@ -368,7 +369,12 @@ func NewOpenAIGatewayHandler(
 			maxAccountSwitches = cfg.Gateway.MaxAccountSwitches
 		}
 	}
+	retryBudgetSeconds := 0
+	if cfg != nil {
+		retryBudgetSeconds = cfg.Gateway.OpenAIRetryBudgetSeconds
+	}
 	return &OpenAIGatewayHandler{
+		retryBudgetSeconds:       retryBudgetSeconds,
 		gatewayService:           gatewayService,
 		billingCacheService:      billingCacheService,
 		apiKeyService:            apiKeyService,
@@ -386,6 +392,8 @@ func NewOpenAIGatewayHandler(
 // Responses handles OpenAI Responses API endpoint
 // POST /openai/v1/responses
 func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
+	retries, finishRetryBudget := h.startRetryBudget(c)
+	defer finishRetryBudget()
 	// 局部兜底：确保该 handler 内部任何 panic 都不会击穿到进程级。
 	streamStarted := false
 	defer h.recoverResponsesPanic(c, &streamStarted)
@@ -652,6 +660,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	requireCompact := legacyCompact
 
 	maxAccountSwitches := h.maxAccountSwitches
+	if retries != nil {
+		maxAccountSwitches = min(maxAccountSwitches, boundedOpenAIMaxSwitches)
+	}
 	switchCount := 0
 	firstOutputTimeoutSwitchCount := 0
 	profitVetoCount := 0
@@ -803,6 +814,14 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			return
 		}
 
+		if !retries.admit(account.ID, failedAccountIDs) {
+			if accountReleaseFunc != nil {
+				accountReleaseFunc()
+			}
+			h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Upstream retry budget exhausted", streamStarted)
+			return
+		}
+
 		// Forward request
 		service.SetOpsLatencyMs(c, service.OpsRoutingLatencyMsKey, time.Since(routingStart).Milliseconds())
 		forwardStart := time.Now()
@@ -937,11 +956,11 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 						return
 					}
 					// 池模式：同账号重试
-					if failoverErr.RetryableOnSameAccount {
+					if boundedSameAccountEligible(retries, failoverErr) {
 						retryLimit := effectiveSameAccountRetryLimit(failoverErr, account)
-						if sameAccountRetryAllowed(failoverErr, sameAccountRetryCount[account.ID], retryLimit) {
+						if boundedRetryAllowed(retries, account.ID, failoverErr, sameAccountRetryCount[account.ID], retryLimit) {
 							sameAccountRetryCount[account.ID]++
-							retryDelay := sameAccountRetryDelayFor(failoverErr, sameAccountRetryCount[account.ID])
+							retryDelay := boundedRetryDelay(retries, failoverErr, sameAccountRetryCount[account.ID])
 							reqLog.Warn("openai.pool_mode_same_account_retry",
 								zap.Int64("account_id", account.ID),
 								zap.Int("upstream_status", failoverErr.StatusCode),
@@ -1175,6 +1194,8 @@ func (h *OpenAIGatewayHandler) logOpenAIRemoteCompactOutcome(c *gin.Context, sta
 // Messages handles Anthropic Messages API requests routed to OpenAI platform.
 // POST /v1/messages (when group platform is OpenAI)
 func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
+	retries, finishRetryBudget := h.startRetryBudget(c)
+	defer finishRetryBudget()
 	streamStarted := false
 	defer h.recoverAnthropicMessagesPanic(c, &streamStarted)
 
@@ -1309,6 +1330,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	}
 
 	maxAccountSwitches := h.maxAccountSwitches
+	if retries != nil {
+		maxAccountSwitches = min(maxAccountSwitches, boundedOpenAIMaxSwitches)
+	}
 	switchCount := 0
 	profitVetoCount := 0
 	failedAccountIDs := make(map[int64]struct{})
@@ -1399,6 +1423,14 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			continue
 		}
 		if slotResult != openAISlotAcquireOK {
+			return
+		}
+
+		if !retries.admit(account.ID, failedAccountIDs) {
+			if accountReleaseFunc != nil {
+				accountReleaseFunc()
+			}
+			h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Upstream retry budget exhausted", streamStarted)
 			return
 		}
 
@@ -1508,11 +1540,11 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 						return
 					}
 					// 池模式：同账号重试
-					if failoverErr.RetryableOnSameAccount {
+					if boundedSameAccountEligible(retries, failoverErr) {
 						retryLimit := effectiveSameAccountRetryLimit(failoverErr, account)
-						if sameAccountRetryAllowed(failoverErr, sameAccountRetryCount[account.ID], retryLimit) {
+						if boundedRetryAllowed(retries, account.ID, failoverErr, sameAccountRetryCount[account.ID], retryLimit) {
 							sameAccountRetryCount[account.ID]++
-							retryDelay := sameAccountRetryDelayFor(failoverErr, sameAccountRetryCount[account.ID])
+							retryDelay := boundedRetryDelay(retries, failoverErr, sameAccountRetryCount[account.ID])
 							reqLog.Warn("openai_messages.pool_mode_same_account_retry",
 								zap.Int64("account_id", account.ID),
 								zap.Int("upstream_status", failoverErr.StatusCode),

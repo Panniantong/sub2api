@@ -1102,6 +1102,8 @@ type GatewayConfig struct {
 
 	// 账户切换最大次数（遇到上游错误时切换到其他账户的次数上限）
 	MaxAccountSwitches int `mapstructure:"max_account_switches"`
+	// OpenAIRetryBudgetSeconds bounds HTTP pre-output work, including retries and selection. Zero disables it.
+	OpenAIRetryBudgetSeconds int `mapstructure:"openai_retry_budget_seconds"`
 	// Gemini 账户切换最大次数（Gemini 平台单独配置，因 API 限制更严格）
 	MaxAccountSwitchesGemini int `mapstructure:"max_account_switches_gemini"`
 
@@ -2457,6 +2459,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.log_upstream_error_body_max_bytes", 2048)
 	viper.SetDefault("gateway.inject_beta_for_apikey", false)
 	viper.SetDefault("gateway.failover_on_400", false)
+	viper.SetDefault("gateway.openai_retry_budget_seconds", 25)
 	viper.SetDefault("gateway.max_account_switches", 10)
 	viper.SetDefault("gateway.max_account_switches_gemini", 3)
 	viper.SetDefault("gateway.force_codex_cli", false)
@@ -2752,6 +2755,9 @@ func setEnvReachableDefaults() {
 }
 
 func (c *Config) Validate() error {
+	if c.Gateway.OpenAIRetryBudgetSeconds < 0 || c.Gateway.OpenAIRetryBudgetSeconds > 3600 {
+		return fmt.Errorf("gateway.openai_retry_budget_seconds must be between 0 and 3600")
+	}
 	forwardedClientIPHeaders, err := NormalizeForwardedClientIPHeaders(c.Security.ForwardedClientIPHeaders)
 	if err != nil {
 		return fmt.Errorf("security.forwarded_client_ip_headers: %w", err)

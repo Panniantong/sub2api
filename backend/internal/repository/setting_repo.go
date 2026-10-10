@@ -2,7 +2,10 @@ package repository
 
 import (
 	"context"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 
 	"github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/setting"
@@ -10,7 +13,11 @@ import (
 )
 
 type settingRepository struct {
-	client *ent.Client
+	client             *ent.Client
+	cooldownMu         sync.Mutex
+	cooldownCache      map[string]cookieCooldownCacheEntry
+	cooldownGeneration uint64
+	cooldownFlight     singleflight.Group
 }
 
 func NewSettingRepository(client *ent.Client) service.SettingRepository {

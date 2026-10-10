@@ -55,6 +55,44 @@ func TestCookieDispatchRejectsInvalidCurrentRoute(t *testing.T) {
 			var failover *UpstreamFailoverError
 			require.ErrorAs(t, err, &failover)
 			require.True(t, failover.RequestScopedTransient)
+			require.Equal(t, GatewayFailureReason("cookie_binding_unavailable"), failover.Reason)
+			require.True(t, failover.ShouldRetryNextAccount())
+			require.False(t, failover.RetryableOnSameAccount)
+		})
+	}
+}
+
+func TestCookieDispatchRotationAdmission(t *testing.T) {
+	for _, state := range []string{"running_valid", "running_unbound", "waiting_unbound", "degraded_exhausted"} {
+		t.Run(state, func(t *testing.T) {
+			a := cookieGuardTestAccount("candidate.example", time.Now().Add(time.Minute))
+			a.Extra[openAICodexCookieRotationStatusExtraKey] = "running"
+			group := int64(2)
+			if state != "running_valid" {
+				delete(a.Extra, openAICodexCookieHostExtraKey)
+			}
+			if state == "waiting_unbound" {
+				a.Extra[openAICodexCookieRotationStatusExtraKey] = "waiting"
+			}
+			if state == "degraded_exhausted" {
+				exhaustCookieTestCandidates(&a)
+				group = 3
+			}
+			svc := &OpenAIGatewayService{settingService: cookieDegradedTestSettings(), accountRepo: &schedulerTestOpenAIAccountRepo{accounts: []Account{a}}}
+			ctx := withCookieSchedulingGroup(context.Background(), &group)
+			got, err := svc.refreshCookieDispatchAccount(ctx, &a)
+			if state == "running_unbound" || state == "waiting_unbound" {
+				require.Error(t, err)
+				require.Nil(t, got)
+				released := 0
+				selection, selectErr := svc.newAcquiredSelectionResult(ctx, &a, func() { released++ })
+				require.Error(t, selectErr)
+				require.Nil(t, selection)
+				require.Equal(t, 1, released, "rejected admission must release the acquired account slot")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, state == "degraded_exhausted", got.openaiCookieDegraded)
 		})
 	}
 }
