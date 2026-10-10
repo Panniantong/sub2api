@@ -244,6 +244,7 @@ type UpdateSettingsRequest struct {
 
 	// Gateway forwarding behavior
 	OpenAITTFTMode                         *string `json:"openai_ttft_mode"`
+	OpenAIStreamStructuralCommit           *bool   `json:"openai_stream_structural_commit"`
 	EnableFingerprintUnification           *bool   `json:"enable_fingerprint_unification"`
 	EnableMetadataPassthrough              *bool   `json:"enable_metadata_passthrough"`
 	EnableCCHSigning                       *bool   `json:"enable_cch_signing"`
@@ -1712,6 +1713,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 				return *req.OpenAITTFTMode
 			}
 			return previousSettings.OpenAITTFTMode
+		}(),
+		OpenAIStreamStructuralCommit: func() bool {
+			if req.OpenAIStreamStructuralCommit != nil {
+				return *req.OpenAIStreamStructuralCommit
+			}
+			return previousSettings.OpenAIStreamStructuralCommit
 		}(),
 		EnableMetadataPassthrough: func() bool {
 			if req.EnableMetadataPassthrough != nil {

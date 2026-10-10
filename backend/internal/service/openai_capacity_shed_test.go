@@ -185,6 +185,11 @@ func TestOpenAIStreamMetadataAndKeepaliveBeforeOverloadFailOver(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Pre-output failover across an opened reasoning item is the legacy
+			// hold-until-visible contract. With structural commit (default on) the
+			// preamble is already downstream and the failure is forwarded instead;
+			// see TestOpenAIStreamStructuralCommitForwardsLaterFailureInsteadOfFailover.
+			setOpenAIStreamStructuralCommitForTest(t, false)
 			svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}}
 			rec := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(rec)

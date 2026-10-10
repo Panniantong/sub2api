@@ -55,6 +55,7 @@ const backendModeDBTimeout = 5 * time.Second
 // cachedGatewayForwardingSettings 缓存网关转发行为设置（进程内缓存，60s TTL）
 type cachedGatewayForwardingSettings struct {
 	openAITTFTMode                   string
+	openAIStreamStructuralCommit     bool
 	fingerprintUnification           bool
 	metadataPassthrough              bool
 	cchSigning                       bool
@@ -858,6 +859,7 @@ func (s *SettingService) IsBackendModeEnabled(ctx context.Context) bool {
 
 type gatewayForwardingSettingsResult struct {
 	openAITTFTMode                                                                        string
+	openAIStreamStructuralCommit                                                          bool
 	fp, mp, cch, claudeOAuthSystemPromptInjection, cacheTTL1h, rewriteMessageCacheControl bool
 	clientDatelineNormalization                                                           bool
 	claudeOAuthSystemPrompt, claudeOAuthSystemPromptBlocks                                string
@@ -868,6 +870,7 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 		if time.Now().UnixNano() < cached.expiresAt {
 			return gatewayForwardingSettingsResult{
 				openAITTFTMode:                   cached.openAITTFTMode,
+				openAIStreamStructuralCommit:     cached.openAIStreamStructuralCommit,
 				fp:                               cached.fingerprintUnification,
 				mp:                               cached.metadataPassthrough,
 				cch:                              cached.cchSigning,
@@ -901,6 +904,7 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 		defer cancel()
 		values, err := s.settingRepo.GetMultiple(dbCtx, []string{
 			SettingKeyOpenAITTFTMode,
+			SettingKeyOpenAIStreamStructuralCommit,
 			SettingKeyEnableFingerprintUnification,
 			SettingKeyEnableMetadataPassthrough,
 			SettingKeyEnableCCHSigning,
@@ -915,6 +919,7 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 			slog.Warn("failed to get gateway forwarding settings", "error", err)
 			gatewayForwardingCache.Store(&cachedGatewayForwardingSettings{
 				openAITTFTMode:                   OpenAITTFTModeSemantic,
+				openAIStreamStructuralCommit:     true,
 				fingerprintUnification:           true,
 				metadataPassthrough:              false,
 				cchSigning:                       false,
@@ -924,9 +929,10 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 				clientDatelineNormalization:      true,
 				expiresAt:                        time.Now().Add(gatewayForwardingErrorTTL).UnixNano(),
 			})
-			return gatewayForwardingSettingsResult{openAITTFTMode: OpenAITTFTModeSemantic, fp: true, claudeOAuthSystemPromptInjection: true, rewriteMessageCacheControl: s.defaultRewriteMessageCacheControl(), clientDatelineNormalization: true}, nil
+			return gatewayForwardingSettingsResult{openAITTFTMode: OpenAITTFTModeSemantic, openAIStreamStructuralCommit: true, fp: true, claudeOAuthSystemPromptInjection: true, rewriteMessageCacheControl: s.defaultRewriteMessageCacheControl(), clientDatelineNormalization: true}, nil
 		}
 		ttftMode := normalizeOpenAITTFTMode(values[SettingKeyOpenAITTFTMode])
+		structuralCommit := parseOpenAIStreamStructuralCommit(values[SettingKeyOpenAIStreamStructuralCommit])
 		fp := true
 		if v, ok := values[SettingKeyEnableFingerprintUnification]; ok && v != "" {
 			fp = v == "true"
@@ -950,6 +956,7 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 		}
 		gatewayForwardingCache.Store(&cachedGatewayForwardingSettings{
 			openAITTFTMode:                   ttftMode,
+			openAIStreamStructuralCommit:     structuralCommit,
 			fingerprintUnification:           fp,
 			metadataPassthrough:              mp,
 			cchSigning:                       cch,
@@ -963,6 +970,7 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 		})
 		return gatewayForwardingSettingsResult{
 			openAITTFTMode:                   ttftMode,
+			openAIStreamStructuralCommit:     structuralCommit,
 			fp:                               fp,
 			mp:                               mp,
 			cch:                              cch,
@@ -977,7 +985,14 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 	if r, ok := val.(gatewayForwardingSettingsResult); ok {
 		return r
 	}
-	return gatewayForwardingSettingsResult{fp: true, claudeOAuthSystemPromptInjection: true, clientDatelineNormalization: true}
+	return gatewayForwardingSettingsResult{openAIStreamStructuralCommit: true, fp: true, claudeOAuthSystemPromptInjection: true, clientDatelineNormalization: true}
+}
+
+// IsOpenAIStreamStructuralCommitEnabled reports whether Responses streams
+// commit the first output at response.output_item.added instead of waiting
+// for visible content.
+func (s *SettingService) IsOpenAIStreamStructuralCommitEnabled(ctx context.Context) bool {
+	return s.getGatewayForwardingSettingsCached(ctx).openAIStreamStructuralCommit
 }
 
 // GetOpenAITTFTMode 返回 Responses first_token_ms 的统计口径。

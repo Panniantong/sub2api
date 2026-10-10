@@ -673,6 +673,10 @@ const (
 	OpenAITTFTModeSemantic   = "semantic"
 	OpenAITTFTModeCPA        = "cpa"
 	OpenAITTFTModeVisible    = "visible"
+	// SettingKeyOpenAIStreamStructuralCommit: Responses 流式在上游首个
+	// response.output_item.added 到达时即提交首输出，前置事件立刻下发（默认 true）。
+	// 关闭则沿用旧行为：压住全部事件直到首个可见/语义内容。
+	SettingKeyOpenAIStreamStructuralCommit = "openai_stream_structural_commit"
 	// SettingKeyEnableFingerprintUnification 是否统一 OAuth 账号的 X-Stainless-* 指纹头（默认 true）
 	SettingKeyEnableFingerprintUnification = "enable_fingerprint_unification"
 	// SettingKeyEnableMetadataPassthrough 是否透传客户端原始 metadata.user_id（默认 false）

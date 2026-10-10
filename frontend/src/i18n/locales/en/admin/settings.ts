@@ -510,6 +510,8 @@ export default {
         openaiTTFTModeSemantic: 'Legacy-compatible (semantic event)',
         openaiTTFTModeVisible: 'Actual visible output',
         openaiTTFTModeHint: 'CPA applies to ordinary OpenAI HTTP streams: from the upstream request to the first positive body read, including preamble events and heartbeats. It excludes gateway queueing and does not represent visible text arrival or change WS. Legacy and visible-output options retain their existing Responses semantics.',
+        openaiStreamStructuralCommit: 'Release Responses preamble at first output item',
+        openaiStreamStructuralCommitHint: 'Forward response.created / in_progress / output_item.added as soon as upstream emits the first output item instead of holding them until visible content. Downstream semantic first-token metrics then track this gateway\'s upstream first byte. Trade-off: in-stream errors after that point are forwarded instead of failing over to another account. Disable to restore holding the preamble until visible content.',
         fingerprintUnification: 'Fingerprint Unification',
         fingerprintUnificationHint: 'Unify X-Stainless-* headers across users sharing the same OAuth account. Disabling passes through each client\'s original headers.',
         metadataPassthrough: 'Metadata Passthrough',

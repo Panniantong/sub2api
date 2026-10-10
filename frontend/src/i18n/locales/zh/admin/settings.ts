@@ -503,6 +503,8 @@ export default {
         openaiTTFTModeSemantic: '历史兼容（语义事件）',
         openaiTTFTModeVisible: '真实可见输出',
         openaiTTFTModeHint: 'CPA 适用于普通 OpenAI HTTP 流式请求：从发起上游请求到首次读到响应体数据，包含前置事件和心跳，不代表正文到达；不含网关前置排队，不影响 WS。历史兼容和真实可见输出选项保留原有 Responses 口径。',
+        openaiStreamStructuralCommit: 'Responses 流式前置事件立即下发',
+        openaiStreamStructuralCommitHint: '上游发出首个 response.output_item.added 后立刻把 response.created / in_progress / output_item.added 下发给接入方，不再等到首段可见内容。接入方按语义事件统计的首字会与本网关上游首字节基本一致。代价：此后流内错误不再由本网关换号重试，而是原样下发由接入方处理。关闭则恢复压住前置事件直到首段可见内容。',
         fingerprintUnification: '指纹统一化',
         fingerprintUnificationHint: '统一共享同一 OAuth 账号的用户的 X-Stainless-* 请求头。关闭后透传客户端原始请求头。',
         metadataPassthrough: 'Metadata 透传',

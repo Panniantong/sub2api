@@ -73,6 +73,10 @@ func TestOpenAIResponsesTTFTStartsAtCompletedImage(t *testing.T) {
 
 func TestOpenAINativeMetadataAndKeepaliveDoNotDisarmFirstOutputTimeout(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	// Legacy contract: an empty reasoning item is not output, so the first-output
+	// timeout stays armed. With structural commit (default on) the item commits the
+	// attempt and disarms the timer; see TestOpenAIStreamStructuralCommitDisarmsFirstOutputTimeout.
+	setOpenAIStreamStructuralCommitForTest(t, false)
 	svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{
 		MaxLineSize:                     defaultMaxLineSize,
 		OpenAIFirstOutputTimeoutSeconds: 1,

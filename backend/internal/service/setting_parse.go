@@ -861,6 +861,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	// Gateway forwarding behavior (defaults: fingerprint=true, metadata_passthrough=false,
 	// cch_signing=false, claude_oauth_system_prompt_injection=true)
 	result.OpenAITTFTMode = normalizeOpenAITTFTMode(settings[SettingKeyOpenAITTFTMode])
+	result.OpenAIStreamStructuralCommit = parseOpenAIStreamStructuralCommit(settings[SettingKeyOpenAIStreamStructuralCommit])
 	if v, ok := settings[SettingKeyEnableFingerprintUnification]; ok && v != "" {
 		result.EnableFingerprintUnification = v == "true"
 	} else {
@@ -1000,6 +1001,12 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	})
 
 	return result
+}
+
+// parseOpenAIStreamStructuralCommit defaults to enabled; only an explicit
+// "false" keeps the legacy hold-until-visible-content behavior.
+func parseOpenAIStreamStructuralCommit(raw string) bool {
+	return strings.ToLower(strings.TrimSpace(raw)) != "false"
 }
 
 func normalizeOpenAITTFTMode(mode string) string {

@@ -92,3 +92,27 @@ HTTP 客户端缓存键增加上游 profile，避免同一个账户或代理的�
 使用同一模型、账户池、请求输入、输出长度和并发，分别收集冷连接、热连接以及需要排队的样本。短期开启 debug 诊断，比较 `first_output_ms`、`first_text_ms`、`relay_first_output_ms` 的 P50/P95/P99 和连接复用比例，同时检查错误率、重试率、usage、取消请求及工具调用完整性。客户端测试必须解析到完整正文事件，不能只以 HTTP 响应头或心跳作为首字。
 
 网关内额外转发延迟可向毫秒级优化；端到端首字还包含上游模型生成、排队及网络耗时。当前尚无线上数据，不能承诺端到端已经达到毫秒级。若上游很快而客户端仍慢，应继续定位反向代理缓冲、压缩和客户端渲染；若耗时集中于上游或排队，则据实测另行调整，避免无依据放大并发或削弱重试与计费保障。
+
+## 2026-10-10：前置事件在首个输出项时下发（接入方首字对齐）
+
+现象：9091（本项目）对接到 8080（另一套 Sub2API，`openai_ttft_mode=semantic`）。最近 2 小时同一批约 3.2 万条流式请求，9091 自己记录的 `first_token_ms`（cpa 口径）p50 1.6 秒、p90 5.3 秒；8080 对 9091 渠道记录的 p50 8.0 秒、p90 17.8 秒；两边总耗时 p50 都约 19 秒。同一时段 8080 的 pro 渠道（open.codex521.cc）跑同模型同 effort（gpt-6.1-sol high）总耗时 19.7 秒与 9091 渠道的 20.3 秒接近、输出量相当，但 8080 记到的首字是 0.7 秒。
+
+原因：Responses 流式在首输出前把 `response.created`、`response.in_progress`、空 `response.output_item.added`（reasoning，summary 为空）全部暂存在 attempt 本地 stage，直到首个可见/语义内容才一起下发，用于"输出前错误换号"。接入方按语义事件统计首字时，收到的第一个非元数据事件就是推理完成后才放出的那批，因此 8080 的首字等于模型思考时长，而 pro 渠道是立刻转发前置事件。
+
+改动：新增网关转发设置 `openai_stream_structural_commit`（默认开启，设置页「Responses 流式前置事件立即下发」）。开启时首个 `response.output_item.added` 即提交首输出：stage 中的前置事件立刻刷给接入方，后续事件沿用原有批量发送与首段正文独立刷新。关闭时恢复原行为。三条路径一致：原生 Responses 转发、透传、WS→HTTP 桥接的首轮暂存。
+
+边界：提交后流内再出现可重试错误（如上游 429/过载）不再由本网关换号重放，`response.failed` 原样下发，由接入方自己的 failover 处理。上游有一种已知模式是先发 `response.created`、空 reasoning `output_item.added`、空 summary part 和若干 keepalive，再推过载 error（回归 `TestOpenAIStreamMetadataAndKeepaliveBeforeOverloadFailOver` 即此场景）；开启后这类失败会到达接入方。同理，`openai_first_output_timeout_seconds` 只守到首次提交：开启后首个输出项即提交，之后上游停滞不再触发首输出超时换号（9091 当前未启用该超时）。最近 2 小时 9091 上游阶段记录 2439 条 overloaded、3379 条 429，占成功请求约 18%，其中多少发生在首个输出项之后未单独统计；接入方（8080）对 `response.failed` 同样走自己的换号，终端用户仍能得到结果，但 9091 渠道在接入方侧的错误计数会上升。`first_token_ms` 的三种口径不变；若希望两边数字直接可比，9091 应与 8080 一样使用 `semantic`（当前 9091 为 `cpa`）。本改动只让接入方更早收到前置事件，模型产出首段正文的时间不变。
+
+验证：单测覆盖提交判定、默认值与缓存回退、开启时前置事件在无可见内容时即下发、关闭时继续暂存且顺序不变、提交后可重试失败改为原样下发而关闭时仍换号。`go build`、`go vet` 通过；FirstOutput/Flush/TTFT/Setting 相关回归通过，仅剩分支既有的 `TestOpenAIGatewayService_APIKeyPassthrough_RebuildsUpstreamErrors` 失败。前端 `vue-tsc`、SettingsView 与 i18n 完整性测试通过。未部署、未改线上设置。
+
+### 同一时段的另一项发现：选号阶段排队后拒绝
+
+9091 `ops_error_logs` 最近 2 小时有 30155 条 `routing` 阶段 503「Service temporarily unavailable」，全部来自分组 5（降智分组）；同期该组成功请求 9716 条，即约四分之三的降智请求在等待后被拒。被拒请求的 `routing_latency_ms` p50 34.8 秒、p90 89 秒（对应 `gateway.scheduling.fallback_wait_timeout` 默认 30 秒与 `sticky_session_wait_timeout` 默认 120 秒的等待）。错误按 10 分钟分桶呈阵发（11:20–11:40、12:00–12:20 各数千条）。分组 2（正常账号）同期只有 2 条。
+
+活跃池运行态（分组 2）：当前需求 85、窗口峰值 93、目标容量 168、就绪容量 180，成员 active 9 / exhausted 71 / waiting 180 / standby 9；分组 2 共 40 个可调度账号、并发合计 800。降智分组只能使用 Host 全部冷却（exhausted）的账号，容量取决于有多少账号处于该状态，与分组 2 的容量策略无关。
+
+这部分不是转发代码问题，是容量与等待策略：
+
+- 接入方视角，等 35 秒再收到 503 比立刻收到 503 更糟——8080 自己有多渠道 failover，越早拿到 503 越早切走。可考虑把 9091 的 `GATEWAY_SCHEDULING_FALLBACK_WAIT_TIMEOUT` 从 30s 降到数秒、`GATEWAY_SCHEDULING_STICKY_SESSION_WAIT_TIMEOUT` 从 120s 降到十几秒（环境变量名由 viper `.`→`_` 映射得到，需在 compose 中设置并重启）。
+- 降智分组要么增加可降级账号 / 放宽降级条件，要么在接入方降低该渠道权重。
+- 这些是部署与策略调整，本次未改线上配置。

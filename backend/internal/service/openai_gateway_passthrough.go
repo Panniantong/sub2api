@@ -1427,6 +1427,47 @@ func (s *OpenAIGatewayService) openAITTFTMode(ctx context.Context) string {
 	return normalizeOpenAITTFTMode(mode)
 }
 
+// openAIStreamStructuralCommit reads the structural-commit switch. Without a
+// setting service it falls back to the process cache, then to enabled.
+func (s *OpenAIGatewayService) openAIStreamStructuralCommit(ctx context.Context) bool {
+	if s != nil && s.settingService != nil {
+		return s.settingService.IsOpenAIStreamStructuralCommitEnabled(ctx)
+	}
+	if cached, ok := gatewayForwardingCache.Load().(*cachedGatewayForwardingSettings); ok && cached != nil {
+		if cached.expiresAt == 0 || time.Now().UnixNano() < cached.expiresAt {
+			return cached.openAIStreamStructuralCommit
+		}
+	}
+	return true
+}
+
+// openAIStreamDataStartsStructuralProgress is true for the first structural
+// event of a Responses stream: the upstream model has started an output item.
+// Empty reasoning items carry no visible content, but they prove the attempt
+// is alive, exactly like upstream relays that forward them immediately.
+func openAIStreamDataStartsStructuralProgress(data, eventType string) bool {
+	trimmed := strings.TrimSpace(data)
+	if trimmed == "" || trimmed == "[DONE]" || !gjson.Valid(trimmed) {
+		return false
+	}
+	eventType = strings.TrimSpace(eventType)
+	if eventType == "" {
+		eventType = strings.TrimSpace(gjson.Get(trimmed, "type").String())
+	}
+	return eventType == "response.output_item.added"
+}
+
+// openAIStreamDataCommitsFirstOutput decides when staged pre-output events are
+// released downstream. With structural commit enabled the stage opens at the
+// first output item; otherwise only visible/semantic content opens it. Either
+// way a committed attempt can no longer fail over on an in-stream error.
+func openAIStreamDataCommitsFirstOutput(data, eventType string, structuralCommit bool) bool {
+	if openAIStreamDataStartsClientOutput(data, eventType) {
+		return true
+	}
+	return structuralCommit && openAIStreamDataStartsStructuralProgress(data, eventType)
+}
+
 func openAIStreamDataStartsTTFT(data, eventType string, forceOutput bool, mode string) bool {
 	if mode == OpenAITTFTModeVisible {
 		return openAIStreamDataStartsVisibleOutput(data, eventType)
@@ -2025,6 +2066,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 	var firstTokenMs *int
 	responseID := ""
 	ttftMode := s.openAITTFTMode(ctx)
+	structuralCommit := s.openAIStreamStructuralCommit(ctx)
 	clientDisconnected := false
 	sawDone := false
 	sawTerminalEvent := false
@@ -2314,7 +2356,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 				trimmedData = strings.TrimSpace(string(sanitizedData))
 				line = "data: " + string(sanitizedData)
 			}
-			lineStartsClientOutput = forceFlushFailedEvent || openAIStreamDataStartsClientOutput(trimmedData, eventType)
+			lineStartsClientOutput = forceFlushFailedEvent || openAIStreamDataCommitsFirstOutput(trimmedData, eventType, structuralCommit)
 			if lineStartsClientOutput && trimmedData != "[DONE]" && !openAIStreamEventTypeIsTerminal(eventType) {
 				semanticOutputSeen = true
 			}
