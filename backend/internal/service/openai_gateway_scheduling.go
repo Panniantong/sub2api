@@ -6,6 +6,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -238,6 +239,28 @@ func (s *OpenAIGatewayService) BindStickySession(ctx context.Context, groupID *i
 	ttl := openaiStickySessionTTL
 	if s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.StickySessionTTLSeconds > 0 {
 		ttl = time.Duration(s.cfg.Gateway.OpenAIWS.StickySessionTTLSeconds) * time.Second
+	}
+	// A low-load spillover is temporary. Preserve an existing session owner
+	// at both selection and post-admission binding points. No account SQL is
+	// needed; an unavailable owner can be retried after recovery or TTL expiry.
+	policy := OpenAIRequestSchedulingFromContext(ctx)
+	if policy.Enabled && policy.Mode == "low_load" {
+		if cache, ok := s.cache.(interface {
+			PreserveSessionAccountID(context.Context, int64, string, string, int64, time.Duration, time.Duration, bool) error
+		}); ok {
+			legacy := ""
+			if s.openAISessionHashReadOldFallbackEnabled() || s.openAISessionHashDualWriteOldEnabled() {
+				legacy = s.openAILegacySessionCacheKey(ctx, sessionHash)
+			}
+			return cache.PreserveSessionAccountID(ctx, derefGroupID(groupID), s.openAISessionCacheKey(sessionHash), legacy, accountID, ttl, s.openAIStickyLegacyTTL(ttl), s.openAISessionHashDualWriteOldEnabled())
+		}
+		existing, err := s.getStickySessionAccountID(ctx, groupID, sessionHash)
+		if err != nil && !errors.Is(err, ErrStickySessionNotFound) {
+			return nil
+		}
+		if existing > 0 && existing != accountID {
+			return nil
+		}
 	}
 	return s.setStickySessionAccountID(ctx, groupID, sessionHash, accountID, ttl)
 }

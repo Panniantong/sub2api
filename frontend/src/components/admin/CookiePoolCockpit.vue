@@ -8,7 +8,7 @@
       <div v-for="metric in totals" :key="metric.label" class="card p-5"><p class="text-sm text-gray-500">{{ metric.label }}</p><p class="mt-2 text-3xl font-semibold tabular-nums" :class="metric.tone">{{ metric.value }}</p><p class="mt-2 text-xs leading-5 text-gray-500">{{ metric.hint }}</p></div>
     </div>
     <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-orange-200 bg-orange-50 px-5 py-4 dark:border-orange-900 dark:bg-orange-950/20">
-      <div><h3 class="text-sm font-semibold text-orange-700 dark:text-orange-300">降级流量独立统计</h3><p class="mt-1 text-xs leading-5 text-gray-500">{{ dashboard?.degraded_group_id ? `降级组 #${dashboard.degraded_group_id}` : '未配置降级组' }} · 降级请求不计入正常组当前请求、窗口峰值或动态目标容量。</p></div>
+      <div><h3 class="text-sm font-semibold text-orange-700 dark:text-orange-300">降级目标分组流量</h3><p class="mt-1 text-xs leading-5 text-gray-500">{{ dashboard?.degraded_group_id ? `降级组 #${dashboard.degraded_group_id}` : '未配置降级组' }} · 统计该分组全部请求，包含实际归属账号的请求。若此组也启用轮转池，其分组请求量参与本组动态容量计算；临时降级账号不会加入本组轮转池。</p></div>
       <div class="flex items-baseline gap-2"><strong class="text-2xl tabular-nums text-orange-600">{{ dashboard?.degraded_group_id ? dashboard.degraded_current_requests ?? '—' : '—' }}</strong><span class="text-sm text-gray-500">降级组当前请求</span></div>
     </div>
     <div class="flex flex-wrap items-center justify-between gap-3"><h3 class="font-semibold">分组运行状态 <span class="ml-1 text-sm font-normal text-gray-500">{{ rows.length }} 组</span></h3><input v-model="search" type="search" class="input w-full sm:w-64" placeholder="搜索分组名称或编号" aria-label="搜索驾驶舱分组" /></div>

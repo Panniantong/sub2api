@@ -260,11 +260,8 @@ func (s *SettingService) setOpenAICookieSettings(ctx context.Context, value *Ope
 	}
 	value.DegradedGroupName = ""
 	if value.DegradedGroupID > 0 {
-		for _, id := range value.RotationGroupIDs {
-			if id == value.DegradedGroupID {
-				return fmt.Errorf("降级分组不能同时作为 Host 轮换来源分组")
-			}
-		}
+		// A destination may also own ordinary accounts that rotate. Rotation
+		// scope uses persisted membership, never transient degraded routing.
 		if s.defaultSubGroupReader == nil {
 			return fmt.Errorf("分组校验服务不可用")
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand/v2"
 	"strconv"
 	"strings"
 
@@ -54,6 +55,7 @@ func parseOpenAIGroupPolicies(raw string) ([]OpenAIGroupSchedulingPolicy, error)
 }
 
 type openAISchedulingSnapshotKey struct{}
+type openAIAffinityDecisionKey struct{}
 
 func parseOpenAIRequestSchedulingPolicy(values map[string]string) OpenAIRequestSchedulingPolicy {
 	p := OpenAIRequestSchedulingPolicy{Mode: "balanced", QueueSeconds: 2, PreOutputSeconds: -1, MaxSwitches: -1}
@@ -143,6 +145,7 @@ func (s *OpenAIGatewayService) WithOpenAISchedulingSnapshot(ctx context.Context,
 			break
 		}
 	}
+	ctx = context.WithValue(ctx, openAIAffinityDecisionKey{}, rand.Float64() < 0.70)
 	return context.WithValue(ctx, openAISchedulingSnapshotKey{}, settings)
 }
 

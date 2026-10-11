@@ -12,12 +12,49 @@ import (
 // Schedulable or a cooldown, so collectors/rotation can recover the binding and
 // manually disabled accounts remain disabled after recovery.
 func openAICookieSchedulingStatus(account *Account, settings *OpenAICookieSettings, now time.Time) (bool, string) {
+	if cookieOverlapContinuousService(account, settings, now) {
+		if cookieOverlapQuotaPaused(account, now) {
+			return true, "cookie_validation_paused"
+		}
+		// Pool membership controls background rotation capacity, not service
+		// admission for native accounts in the overlapping destination group.
+		return cookieHostBindingStatus(account, settings, now)
+	}
 	if isOpenAICodexTicketAccount(account) && cookiePoolPolicy(account, settings) != nil {
 		if _, reason := cookiePoolMember(account, settings); reason != "" {
 			return true, reason
 		}
 	}
 	return cookieHostBindingStatus(account, settings, now)
+}
+
+// Temporary degradation never grants this exception: the destination must be
+// an actual account group and an explicitly configured rotation source.
+func cookieOverlapContinuousService(account *Account, settings *OpenAICookieSettings, now time.Time) bool {
+	if account == nil || settings == nil || !isOpenAICodexTicketAccount(account) || !account.IsSchedulable() || settings.DegradedGroupID <= 0 || cookieHostMonitorOwns(account, settings) || !cookieAccountInGroup(account, settings.DegradedGroupID) {
+		return false
+	}
+	found := false
+	for _, id := range settings.RotationGroupIDs {
+		if id == settings.DegradedGroupID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return false
+	}
+	if p := cookiePoolPolicy(account, settings); p != nil {
+		if p.GroupID != settings.DegradedGroupID || !p.Enabled || !settings.Enabled || !settings.CookieRotationEnabled {
+			return false
+		}
+	}
+	return true
+}
+
+func cookieOverlapQuotaPaused(account *Account, now time.Time) bool {
+	until, _ := time.Parse(time.RFC3339Nano, account.GetExtraString("codex_cookie_validation_resume_at"))
+	return until.After(now)
 }
 
 func cookieHostBindingStatus(account *Account, settings *OpenAICookieSettings, now time.Time) (bool, string) {
@@ -42,7 +79,7 @@ func cookieHostBindingStatus(account *Account, settings *OpenAICookieSettings, n
 	if !expires.After(now) {
 		return true, "cookie_host_binding_expired"
 	}
-	if cookiePoolPolicy(account, settings) != nil && settings.rotationCandidates != nil {
+	if (cookiePoolPolicy(account, settings) != nil || cookieOverlapContinuousService(account, settings, now)) && settings.rotationCandidates != nil {
 		entries, err := settings.rotationCandidates()
 		if err != nil {
 			return true, "cookie_host_library_unavailable"
@@ -148,6 +185,25 @@ func cookieDegradedTarget(account *Account, settings *OpenAICookieSettings, now 
 			return 0
 		}
 		account = hydrated
+	}
+	if cookieOverlapContinuousService(account, settings, now) {
+		if cookieOverlapQuotaPaused(account, now) {
+			return 0
+		}
+		_, reason := cookieHostBindingStatus(account, settings, now)
+		switch reason {
+		case "cookie_host_unbound", "cookie_host_binding_invalid", "cookie_host_binding_expired", "cookie_host_cooldown", "cookie_host_cookie_unavailable":
+			// An empty (but readable) library is safe here: native accounts
+			// already belong to the destination and need no exhaustion proof.
+			// Read failures still fail closed. Reuse the scheduling snapshot;
+			// final dispatch supplies its authoritative live library snapshot.
+			if settings.rotationCandidates != nil {
+				if _, err := settings.rotationCandidates(); err == nil {
+					return settings.DegradedGroupID
+				}
+			}
+		}
+		return 0
 	}
 	keepDegraded := false
 	if p := cookiePoolPolicy(account, settings); p != nil {

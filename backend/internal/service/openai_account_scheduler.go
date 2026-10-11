@@ -8,6 +8,7 @@ import (
 	"hash/fnv"
 	"log/slog"
 	"math"
+	"math/rand/v2"
 	"sort"
 	"strconv"
 	"strings"
@@ -71,6 +72,7 @@ var openAIAdvancedSchedulerSettingCache atomic.Value // *cachedOpenAIAdvancedSch
 var openAIAdvancedSchedulerSettingSF singleflight.Group
 
 type OpenAIAccountScheduleRequest struct {
+	lowLoadAffinity         *bool
 	LowLoadFirst            bool
 	spilloverMaxUtilization *float64
 	GroupID                 *int64
@@ -389,6 +391,13 @@ func (s *defaultOpenAIAccountScheduler) Select(
 	req OpenAIAccountScheduleRequest,
 ) (selection *AccountSelectionResult, decision OpenAIAccountScheduleDecision, err error) {
 	defer streamlatency.Observe(ctx, "account_selection_ms")()
+	if req.lowLoadAffinity == nil {
+		choice, ok := ctx.Value(openAIAffinityDecisionKey{}).(bool)
+		if !ok {
+			choice = rand.Float64() < 0.70
+		}
+		req.lowLoadAffinity = &choice
+	}
 	ctx = withCookieSchedulingGroup(ctx, req.GroupID)
 	if s != nil && s.service != nil && s.service.openAIGroupRequiresPrivacySet(ctx, req.GroupID) {
 		req.RequirePrivacySet = true
@@ -1071,7 +1080,36 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAISelectionOrder(
 	req OpenAIAccountScheduleRequest,
 	plan openAIAccountLoadPlan,
 ) []openAIAccountCandidateScore {
-	buildSelectionOrder := func(pool []openAIAccountCandidateScore) []openAIAccountCandidateScore {
+	affinity := req.LowLoadFirst && req.StickyWeighted && rand.Float64() < 0.70
+	if req.lowLoadAffinity != nil {
+		affinity = req.LowLoadFirst && req.StickyWeighted && *req.lowLoadAffinity
+	}
+	buildSelectionOrder := func(pool []openAIAccountCandidateScore) (order []openAIAccountCandidateScore) {
+		if len(pool) == 0 || plan.topK <= 0 {
+			return nil
+		}
+		// Use the already filtered pool, before the lowest-load band or TopK.
+		// Slot acquisition below is nonblocking and still performs final checks.
+		if affinity {
+			for _, candidate := range pool {
+				if candidate.account != nil && candidate.account.ID == req.StickyAccountID &&
+					candidate.loadKnown && candidate.loadInfo != nil && candidate.loadInfo.LoadRate < 80 {
+					if _, excluded := req.ExcludedIDs[candidate.account.ID]; excluded {
+						continue
+					}
+					defer func() {
+						promoted := []openAIAccountCandidateScore{candidate}
+						for _, item := range order {
+							if item.account.ID != candidate.account.ID {
+								promoted = append(promoted, item)
+							}
+						}
+						order = promoted
+					}()
+					break
+				}
+			}
+		}
 		if len(pool) == 0 || plan.topK <= 0 {
 			return nil
 		}

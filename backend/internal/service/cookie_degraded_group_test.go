@@ -224,11 +224,16 @@ func (r cookieDegradedGroupReader) GetByID(_ context.Context, id int64) (*Group,
 func TestCookieDegradedSettingsValidation(t *testing.T) {
 	ctx := context.Background()
 	settings := cookieGuardTestSettings(t)
-	settings.defaultSubGroupReader = cookieDegradedGroupReader{groups: map[int64]*Group{3: {ID: 3, Name: "低优先级", Platform: PlatformOpenAI, Status: StatusActive}}}
+	settings.defaultSubGroupReader = cookieDegradedGroupReader{groups: map[int64]*Group{2: {ID: 2, Name: "轮转来源", Platform: PlatformOpenAI, Status: StatusActive}, 3: {ID: 3, Name: "低优先级", Platform: PlatformOpenAI, Status: StatusActive}}}
 	c, err := settings.GetOpenAICookieSettings(ctx)
 	require.NoError(t, err)
 	c.DegradedGroupID = 2
-	require.ErrorContains(t, settings.SetOpenAICookieSettings(ctx, c), "不能同时")
+	c.RotationGroupIDs = []int64{2, 3}
+	require.NoError(t, settings.SetOpenAICookieSettings(ctx, c))
+	loadedOverlap, err := settings.GetOpenAICookieSettings(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []int64{2, 3}, loadedOverlap.RotationGroupIDs)
+	require.Equal(t, int64(2), loadedOverlap.DegradedGroupID)
 	c.DegradedGroupID = 999
 	require.Error(t, settings.SetOpenAICookieSettings(ctx, c))
 	c.DegradedGroupID = 3

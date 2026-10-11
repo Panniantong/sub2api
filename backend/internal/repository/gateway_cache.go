@@ -53,6 +53,34 @@ func (c *gatewayCache) SetSessionAccountID(ctx context.Context, groupID int64, s
 	return c.rdb.Set(ctx, key, accountID, ttl).Err()
 }
 
+var preserveSessionOwnerScript = redis.NewScript(`
+local owner = redis.call('GET', KEYS[1])
+if not owner and #KEYS > 1 then owner = redis.call('GET', KEYS[2]) end
+if owner and owner ~= ARGV[1] then return 0 end
+redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
+if #KEYS > 1 and ARGV[4] == '1' then
+  local legacy = redis.call('GET', KEYS[2])
+  if not legacy or legacy == ARGV[1] then
+    redis.call('SET', KEYS[2], ARGV[1], 'PX', ARGV[3])
+  end
+end
+return 1
+`)
+
+// PreserveSessionAccountID atomically creates/refreshes only this owner.
+// A spillover never overwrites another owner or prolongs its TTL.
+func (c *gatewayCache) PreserveSessionAccountID(ctx context.Context, groupID int64, primary, legacy string, accountID int64, ttl, legacyTTL time.Duration, dualWrite bool) error {
+	keys := []string{buildSessionKey(groupID, primary)}
+	if legacy != "" {
+		keys = append(keys, buildSessionKey(groupID, legacy))
+	}
+	writeLegacy := "0"
+	if dualWrite {
+		writeLegacy = "1"
+	}
+	return preserveSessionOwnerScript.Run(ctx, c.rdb, keys, accountID, max(1, ttl.Milliseconds()), max(1, legacyTTL.Milliseconds()), writeLegacy).Err()
+}
+
 func (c *gatewayCache) RefreshSessionTTL(ctx context.Context, groupID int64, sessionHash string, ttl time.Duration) error {
 	key := buildSessionKey(groupID, sessionHash)
 	return c.rdb.Expire(ctx, key, ttl).Err()

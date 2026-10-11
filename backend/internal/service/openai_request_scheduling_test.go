@@ -137,7 +137,7 @@ func TestRequestSchedulingLowLoadOrderAndUnknownLoad(t *testing.T) {
 	plan := openAIAccountLoadPlan{topK: 7, candidates: []openAIAccountCandidateScore{
 		candidate(1, 25, true, 100), candidate(2, 0, false, 1000), candidate(3, 20, true, 20), candidate(4, 0, true, 1),
 	}}
-	req := OpenAIAccountScheduleRequest{Platform: PlatformOpenAI, LowLoadFirst: true, StickyWeighted: true, StickyAccountID: 1}
+	req := OpenAIAccountScheduleRequest{Platform: PlatformOpenAI, LowLoadFirst: true, StickyWeighted: true}
 	order := s.buildOpenAISelectionOrder(req, plan)
 	ids := []int64{}
 	for _, c := range order {
@@ -145,22 +145,23 @@ func TestRequestSchedulingLowLoadOrderAndUnknownLoad(t *testing.T) {
 	}
 	require.Equal(t, []int64{4, 3, 1, 2}, ids, "prefer known low load even when the sticky account scores higher")
 	req.LowLoadFirst = false
+	req.StickyAccountID = 1
 	require.Equal(t, int64(1), s.buildOpenAISelectionOrder(req, plan)[0].account.ID)
 }
 
-func TestRequestSchedulingLowLoadDoesNotForceStickyAtEqualLoad(t *testing.T) {
+func TestRequestSchedulingLowLoadAffinityAtEqualLoad(t *testing.T) {
 	s := &defaultOpenAIAccountScheduler{}
 	plan := openAIAccountLoadPlan{topK: 2, candidates: []openAIAccountCandidateScore{
 		{account: &Account{ID: 1}, loadKnown: true, loadInfo: &AccountLoadInfo{}, score: 1},
 		{account: &Account{ID: 2}, loadKnown: true, loadInfo: &AccountLoadInfo{}, score: 1},
 	}}
 	counts := map[int64]int{}
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 2000; i++ {
 		req := OpenAIAccountScheduleRequest{Platform: PlatformOpenAI, LowLoadFirst: true, StickyWeighted: true, StickyAccountID: 1, SessionHash: time.Unix(int64(i), 0).String()}
 		counts[s.buildOpenAISelectionOrder(req, plan)[0].account.ID]++
 	}
-	require.Greater(t, counts[1], 20)
-	require.Greater(t, counts[2], 20)
+	require.Greater(t, counts[1], 1500)
+	require.Greater(t, counts[2], 100)
 }
 
 func TestRequestSchedulingLowLoadTriesIdleOverflowBeforeBusy(t *testing.T) {
@@ -213,4 +214,65 @@ func TestRequestSchedulingLowLoadRoutesAwayFromBusyStickyWithoutCandidateReads(t
 	for _, id := range accounts.readIDs {
 		require.Equal(t, int64(40), id, "scoring must not fetch each candidate from the database")
 	}
+}
+
+func TestRequestSchedulingAffinityShareAndBusyExclusion(t *testing.T) {
+	s := &defaultOpenAIAccountScheduler{}
+	plan := openAIAccountLoadPlan{topK: 1, candidates: []openAIAccountCandidateScore{
+		{account: &Account{ID: 1}, loadKnown: true, loadInfo: &AccountLoadInfo{LoadRate: 60}, score: 1},
+		{account: &Account{ID: 2}, loadKnown: true, loadInfo: &AccountLoadInfo{}, score: 10},
+	}}
+	req := OpenAIAccountScheduleRequest{Platform: PlatformOpenAI, LowLoadFirst: true, StickyWeighted: true, StickyAccountID: 1, SessionHash: "same-session"}
+	hits := 0
+	for i := 0; i < 10000; i++ {
+		order := s.buildOpenAISelectionOrder(req, plan)
+		require.Len(t, order, 2)
+		require.NotEqual(t, order[0].account.ID, order[1].account.ID)
+		if order[0].account.ID == 1 {
+			hits++
+		}
+	}
+	require.InDelta(t, 7000, hits, 300)
+	plan.candidates[0].loadInfo.LoadRate = 80
+	for i := 0; i < 100; i++ {
+		require.Equal(t, int64(2), s.buildOpenAISelectionOrder(req, plan)[0].account.ID)
+	}
+	plan.candidates[0].loadInfo.LoadRate = 60
+	req.ExcludedIDs = map[int64]struct{}{1: {}}
+	for i := 0; i < 100; i++ {
+		require.Equal(t, int64(2), s.buildOpenAISelectionOrder(req, plan)[0].account.ID)
+	}
+}
+
+func TestRequestSchedulingAffinityStableAcrossRebuild(t *testing.T) {
+	s := &defaultOpenAIAccountScheduler{}
+	plan := openAIAccountLoadPlan{topK: 1, candidates: []openAIAccountCandidateScore{
+		{account: &Account{ID: 1}, loadKnown: true, loadInfo: &AccountLoadInfo{LoadRate: 60}, score: 1},
+		{account: &Account{ID: 2}, loadKnown: true, loadInfo: &AccountLoadInfo{}, score: 10},
+	}}
+	for _, choice := range []bool{true, false} {
+		req := OpenAIAccountScheduleRequest{Platform: PlatformOpenAI, LowLoadFirst: true, StickyWeighted: true, StickyAccountID: 1, lowLoadAffinity: &choice}
+		expected := int64(2)
+		if choice {
+			expected = 1
+		}
+		for i := 0; i < 100; i++ {
+			require.Equal(t, expected, s.buildOpenAISelectionOrder(req, plan)[0].account.ID)
+		}
+		plan.topK = 0
+		require.Empty(t, s.buildOpenAISelectionOrder(req, plan))
+		plan.topK = 1
+	}
+}
+
+func TestRequestSchedulingAffinityKeepsBindingOnSpillover(t *testing.T) {
+	resetOpenAIAdvancedSchedulerSettingCacheForTest()
+	t.Cleanup(resetOpenAIAdvancedSchedulerSettingCacheForTest)
+	cache := &schedulerTestGatewayCache{sessionBindings: map[string]int64{"openai:affinity": 1}}
+	svc := &OpenAIGatewayService{cache: cache}
+	ctx := context.WithValue(context.Background(), openAISchedulingSnapshotKey{}, openAIAdvancedSchedulerRuntimeSettings{enabled: true, requestPolicy: OpenAIRequestSchedulingPolicy{Mode: "low_load"}})
+	require.NoError(t, svc.BindStickySessionAfterProfitAdmission(ctx, nil, "affinity", 2))
+	require.Equal(t, int64(1), cache.sessionBindings["openai:affinity"])
+	require.NoError(t, svc.BindStickySession(ctx, nil, "fresh", 2))
+	require.Equal(t, int64(2), cache.sessionBindings["openai:fresh"])
 }

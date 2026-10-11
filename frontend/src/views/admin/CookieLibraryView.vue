@@ -204,9 +204,11 @@
             </div>
             <div class="space-y-3 border-t border-gray-200 pt-5 dark:border-dark-700">
               <h4 class="font-semibold">Host 全部耗尽后的降级</h4>
-              <label class="block text-sm">降级分组<select v-model.number="form.degraded_group_id" class="input mt-2 w-full"><option :value="0">不降级，保持暂不调度</option><option v-for="group in cookieGroups.filter(g => !form.rotation_group_ids.includes(g.id))" :key="group.id" :value="group.id">{{ group.name }}</option></select></label>
+              <label class="block text-sm">降级分组<select v-model.number="form.degraded_group_id" class="input mt-2 w-full"><option :value="0">不降级，保持暂不调度</option><option v-for="group in cookieGroups" :key="group.id" :value="group.id">{{ group.name }}</option></select></label>
+              <p class="text-xs leading-6 text-gray-500">降级分组也可选择为 Host 轮换来源。轮换资格只按账号管理中实际保存的分组或单独指定的轮换账号判断；临时降级到此组不会加入此组轮换池，仍按原来的轮换来源恢复。</p>
+              <p v-if="(form.degraded_group_id ?? 0) > 0 && form.rotation_group_ids.includes(form.degraded_group_id ?? 0)" class="text-xs leading-6 text-amber-600 dark:text-amber-400">当前降级组同时是轮换来源组：实际归属本组且由本组轮换池管理的账号，轮换期间持续调度；旧 Host 有效时继续使用，未绑定、失效或等待新 Host 验证时在本组走普通降级链路，新 Host 就绪后用于后续请求。没有配置轮换池的本组账号同样适用。停用、限流、并发限制和读取异常保护仍生效；临时降级到此组的其他来源账号保持原逻辑。</p>
               <p class="text-xs leading-6 text-gray-500">只有已经轮到的账号，且当前无有效绑定、库内可用 Host 全部处于该邮箱冷却期，才临时进入降级组。未轮到、未启用、准备验证、仅绑定到期、Cookie 库为空或读取失败均不直接降级；仍有候选时继续尝试。手动禁用和监控隔离始终优先。</p>
-              <p class="text-xs leading-6 text-gray-500">降级组使用普通链路，不携带失效 Host Cookie；原组同时启用下个备用账号补足容量。Host 恢复后退出降级，重新排队等待启用。仅改变账号临时可用分组，不将原组请求转发到降级组，不修改账号实际归属。</p>
+              <p class="text-xs leading-6 text-gray-500">降级调用使用普通链路，不携带失效 Host Cookie。非上述重叠场景保持原逻辑：原组启用备用账号补足容量，Host 恢复后退出降级并重新排队等待启用。仅改变账号临时可用分组，不将原组请求转发到降级组，不修改账号实际归属。</p>
             </div>
           </section>
           <section class="space-y-4 rounded border border-gray-200 p-4 dark:border-dark-700">
