@@ -34,6 +34,15 @@
           <div v-if="policy.demand_mode === 'dynamic'" class="mt-3 space-y-2"><p class="text-sm leading-6 text-gray-600 dark:text-gray-400">按分组内正在执行及等待账号的请求数实时计算。每秒检查，需求上升时扩容；使用观察窗口内的峰值缓冲缩容，避免账户频繁进出。</p><p class="text-xs text-gray-500">WebSocket 按请求轮次计数，空闲连接不占需求。无流量时保留最少活跃账户，冗余账户也参与请求。</p></div>
           <label v-else class="mt-3 block max-w-sm text-sm">固定需求并发<input v-model.number="policy.target_concurrency" required type="number" min="1" max="1000000" class="input mt-2 w-full" /></label>
         </div>
+        <fieldset class="rounded-xl border border-indigo-200 p-4 dark:border-indigo-900" data-testid="cookie-low-host-rotation">
+          <legend class="px-2 text-sm font-semibold">低 Host 强制轮转</legend>
+          <div class="grid gap-4 sm:grid-cols-3">
+            <label class="flex items-center gap-2 text-sm"><input type="checkbox" :checked="policy.low_host_rotation_enabled || false" @change="setLowHostEnabled(policy, $event)" />启用低 Host 强制轮转</label>
+            <label class="text-sm">可用 Host 少于<input :value="policy.low_host_threshold ?? 5" :disabled="!policy.low_host_rotation_enabled" required type="number" min="2" max="10000" class="input mt-2 w-full" @input="policy.low_host_threshold = Number(($event.target as HTMLInputElement).value)" /></label>
+            <label class="text-sm">强制处理账号名额<input :value="policy.low_host_account_slots ?? 10" :disabled="!policy.low_host_rotation_enabled" required type="number" min="1" max="10000" class="input mt-2 w-full" @input="policy.low_host_account_slots = Number(($event.target as HTMLInputElement).value)" /></label>
+          </div>
+          <p class="mt-3 text-xs leading-5 text-gray-500">例如阈值 5，剩余 1–4 个可用 Host 的待恢复账号按顺序轮转，即使普通池容量已满也会处理。名额包含准备中和成功后保留服务的账号，独立于普通池上限；成功后接入不降智服务，保留到本次绑定结束。已确认耗尽的账号在恢复期间继续接降智请求。账号限流、额度及 Host 冷却仍生效，后台分批验证。</p>
+        </fieldset>
         <fieldset class="grid gap-x-5 gap-y-5 sm:grid-cols-2 xl:grid-cols-3">
           <label class="text-sm">容量不足时重试间隔（秒）<input :value="policy.shortage_retry_seconds || 0" required type="number" min="0" :max="policy.retry_seconds" class="input mt-2 w-full" @input="policy.shortage_retry_seconds = Number(($event.target as HTMLInputElement).value)" /><span class="mt-2 block text-xs text-gray-500">0 沿用普通间隔；可设 5 秒至普通重试间隔，例如 10 秒。只加快缺口补位，不跳过额度限制或邮箱 Host 冷却。</span></label>
           <label class="text-sm">Host 准备额度优先顺序<select :value="policy.quota_priority || ''" class="input mt-2 w-full" @change="policy.quota_priority = ($event.target as HTMLSelectElement).value as '' | 'used_desc' | 'remaining_desc'"><option value="">保持原顺序</option><option value="used_desc">已用额度接近上限优先</option><option value="remaining_desc">剩余额度充足优先</option></select><span class="mt-2 block text-xs text-gray-500">按有效的 5 小时 / 7 天窗口中已用比例较高者排序，仅决定哪些账户优先准备 Cookie Host，不影响请求分配。额度未知排后，仍遵守停用阈值。</span></label>
@@ -108,10 +117,15 @@ function applyPicker() {
   pickerIndex.value = null
 }
 function setLimit(p: CookieRotationPoolPolicy, event: Event) { p.max_accounts = (event.target as HTMLSelectElement).value === 'unlimited' ? 0 : Math.max(p.min_accounts, 10) }
+function setLowHostEnabled(p: CookieRotationPoolPolicy, event: Event) {
+  p.low_host_rotation_enabled = (event.target as HTMLInputElement).checked
+  if (!p.low_host_threshold) p.low_host_threshold = 5
+  if (!p.low_host_account_slots) p.low_host_account_slots = 10
+}
 function addPool() { const group = availableGroups.value[0]; if (group) emit('update:modelValue', [...props.modelValue, defaultCookieRotationPool(group.id)]) }
 function removePool() { emit('update:modelValue', props.modelValue.filter((_, i) => i !== removeIndex.value)); removeIndex.value = null }
 function stateSummary(id: number) {
   const members = Object.values(props.runtime?.groups?.[id]?.members || {})
-  return `活跃 ${members.filter(m => m.state === 'active' || m.state === 'draining').length} · 到期退出 ${members.filter(m => m.state === 'draining').length} · 准备中 ${members.filter(m => m.state === 'preparing').length} · Host 耗尽 ${members.filter(m => m.state === 'exhausted').length}`
+  return `活跃 ${members.filter(m => m.state === 'active' || m.state === 'draining').length} · 到期退出 ${members.filter(m => m.state === 'draining').length} · 准备中 ${members.filter(m => m.state === 'preparing').length} · Host 耗尽 ${members.filter(m => m.state === 'exhausted').length} · 强制名额占用 ${members.filter(m => m.low_host_forced && (m.state === 'active' || m.state === 'preparing')).length}`
 }
 </script>

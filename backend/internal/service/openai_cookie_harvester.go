@@ -232,6 +232,11 @@ func (s *OpenAIGatewayService) rotateDueOpenAICookieHost(ctx context.Context, ac
 			}
 		}
 	}
+	if member, _ := cookiePoolMember(account, settings); member.LowHostForced && member.State == "active" {
+		// Forced capacity is reserved for one binding. Retire it here, then
+		// let reconciliation release the slot and advance the fair queue.
+		return false
+	}
 	previousRotationState := strings.TrimSpace(account.GetExtraString(openAICodexCookieRotationStatusExtraKey))
 	s.syncCookieDegradedSince(ctx, account, settings, time.Now())
 	defer func() { s.syncCookieDegradedSince(ctx, account, settings, time.Now()) }()

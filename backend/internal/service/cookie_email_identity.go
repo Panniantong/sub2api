@@ -13,11 +13,38 @@ type CookieEmailCooldownRepository interface {
 
 func CookieAccountEmail(a *Account) string { return cookieMonitorEmail(a) }
 
+func (s *SettingService) primeCookieCandidateCooldowns(ctx context.Context, accounts []Account) error {
+	if s == nil {
+		return nil
+	}
+	repo, ok := s.settingRepo.(interface {
+		PrimeCookieEmailCooldowns(context.Context, []string) error
+	})
+	if !ok {
+		return nil
+	}
+	seen := make(map[string]bool)
+	emails := make([]string, 0, len(accounts))
+	for i := range accounts {
+		if !isOpenAICodexTicketAccount(&accounts[i]) {
+			continue
+		}
+		if email := CookieAccountEmail(&accounts[i]); email != "" && !seen[email] {
+			seen[email] = true
+			emails = append(emails, email)
+		}
+	}
+	return repo.PrimeCookieEmailCooldowns(ctx, emails)
+}
+
 func (s *SettingService) cookieEmailAccount(ctx context.Context, a *Account) (*Account, error) {
 	if a == nil || s == nil {
 		return a, nil
 	}
 	email := CookieAccountEmail(a)
+	if v := s.dispatchSnapshot(ctx); v != nil && v.email == email {
+		return mergeCookieEmailCooldowns(a, v.cooldowns), nil
+	}
 	if snapshot := s.cookieAdminSnapshot(ctx); snapshot != nil {
 		if email == "" {
 			return a, nil

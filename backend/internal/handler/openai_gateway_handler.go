@@ -661,7 +661,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 
 	maxAccountSwitches := h.maxAccountSwitches
 	if retries != nil {
-		maxAccountSwitches = min(maxAccountSwitches, boundedOpenAIMaxSwitches)
+		maxAccountSwitches = retries.switchLimit()
 	}
 	switchCount := 0
 	firstOutputTimeoutSwitchCount := 0
@@ -1331,7 +1331,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 
 	maxAccountSwitches := h.maxAccountSwitches
 	if retries != nil {
-		maxAccountSwitches = min(maxAccountSwitches, boundedOpenAIMaxSwitches)
+		maxAccountSwitches = retries.switchLimit()
 	}
 	switchCount := 0
 	profitVetoCount := 0
@@ -2338,6 +2338,11 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlot(
 			zap.Int64("account_id", account.ID),
 			zap.Int("max_waiting", selection.WaitPlan.MaxWaiting),
 		)
+		if service.OpenAIRequestSchedulingFromContext(ctx).Enabled {
+			if err := h.concurrencyHelper.waitOpenAIPoolRetry(c, ctx, remaining, reqStream, streamStarted); err == nil {
+				return nil, openAISlotAcquireReselect
+			}
+		}
 		writeError(http.StatusTooManyRequests, "rate_limit_error", gatewayQueueFullCode, "Too many pending requests, please retry later")
 		return nil, openAISlotAcquireFailed
 	}
@@ -2350,7 +2355,8 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlot(
 		}
 	}
 	defer releaseWait()
-	if selection.WaitPlan.RecheckPool {
+	policy := service.OpenAIRequestSchedulingFromContext(ctx)
+	if selection.WaitPlan.RecheckPool && !policy.Enabled {
 		if err := h.concurrencyHelper.waitOpenAIPoolRetry(c, ctx, openAIAccountWaitRemaining(c, remaining, false), reqStream, streamStarted); err != nil {
 			status, errType, code, message := concurrencyErrorResponse(err, "account")
 			writeError(status, errType, code, message)
@@ -2359,15 +2365,24 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlot(
 		return nil, openAISlotAcquireReselect
 	}
 
+	queueSlice := openAIAccountWaitRemaining(c, remaining, false)
+	if policy.Enabled {
+		queueSlice = min(queueSlice, time.Duration(max(1, policy.QueueSeconds))*time.Second)
+	}
 	accountReleaseFunc, err := h.concurrencyHelper.AcquireAccountSlotWithWaitTimeout(
 		c,
 		account.ID,
 		selection.WaitPlan.MaxConcurrency,
-		openAIAccountWaitRemaining(c, remaining, false),
+		queueSlice,
 		reqStream,
 		streamStarted,
 	)
 	if err != nil {
+		var queueErr *ConcurrencyError
+		queueTimedOut := (errors.As(err, &queueErr) && queueErr.IsTimeout) || errors.Is(err, context.DeadlineExceeded)
+		if policy.Enabled && queueTimedOut && ctx.Err() == nil && openAIAccountWaitRemaining(c, remaining, false) > 0 {
+			return nil, openAISlotAcquireReselect
+		}
 		reqLog.Warn("openai.account_slot_acquire_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 		status, errType, code, message := concurrencyErrorResponse(err, "account")
 		writeError(status, errType, code, message)

@@ -24,6 +24,7 @@ import (
 	"github.com/cespare/xxhash/v2"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -536,8 +537,9 @@ type OpenAIGatewayService struct {
 	openaiCodexTicketDone               chan struct{}
 	openaiCodexSessionIDs               sync.Map // account id -> string
 	openaiCodexCookieProxySequence      atomic.Uint64
-	openaiCookieRotationLocks           sync.Map // key: int64(accountID), value: *sync.Mutex
-	openaiCookieRotationRunning         sync.Map // account ID -> active rotation task
+	openaiCookieRotationLocks           sync.Map           // key: int64(accountID), value: *sync.Mutex
+	openaiCookieRotationRunning         sync.Map           // account ID -> active rotation task
+	cookieDashboardReads                singleflight.Group // merge concurrent identical admin views
 	cookieHarvestRuntime                cookieHarvestRuntime
 	responseCookieSync                  responseCookieSyncRuntime
 	// openaiCodexTurnStateOrigins: 下游会话 seed → openAICodexTurnStateOrigin，

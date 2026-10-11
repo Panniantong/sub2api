@@ -31,6 +31,7 @@ type CookiePoolDashboardAccount struct {
 	ValidationStage     string                    `json:"validation_stage"`
 	ValidationUpdatedAt *time.Time                `json:"validation_updated_at,omitempty"`
 	AvailableHosts      int                       `json:"available_hosts"`
+	LowHost             CookieLowHostAccount      `json:"low_host"`
 	Hosts               []CookiePoolDashboardHost `json:"hosts"`
 }
 

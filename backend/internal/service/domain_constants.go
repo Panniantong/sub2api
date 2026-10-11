@@ -653,6 +653,11 @@ const (
 	// SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled OpenAI 高级调度下是否优先使用订阅账号池。
 	SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled = "openai_advanced_scheduler_subscription_priority_enabled"
 	SettingKeyOpenAIAdvancedSchedulerLBTopK                      = "openai_advanced_scheduler_lb_top_k"
+	SettingKeyOpenAIAdvancedSchedulerMode                        = "openai_advanced_scheduler_mode"
+	SettingKeyOpenAIAdvancedSchedulerQueueSeconds                = "openai_advanced_scheduler_queue_seconds"
+	SettingKeyOpenAIAdvancedSchedulerPreOutputSeconds            = "openai_advanced_scheduler_pre_output_seconds"
+	SettingKeyOpenAIAdvancedSchedulerMaxSwitches                 = "openai_advanced_scheduler_max_switches"
+	SettingKeyOpenAIAdvancedSchedulerGroupPolicies               = "openai_advanced_scheduler_group_policies"
 	SettingKeyOpenAIAdvancedSchedulerWeightPriority              = "openai_advanced_scheduler_weight_priority"
 	SettingKeyOpenAIAdvancedSchedulerWeightLoad                  = "openai_advanced_scheduler_weight_load"
 	SettingKeyOpenAIAdvancedSchedulerWeightQueue                 = "openai_advanced_scheduler_weight_queue"

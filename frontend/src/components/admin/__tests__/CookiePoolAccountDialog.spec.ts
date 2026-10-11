@@ -71,4 +71,24 @@ describe('Cookie pool account loading', () => {
     await vi.advanceTimersByTimeAsync(30000)
     expect(getDashboard).toHaveBeenCalledTimes(2)
   })
+
+  it('filters low Host states locally without issuing extra dashboard reads', async () => {
+    const data = structuredClone(response)
+    data.pool_groups![0]!.accounts![0]!.low_host = { state: 'preparing', slot_occupied: true, degraded_continuing: true }
+    vi.mocked(getDashboard).mockResolvedValue(data)
+    const wrapper = render()
+    try {
+      await flushPromises()
+      const filter = wrapper.get('select[aria-label="账户状态筛选"]')
+      await filter.setValue('low_preparing')
+      expect(wrapper.findAll('article')).toHaveLength(1)
+      expect(wrapper.text()).toContain('占用强制名额')
+      expect(wrapper.text()).toContain('继续接收降智请求')
+      await filter.setValue('low_active')
+      expect(wrapper.findAll('article')).toHaveLength(0)
+      await filter.setValue('low_degraded')
+      expect(wrapper.findAll('article')).toHaveLength(1)
+      expect(getDashboard).toHaveBeenCalledTimes(1)
+    } finally { wrapper.unmount() }
+  })
 })

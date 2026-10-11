@@ -51,8 +51,11 @@ func (s *OpenAIGatewayService) cookieValidationAdmission(ctx context.Context, a 
 		}
 	}
 	member, _ := cookiePoolMember(a, latest)
-	if (member.State != "active" && member.State != "preparing") || !member.Since.Equal(expected.Since) {
+	if (member.State != "active" && member.State != "preparing") || !member.Since.Equal(expected.Since) || member.LowHostForced != expected.LowHostForced {
 		return nil, fmt.Errorf("cookie pool admission revoked")
+	}
+	if member.LowHostForced && !cookieLowHostEnabled(*cookiePoolPolicy(a, latest)) {
+		return nil, fmt.Errorf("low Host rotation disabled")
 	}
 	if member.State == "preparing" && time.Since(member.Since) >= time.Duration(cookiePoolPolicy(a, latest).ReadyTimeoutSeconds)*time.Second {
 		return nil, fmt.Errorf("cookie pool preparation timed out")

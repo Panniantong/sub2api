@@ -10,6 +10,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/retrybudget"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/streamlatency"
+	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 )
@@ -17,10 +18,11 @@ import (
 const boundedOpenAIMaxSwitches = 5
 
 type boundedOpenAIRetries struct {
-	budget   *retrybudget.Budget
-	first    int64
-	last     int64
-	accounts map[int64]int
+	maxSwitches *int
+	budget      *retrybudget.Budget
+	first       int64
+	last        int64
+	accounts    map[int64]int
 }
 
 type retryBudgetWriter struct {
@@ -72,15 +74,40 @@ func (w *retryBudgetWriter) Flush() {
 }
 
 func (h *OpenAIGatewayHandler) startRetryBudget(c *gin.Context) (*boundedOpenAIRetries, func()) {
-	if h.retryBudgetSeconds <= 0 {
+	started := time.Now()
+	ctx := c.Request.Context()
+	if h.gatewayService != nil {
+		var groupID *int64
+		if key, ok := middleware2.GetAPIKeyFromContext(c); ok && key != nil {
+			groupID = key.GroupID
+		}
+		ctx = h.gatewayService.WithOpenAISchedulingSnapshot(ctx, groupID)
+	}
+	c.Request = c.Request.WithContext(ctx)
+	policy := service.OpenAIRequestSchedulingFromContext(ctx)
+	if policy.LegacyRetries {
 		return nil, func() {}
 	}
-	ctx, b := retrybudget.New(c.Request.Context(), time.Duration(h.retryBudgetSeconds)*time.Second)
+	seconds := h.retryBudgetSeconds
+	switches := min(h.maxAccountSwitches, boundedOpenAIMaxSwitches)
+	if policy.PreOutputSeconds >= 0 {
+		seconds = policy.PreOutputSeconds
+	}
+	if policy.MaxSwitches >= 0 {
+		switches = policy.MaxSwitches
+	}
+	if seconds <= 0 {
+		if policy.MaxSwitches >= 0 {
+			return &boundedOpenAIRetries{maxSwitches: &switches, accounts: map[int64]int{}}, func() {}
+		}
+		return nil, func() {}
+	}
+	ctx, b := retrybudget.New(ctx, max(0, time.Duration(seconds)*time.Second-time.Since(started)))
 	c.Request = c.Request.WithContext(ctx)
 	w := &retryBudgetWriter{ResponseWriter: c.Writer, budget: b}
 	w.observer.OnOutput = func(string) { b.Output() }
 	c.Writer = w
-	return &boundedOpenAIRetries{budget: b, accounts: map[int64]int{}}, func() {
+	return &boundedOpenAIRetries{budget: b, maxSwitches: &switches, accounts: map[int64]int{}}, func() {
 		defer b.Close()
 		if b.Expired() {
 			// Forwarding code may already have attempted an error write after
@@ -97,7 +124,7 @@ func (b *boundedOpenAIRetries) admit(id int64, excluded map[int64]struct{}) bool
 	if b == nil {
 		return true
 	}
-	if b.budget.Expired() {
+	if b.budget != nil && b.budget.Expired() {
 		return false
 	}
 	if b.first == 0 {
@@ -106,7 +133,7 @@ func (b *boundedOpenAIRetries) admit(id int64, excluded map[int64]struct{}) bool
 	if b.accounts[id] > 0 && (id != b.first || b.last != id || b.accounts[id] >= 2) {
 		return false
 	}
-	if b.accounts[id] == 0 && len(b.accounts) >= boundedOpenAIMaxSwitches+1 {
+	if b.accounts[id] == 0 && len(b.accounts) >= b.switchLimit()+1 {
 		return false
 	}
 	if b.last != 0 && b.last != id {
@@ -118,7 +145,7 @@ func (b *boundedOpenAIRetries) admit(id int64, excluded map[int64]struct{}) bool
 }
 
 func (b *boundedOpenAIRetries) mayRetry(id int64) bool {
-	return b == nil || (!b.budget.Expired() && id == b.first && b.accounts[id] < 2)
+	return b == nil || ((b.budget == nil || !b.budget.Expired()) && id == b.first && b.accounts[id] < 2)
 }
 
 func boundedRetryAllowed(b *boundedOpenAIRetries, id int64, e *service.UpstreamFailoverError, count, limit int) bool {
@@ -191,4 +218,11 @@ func boundedRetryDelay(b *boundedOpenAIRetries, e *service.UpstreamFailoverError
 		}
 	}
 	return d
+}
+
+func (b *boundedOpenAIRetries) switchLimit() int {
+	if b != nil && b.maxSwitches != nil {
+		return *b.maxSwitches
+	}
+	return boundedOpenAIMaxSwitches
 }

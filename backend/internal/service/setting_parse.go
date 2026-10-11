@@ -258,6 +258,11 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyOpenAIAdvancedSchedulerStickyWeightedEnabled:       "false",
 		SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled: "false",
 		SettingKeyOpenAIAdvancedSchedulerLBTopK:                      "",
+		SettingKeyOpenAIAdvancedSchedulerMode:                        "",
+		SettingKeyOpenAIAdvancedSchedulerQueueSeconds:                "",
+		SettingKeyOpenAIAdvancedSchedulerPreOutputSeconds:            "",
+		SettingKeyOpenAIAdvancedSchedulerMaxSwitches:                 "",
+		SettingKeyOpenAIAdvancedSchedulerGroupPolicies:               "",
 		SettingKeyOpenAIAdvancedSchedulerWeightPriority:              "",
 		SettingKeyOpenAIAdvancedSchedulerWeightLoad:                  "",
 		SettingKeyOpenAIAdvancedSchedulerWeightQueue:                 "",
@@ -934,6 +939,11 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	result.OpenAIAdvancedSchedulerStickyWeightedEnabled = settings[SettingKeyOpenAIAdvancedSchedulerStickyWeightedEnabled] == "true"
 	result.OpenAIAdvancedSchedulerSubscriptionPriorityEnabled = settings[SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled] == "true"
 	result.OpenAIAdvancedSchedulerLBTopK = strings.TrimSpace(settings[SettingKeyOpenAIAdvancedSchedulerLBTopK])
+	result.OpenAIAdvancedSchedulerMode = strings.TrimSpace(settings[SettingKeyOpenAIAdvancedSchedulerMode])
+	result.OpenAIAdvancedSchedulerQueueSeconds = strings.TrimSpace(settings[SettingKeyOpenAIAdvancedSchedulerQueueSeconds])
+	result.OpenAIAdvancedSchedulerPreOutputSeconds = strings.TrimSpace(settings[SettingKeyOpenAIAdvancedSchedulerPreOutputSeconds])
+	result.OpenAIAdvancedSchedulerMaxSwitches = strings.TrimSpace(settings[SettingKeyOpenAIAdvancedSchedulerMaxSwitches])
+	result.OpenAIAdvancedSchedulerGroupPolicies = strings.TrimSpace(settings[SettingKeyOpenAIAdvancedSchedulerGroupPolicies])
 	result.OpenAIAdvancedSchedulerWeightPriority = strings.TrimSpace(settings[SettingKeyOpenAIAdvancedSchedulerWeightPriority])
 	result.OpenAIAdvancedSchedulerWeightLoad = strings.TrimSpace(settings[SettingKeyOpenAIAdvancedSchedulerWeightLoad])
 	result.OpenAIAdvancedSchedulerWeightQueue = strings.TrimSpace(settings[SettingKeyOpenAIAdvancedSchedulerWeightQueue])
@@ -1107,6 +1117,9 @@ func (s *SettingService) normalizeOpenAIAdvancedSchedulerOverrides(settings *Sys
 		return infraerrors.BadRequest("INVALID_OPENAI_OAUTH_SCHEDULING_RATE_MULTIPLIER", "OpenAI OAuth scheduling rate multiplier must be a finite non-negative number")
 	}
 
+	if err := normalizeOpenAIRequestSchedulingSettings(settings); err != nil {
+		return err
+	}
 	lbTopK, err := normalizeOptionalPositiveIntString(settings.OpenAIAdvancedSchedulerLBTopK)
 	if err != nil {
 		return infraerrors.BadRequest("INVALID_OPENAI_ADVANCED_SCHEDULER_LB_TOP_K", "openai advanced scheduler TopK must be a positive integer or empty")

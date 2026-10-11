@@ -282,6 +282,11 @@ type UpdateSettingsRequest struct {
 	OpenAIAdvancedSchedulerStickyWeightedEnabled       *bool    `json:"openai_advanced_scheduler_sticky_weighted_enabled"`
 	OpenAIAdvancedSchedulerSubscriptionPriorityEnabled *bool    `json:"openai_advanced_scheduler_subscription_priority_enabled"`
 	OpenAIAdvancedSchedulerLBTopK                      *string  `json:"openai_advanced_scheduler_lb_top_k"`
+	OpenAIAdvancedSchedulerMode                        *string  `json:"openai_advanced_scheduler_mode"`
+	OpenAIAdvancedSchedulerQueueSeconds                *string  `json:"openai_advanced_scheduler_queue_seconds"`
+	OpenAIAdvancedSchedulerPreOutputSeconds            *string  `json:"openai_advanced_scheduler_pre_output_seconds"`
+	OpenAIAdvancedSchedulerMaxSwitches                 *string  `json:"openai_advanced_scheduler_max_switches"`
+	OpenAIAdvancedSchedulerGroupPolicies               *string  `json:"openai_advanced_scheduler_group_policies"`
 	OpenAIAdvancedSchedulerWeightPriority              *string  `json:"openai_advanced_scheduler_weight_priority"`
 	OpenAIAdvancedSchedulerWeightLoad                  *string  `json:"openai_advanced_scheduler_weight_load"`
 	OpenAIAdvancedSchedulerWeightQueue                 *string  `json:"openai_advanced_scheduler_weight_queue"`
@@ -1875,6 +1880,11 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			return previousSettings.OpenAIAdvancedSchedulerSubscriptionPriorityEnabled
 		}(),
 		OpenAIAdvancedSchedulerLBTopK:                 stringSetting(req.OpenAIAdvancedSchedulerLBTopK, previousSettings.OpenAIAdvancedSchedulerLBTopK),
+		OpenAIAdvancedSchedulerMode:                   stringSetting(req.OpenAIAdvancedSchedulerMode, previousSettings.OpenAIAdvancedSchedulerMode),
+		OpenAIAdvancedSchedulerQueueSeconds:           stringSetting(req.OpenAIAdvancedSchedulerQueueSeconds, previousSettings.OpenAIAdvancedSchedulerQueueSeconds),
+		OpenAIAdvancedSchedulerPreOutputSeconds:       stringSetting(req.OpenAIAdvancedSchedulerPreOutputSeconds, previousSettings.OpenAIAdvancedSchedulerPreOutputSeconds),
+		OpenAIAdvancedSchedulerMaxSwitches:            stringSetting(req.OpenAIAdvancedSchedulerMaxSwitches, previousSettings.OpenAIAdvancedSchedulerMaxSwitches),
+		OpenAIAdvancedSchedulerGroupPolicies:          stringSetting(req.OpenAIAdvancedSchedulerGroupPolicies, previousSettings.OpenAIAdvancedSchedulerGroupPolicies),
 		OpenAIAdvancedSchedulerWeightPriority:         stringSetting(req.OpenAIAdvancedSchedulerWeightPriority, previousSettings.OpenAIAdvancedSchedulerWeightPriority),
 		OpenAIAdvancedSchedulerWeightLoad:             stringSetting(req.OpenAIAdvancedSchedulerWeightLoad, previousSettings.OpenAIAdvancedSchedulerWeightLoad),
 		OpenAIAdvancedSchedulerWeightQueue:            stringSetting(req.OpenAIAdvancedSchedulerWeightQueue, previousSettings.OpenAIAdvancedSchedulerWeightQueue),
@@ -2376,6 +2386,11 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		OpenAIAdvancedSchedulerStickyWeightedEnabled:           updatedSettings.OpenAIAdvancedSchedulerStickyWeightedEnabled,
 		OpenAIAdvancedSchedulerSubscriptionPriorityEnabled:     updatedSettings.OpenAIAdvancedSchedulerSubscriptionPriorityEnabled,
 		OpenAIAdvancedSchedulerLBTopK:                          updatedSettings.OpenAIAdvancedSchedulerLBTopK,
+		OpenAIAdvancedSchedulerMode:                            updatedSettings.OpenAIAdvancedSchedulerMode,
+		OpenAIAdvancedSchedulerQueueSeconds:                    updatedSettings.OpenAIAdvancedSchedulerQueueSeconds,
+		OpenAIAdvancedSchedulerPreOutputSeconds:                updatedSettings.OpenAIAdvancedSchedulerPreOutputSeconds,
+		OpenAIAdvancedSchedulerMaxSwitches:                     updatedSettings.OpenAIAdvancedSchedulerMaxSwitches,
+		OpenAIAdvancedSchedulerGroupPolicies:                   updatedSettings.OpenAIAdvancedSchedulerGroupPolicies,
 		OpenAIAdvancedSchedulerWeightPriority:                  updatedSettings.OpenAIAdvancedSchedulerWeightPriority,
 		OpenAIAdvancedSchedulerWeightLoad:                      updatedSettings.OpenAIAdvancedSchedulerWeightLoad,
 		OpenAIAdvancedSchedulerWeightQueue:                     updatedSettings.OpenAIAdvancedSchedulerWeightQueue,

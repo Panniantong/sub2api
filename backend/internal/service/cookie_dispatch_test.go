@@ -134,3 +134,36 @@ func TestCookieDispatchValidationCandidateKeepsItsOwnHost(t *testing.T) {
 	require.NoError(t, err)
 	require.Same(t, &candidate, got)
 }
+
+type liveCookieDispatchRepo struct {
+	SettingRepository
+	cookie    string
+	cooldowns map[string]time.Time
+	calls     int
+}
+
+func (r *liveCookieDispatchRepo) CookieDispatchState(_ context.Context, _, host string) ([]OpenAICodexCookieLibraryEntry, map[string]time.Time, error) {
+	r.calls++
+	return []OpenAICodexCookieLibraryEntry{{Host: host, Cookie: r.cookie, ExpiresAt: time.Now().Add(time.Hour)}}, r.cooldowns, nil
+}
+
+func TestCookieDispatchUsesLiveCookieAndCooldownWithoutLibraryReread(t *testing.T) {
+	a := cookieGuardTestAccount("new.example", time.Now().Add(time.Minute))
+	settings := cookieGuardTestSettings(t)
+	repo := &liveCookieDispatchRepo{SettingRepository: settings.settingRepo, cookie: "__oailb=one"}
+	settings.settingRepo = repo
+	svc := &OpenAIGatewayService{settingService: settings, accountRepo: &schedulerTestOpenAIAccountRepo{accounts: []Account{a}}}
+	current, err := svc.refreshCookieDispatchAccount(context.Background(), &a)
+	require.NoError(t, err)
+	require.Equal(t, 1, repo.calls)
+	require.Equal(t, "__oailb=one", svc.openAICodexCookieForAccount(current))
+	repo.cookie = "__oailb=two"
+	require.Equal(t, "__oailb=one", svc.openAICodexCookieForAccount(current), "the checked Cookie stays paired with its dispatch Host")
+	require.Error(t, svc.checkCookieDispatchTurn(context.Background(), current), "a same-Host Cookie change invalidates a persistent handshake")
+	fresh, err := svc.refreshCookieDispatchAccount(context.Background(), current)
+	require.NoError(t, err)
+	require.Equal(t, "__oailb=two", svc.openAICodexCookieForAccount(fresh))
+	repo.cooldowns = map[string]time.Time{"new.example": time.Now().Add(time.Hour)}
+	_, err = svc.refreshCookieDispatchAccount(context.Background(), fresh)
+	require.Error(t, err, "dispatch must see a cooldown that candidate caches have not seen")
+}

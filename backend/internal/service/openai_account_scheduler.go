@@ -45,6 +45,7 @@ const (
 )
 
 type cachedOpenAIAdvancedSchedulerSetting struct {
+	requestPolicy                  OpenAIRequestSchedulingPolicy
 	lowUpstreamRatePriorityEnabled bool
 	oauthSchedulingRateMultiplier  *float64
 	enabled                        bool
@@ -56,6 +57,7 @@ type cachedOpenAIAdvancedSchedulerSetting struct {
 }
 
 type openAIAdvancedSchedulerRuntimeSettings struct {
+	requestPolicy                  OpenAIRequestSchedulingPolicy
 	lowUpstreamRatePriorityEnabled bool
 	oauthSchedulingRateMultiplier  *float64
 	enabled                        bool
@@ -69,6 +71,7 @@ var openAIAdvancedSchedulerSettingCache atomic.Value // *cachedOpenAIAdvancedSch
 var openAIAdvancedSchedulerSettingSF singleflight.Group
 
 type OpenAIAccountScheduleRequest struct {
+	LowLoadFirst            bool
 	spilloverMaxUtilization *float64
 	GroupID                 *int64
 	Platform                string
@@ -879,7 +882,7 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
 			continue
 		}
 		if !loadKnown || loadInfo == nil {
-			loadInfo = &AccountLoadInfo{AccountID: account.ID}
+			loadInfo = &AccountLoadInfo{AccountID: account.ID, LoadRate: 100}
 			loadKnown = false
 		}
 		errorRate, ttft, hasTTFT := 0.0, 0.0, false
@@ -1081,7 +1084,7 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAISelectionOrder(
 					maxLoad = max(maxLoad, c.loadInfo.LoadRate)
 				}
 			}
-			if maxLoad-minLoad >= 30 {
+			if maxLoad-minLoad >= 30 || (req.LowLoadFirst && maxLoad >= 0) {
 				preferred := make([]openAIAccountCandidateScore, 0, len(pool))
 				for _, c := range pool {
 					if c.loadKnown && c.loadInfo.LoadRate <= minLoad+10 {
@@ -1091,6 +1094,21 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAISelectionOrder(
 					}
 				}
 				pool = preferred
+				if req.LowLoadFirst {
+					sort.SliceStable(busyFallback, func(i, j int) bool {
+						a, b := busyFallback[i], busyFallback[j]
+						if a.loadKnown != b.loadKnown {
+							return a.loadKnown
+						}
+						if a.loadInfo.LoadRate != b.loadInfo.LoadRate {
+							return a.loadInfo.LoadRate < b.loadInfo.LoadRate
+						}
+						if a.loadInfo.WaitingCount != b.loadInfo.WaitingCount {
+							return a.loadInfo.WaitingCount < b.loadInfo.WaitingCount
+						}
+						return isOpenAIAccountCandidateBetter(a, b)
+					})
+				}
 			}
 		}
 		groupTopK := plan.topK
@@ -1099,7 +1117,7 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAISelectionOrder(
 		}
 		ranked := selectTopKOpenAICandidates(pool, groupTopK)
 		var primary []openAIAccountCandidateScore
-		if req.StickyWeighted {
+		if req.StickyWeighted && !req.LowLoadFirst {
 			for _, stickyID := range []int64{req.StickyPreviousAccountID, req.StickyAccountID} {
 				if stickyID <= 0 {
 					continue
@@ -1119,7 +1137,7 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAISelectionOrder(
 		if len(primary) == 0 {
 			primary = buildOpenAIWeightedSelectionOrder(ranked, req)
 		}
-		if !plan.includeOverflowFallback || groupTopK >= len(pool) {
+		if (!plan.includeOverflowFallback && !req.LowLoadFirst) || groupTopK >= len(pool) {
 			return append(primary, busyFallback...)
 		}
 
@@ -1304,7 +1322,7 @@ func (s *defaultOpenAIAccountScheduler) tryFallbackToWeightedSticky(
 	ctx context.Context,
 	req OpenAIAccountScheduleRequest,
 ) (*AccountSelectionResult, error) {
-	if !req.StickyWeighted {
+	if !req.StickyWeighted || req.LowLoadFirst {
 		return nil, nil
 	}
 	for _, accountID := range []int64{req.StickyPreviousAccountID, req.StickyAccountID} {
@@ -1602,7 +1620,7 @@ func (s *defaultOpenAIAccountScheduler) trySelectByLoadBalancePool(
 	budget *openAISelectionProbeBudget,
 ) openAIAccountLoadSelectionAttempt {
 	plan := s.buildOpenAIAccountLoadPlan(ctx, req, filtered, loadMap)
-	if openAICostOverflowExpanded(req, plan) {
+	if req.LowLoadFirst || openAICostOverflowExpanded(req, plan) {
 		budget.enableLimit()
 	}
 	attempt := openAIAccountLoadSelectionAttempt{
@@ -1932,16 +1950,25 @@ func (s *defaultOpenAIAccountScheduler) SnapshotMetrics() OpenAIAccountScheduler
 }
 
 func (s *OpenAIGatewayService) openAIAdvancedSchedulerSettingRepo() SettingRepository {
-	if s == nil || s.rateLimitService == nil || s.rateLimitService.settingService == nil {
-		return nil
+	if s != nil {
+		if s.rateLimitService != nil && s.rateLimitService.settingService != nil {
+			return s.rateLimitService.settingService.settingRepo
+		}
+		if s.settingService != nil {
+			return s.settingService.settingRepo
+		}
 	}
-	return s.rateLimitService.settingService.settingRepo
+	return nil
 }
 
 func (s *OpenAIGatewayService) openAIAdvancedSchedulerRuntimeSettings(ctx context.Context) openAIAdvancedSchedulerRuntimeSettings {
+	if snapshot, ok := ctx.Value(openAISchedulingSnapshotKey{}).(openAIAdvancedSchedulerRuntimeSettings); ok {
+		return snapshot
+	}
 	if cached, ok := openAIAdvancedSchedulerSettingCache.Load().(*cachedOpenAIAdvancedSchedulerSetting); ok && cached != nil {
 		if time.Now().UnixNano() < cached.expiresAt {
 			return openAIAdvancedSchedulerRuntimeSettings{
+				requestPolicy:                  cached.requestPolicy,
 				lowUpstreamRatePriorityEnabled: cached.lowUpstreamRatePriorityEnabled,
 				oauthSchedulingRateMultiplier:  cached.oauthSchedulingRateMultiplier,
 				enabled:                        cached.enabled,
@@ -1954,9 +1981,11 @@ func (s *OpenAIGatewayService) openAIAdvancedSchedulerRuntimeSettings(ctx contex
 	}
 
 	result, _, _ := openAIAdvancedSchedulerSettingSF.Do(openAIAdvancedSchedulerSettingKey, func() (any, error) {
+		cacheBeforeRead := openAIAdvancedSchedulerSettingCache.Load()
 		if cached, ok := openAIAdvancedSchedulerSettingCache.Load().(*cachedOpenAIAdvancedSchedulerSetting); ok && cached != nil {
 			if time.Now().UnixNano() < cached.expiresAt {
 				return openAIAdvancedSchedulerRuntimeSettings{
+					requestPolicy:                  cached.requestPolicy,
 					lowUpstreamRatePriorityEnabled: cached.lowUpstreamRatePriorityEnabled,
 					oauthSchedulingRateMultiplier:  cached.oauthSchedulingRateMultiplier,
 					enabled:                        cached.enabled,
@@ -1968,6 +1997,7 @@ func (s *OpenAIGatewayService) openAIAdvancedSchedulerRuntimeSettings(ctx contex
 			}
 		}
 
+		requestPolicy := parseOpenAIRequestSchedulingPolicy(nil)
 		lowUpstreamRatePriorityEnabled := false
 		oauthSchedulingRateMultiplier := parseOpenAIOAuthSchedulingRateMultiplier(nil)
 		enabled := false
@@ -1987,27 +2017,26 @@ func (s *OpenAIGatewayService) openAIAdvancedSchedulerRuntimeSettings(ctx contex
 				subscriptionPriorityEnabled = strings.EqualFold(strings.TrimSpace(values[SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled]), "true")
 				lbTopKOverride = parsePositiveIntOverride(values[SettingKeyOpenAIAdvancedSchedulerLBTopK])
 				weightOverrides = parseOpenAIAdvancedSchedulerWeightOverrides(values)
+				requestPolicy = parseOpenAIRequestSchedulingPolicy(values)
 			} else {
-				// 批量读取失败时逐键降级，覆盖全部键（含 TopK/权重），避免只加载布尔开关
-				// 而静默丢弃管理员配置的覆盖值；降级状态会被缓存一个 TTL，必须留痕。
+				// Retain the last good policy instead of N per-key reads on a DB failure.
 				slog.Warn("openai_advanced_scheduler_settings_batch_load_failed", "error", err)
-				fallbackValues := make(map[string]string)
-				for _, key := range openAIAdvancedSchedulerRuntimeSettingKeys() {
-					if value, valueErr := repo.GetValue(dbCtx, key); valueErr == nil {
-						fallbackValues[key] = value
-					}
+				if old, ok := openAIAdvancedSchedulerSettingCache.Load().(*cachedOpenAIAdvancedSchedulerSetting); ok && old != nil {
+					requestPolicy = old.requestPolicy
+					lowUpstreamRatePriorityEnabled = old.lowUpstreamRatePriorityEnabled
+					oauthSchedulingRateMultiplier = old.oauthSchedulingRateMultiplier
+					enabled = old.enabled
+					stickyWeightedEnabled = old.stickyWeightedEnabled
+					subscriptionPriorityEnabled = old.subscriptionPriorityEnabled
+					lbTopKOverride = old.lbTopKOverride
+					weightOverrides = cloneOpenAIAdvancedSchedulerWeightOverrides(old.weightOverrides)
 				}
-				lowUpstreamRatePriorityEnabled = strings.EqualFold(strings.TrimSpace(fallbackValues[SettingKeyOpenAILowUpstreamRatePriorityEnabled]), "true")
-				oauthSchedulingRateMultiplier = parseOpenAIOAuthSchedulingRateMultiplier(fallbackValues)
-				enabled = strings.EqualFold(strings.TrimSpace(fallbackValues[openAIAdvancedSchedulerSettingKey]), "true")
-				stickyWeightedEnabled = strings.EqualFold(strings.TrimSpace(fallbackValues[SettingKeyOpenAIAdvancedSchedulerStickyWeightedEnabled]), "true")
-				subscriptionPriorityEnabled = strings.EqualFold(strings.TrimSpace(fallbackValues[SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled]), "true")
-				lbTopKOverride = parsePositiveIntOverride(fallbackValues[SettingKeyOpenAIAdvancedSchedulerLBTopK])
-				weightOverrides = parseOpenAIAdvancedSchedulerWeightOverrides(fallbackValues)
 			}
 		}
 
-		openAIAdvancedSchedulerSettingCache.Store(&cachedOpenAIAdvancedSchedulerSetting{
+		// A settings save may publish a newer policy while this read is in flight.
+		openAIAdvancedSchedulerSettingCache.CompareAndSwap(cacheBeforeRead, &cachedOpenAIAdvancedSchedulerSetting{
+			requestPolicy:                  requestPolicy,
 			lowUpstreamRatePriorityEnabled: lowUpstreamRatePriorityEnabled,
 			oauthSchedulingRateMultiplier:  oauthSchedulingRateMultiplier,
 			enabled:                        enabled,
@@ -2018,6 +2047,7 @@ func (s *OpenAIGatewayService) openAIAdvancedSchedulerRuntimeSettings(ctx contex
 			expiresAt:                      time.Now().Add(openAIAdvancedSchedulerSettingCacheTTL).UnixNano(),
 		})
 		return openAIAdvancedSchedulerRuntimeSettings{
+			requestPolicy:                  requestPolicy,
 			lowUpstreamRatePriorityEnabled: lowUpstreamRatePriorityEnabled,
 			oauthSchedulingRateMultiplier:  oauthSchedulingRateMultiplier,
 			enabled:                        enabled,
@@ -2063,6 +2093,11 @@ func openAIAdvancedSchedulerRuntimeSettingKeys() []string {
 		SettingKeyOpenAIAdvancedSchedulerStickyWeightedEnabled,
 		SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled,
 		SettingKeyOpenAIAdvancedSchedulerLBTopK,
+		SettingKeyOpenAIAdvancedSchedulerMode,
+		SettingKeyOpenAIAdvancedSchedulerQueueSeconds,
+		SettingKeyOpenAIAdvancedSchedulerPreOutputSeconds,
+		SettingKeyOpenAIAdvancedSchedulerMaxSwitches,
+		SettingKeyOpenAIAdvancedSchedulerGroupPolicies,
 	}
 	for _, spec := range openAIAdvancedSchedulerWeightOverrideSpecs() {
 		keys = append(keys, spec.key)
@@ -2376,6 +2411,7 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerOnce(
 	previousResponseCanMove bool,
 	useUpstreamTokenCost bool,
 ) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
+	ctx = s.WithOpenAISchedulingSnapshot(ctx, groupID)
 	ctx = s.withOpenAIQuotaAutoPauseContext(ctx)
 	ctx = s.withOpenAIGroupPrivacyRequirement(ctx, groupID)
 	// 分组利润控制：唯一文本调度入口的防御性装门。handler 文本
@@ -2507,7 +2543,9 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerOnce(
 			stickyAccountID = accountID
 		}
 	}
-	stickyWeighted := s.isOpenAIAdvancedSchedulerStickyWeightedEnabled(ctx)
+	runtimeSettings := s.openAIAdvancedSchedulerRuntimeSettings(ctx)
+	lowLoadFirst := platform == PlatformOpenAI && runtimeSettings.enabled && runtimeSettings.requestPolicy.Mode == "low_load"
+	stickyWeighted := s.isOpenAIAdvancedSchedulerStickyWeightedEnabled(ctx) || (lowLoadFirst && !preserveGuardianParentBinding)
 	subscriptionPriority := s.isOpenAIAdvancedSchedulerSubscriptionPriorityEnabled(ctx)
 	stickyPreviousAccountID := int64(0)
 	if stickyWeighted && previousResponseCanMove && strings.TrimSpace(previousResponseID) != "" && platform == PlatformOpenAI {
@@ -2522,6 +2560,7 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerOnce(
 		GuardianParentAccountID: guardianParentAccountID,
 		StickyPreviousAccountID: stickyPreviousAccountID,
 		StickyWeighted:          stickyWeighted,
+		LowLoadFirst:            lowLoadFirst,
 		SubscriptionPriority:    subscriptionPriority,
 		PreserveStickyBinding:   preserveGuardianParentBinding,
 		RequirePrivacySet:       s.openAIGroupRequiresPrivacySet(ctx, groupID),
@@ -2840,7 +2879,7 @@ func buildOpenAIAccountSchedulerScoreSnapshot(
 		}
 		loadInfo := loadMap[account.ID]
 		if loadInfo == nil {
-			loadInfo = &AccountLoadInfo{AccountID: account.ID}
+			loadInfo = &AccountLoadInfo{AccountID: account.ID, LoadRate: 100}
 		}
 		candidates = append(candidates, openAIAccountCandidateScore{
 			account:   account,

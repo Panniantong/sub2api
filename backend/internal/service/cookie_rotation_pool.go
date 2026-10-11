@@ -11,40 +11,48 @@ import (
 
 // GroupIDs share configuration, but each group owns an independent runtime pool.
 type CookieRotationPoolPolicy struct {
-	GroupID               int64   `json:"group_id"`
-	GroupIDs              []int64 `json:"group_ids,omitempty"`
-	DemandMode            string  `json:"demand_mode,omitempty"`
-	ScaleDownSeconds      int     `json:"scale_down_seconds,omitempty"`
-	Enabled               bool    `json:"enabled"`
-	TargetConcurrency     int     `json:"target_concurrency"`
-	RedundancyPercent     int     `json:"redundancy_percent"`
-	RedundancyMode        string  `json:"redundancy_mode,omitempty"`
-	RedundancyConcurrency int     `json:"redundancy_concurrency"`
-	MinAccounts           int     `json:"min_accounts"`
-	MaxAccounts           int     `json:"max_accounts"`
-	ReadyTimeoutSeconds   int     `json:"ready_timeout_seconds"`
-	RetrySeconds          int     `json:"retry_seconds"`
-	ShortageRetrySeconds  int     `json:"shortage_retry_seconds,omitempty"`
-	PreparationMultiplier int     `json:"preparation_multiplier,omitempty"`
-	MaxPreparingAccounts  int     `json:"max_preparing_accounts,omitempty"`
-	QuotaPriority         string  `json:"quota_priority,omitempty"`
+	GroupID                int64   `json:"group_id"`
+	GroupIDs               []int64 `json:"group_ids,omitempty"`
+	DemandMode             string  `json:"demand_mode,omitempty"`
+	ScaleDownSeconds       int     `json:"scale_down_seconds,omitempty"`
+	Enabled                bool    `json:"enabled"`
+	TargetConcurrency      int     `json:"target_concurrency"`
+	RedundancyPercent      int     `json:"redundancy_percent"`
+	RedundancyMode         string  `json:"redundancy_mode,omitempty"`
+	RedundancyConcurrency  int     `json:"redundancy_concurrency"`
+	MinAccounts            int     `json:"min_accounts"`
+	MaxAccounts            int     `json:"max_accounts"`
+	ReadyTimeoutSeconds    int     `json:"ready_timeout_seconds"`
+	RetrySeconds           int     `json:"retry_seconds"`
+	ShortageRetrySeconds   int     `json:"shortage_retry_seconds,omitempty"`
+	PreparationMultiplier  int     `json:"preparation_multiplier,omitempty"`
+	MaxPreparingAccounts   int     `json:"max_preparing_accounts,omitempty"`
+	QuotaPriority          string  `json:"quota_priority,omitempty"`
+	LowHostRotationEnabled bool    `json:"low_host_rotation_enabled"`
+	LowHostThreshold       int     `json:"low_host_threshold"`
+	LowHostAccountSlots    int     `json:"low_host_account_slots"`
 }
 
 type CookieRotationPoolMember struct {
-	State      string    `json:"state"`
-	Since      time.Time `json:"since"`
-	RetryAt    time.Time `json:"retry_at,omitempty"`
-	DrainUntil time.Time `json:"drain_until,omitempty"`
+	State               string    `json:"state"`
+	Since               time.Time `json:"since"`
+	RetryAt             time.Time `json:"retry_at,omitempty"`
+	DrainUntil          time.Time `json:"drain_until,omitempty"`
+	LowHostForced       bool      `json:"low_host_forced,omitempty"`
+	LowHostBindingUntil time.Time `json:"low_host_binding_until,omitempty"`
+	KeepDegraded        bool      `json:"keep_degraded,omitempty"`
 }
 type CookieRotationPoolGroup struct {
-	CurrentDemand     int                                `json:"current_demand"`
-	DemandConcurrency int                                `json:"demand_concurrency"`
-	DemandUnavailable bool                               `json:"demand_unavailable"`
-	Cursor            int64                              `json:"cursor"`
-	Members           map[int64]CookieRotationPoolMember `json:"members"`
-	TargetCapacity    int                                `json:"target_capacity"`
-	ReadyCapacity     int                                `json:"ready_capacity"`
-	UpdatedAt         time.Time                          `json:"updated_at"`
+	CurrentDemand        int                                `json:"current_demand"`
+	DemandConcurrency    int                                `json:"demand_concurrency"`
+	DemandUnavailable    bool                               `json:"demand_unavailable"`
+	Cursor               int64                              `json:"cursor"`
+	LowHostCursor        int64                              `json:"low_host_cursor,omitempty"`
+	LowHostReadyCapacity int                                `json:"low_host_ready_capacity,omitempty"`
+	Members              map[int64]CookieRotationPoolMember `json:"members"`
+	TargetCapacity       int                                `json:"target_capacity"`
+	ReadyCapacity        int                                `json:"ready_capacity"`
+	UpdatedAt            time.Time                          `json:"updated_at"`
 }
 type CookieRotationPoolSnapshot struct {
 	Groups map[int64]*CookieRotationPoolGroup `json:"groups"`
@@ -148,6 +156,9 @@ func cookiePoolMember(a *Account, cfg *OpenAICookieSettings) (CookieRotationPool
 		// expire and newly harvested Hosts can recover a mailbox before its turn.
 		if !cookieHostsExhausted(a, cfg, time.Now()) {
 			m.State = "waiting"
+			if cookieLowHostEnabled(*p) {
+				m.KeepDegraded = true
+			}
 			return m, "cookie_pool_waiting"
 		}
 		return m, "cookie_pool_exhausted"
@@ -164,6 +175,11 @@ func cookiePoolMayRotate(a *Account, cfg *OpenAICookieSettings) bool {
 		return true
 	}
 	m, _ := cookiePoolMember(a, cfg)
+	if m.LowHostForced && m.State == "active" {
+		// Once expired the worker only retires the old binding/cooldown; it
+		// cannot renew this reservation ahead of other waiting accounts.
+		return !m.LowHostBindingUntil.IsZero() && !m.LowHostBindingUntil.After(time.Now())
+	}
 	return m.State == "active" || m.State == "preparing"
 }
 
@@ -213,7 +229,7 @@ func (s *OpenAIGatewayService) publishCookiePoolReady(ctx context.Context, a *Ac
 			return fmt.Errorf("cookie pool admission revoked")
 		}
 		m := g.Members[a.ID]
-		if !m.Since.Equal(expected.Since) || (m.State != "preparing" && m.State != "active") {
+		if !m.Since.Equal(expected.Since) || m.LowHostForced != expected.LowHostForced || (m.State != "preparing" && m.State != "active") {
 			return fmt.Errorf("cookie pool admission revoked")
 		}
 		if m.State == "preparing" {
@@ -222,11 +238,15 @@ func (s *OpenAIGatewayService) publishCookiePoolReady(ctx context.Context, a *Ac
 			}
 			active := 0
 			for _, member := range g.Members {
-				if member.State == "active" {
+				if member.State == "active" && !member.LowHostForced {
 					active++
 				}
 			}
-			if (p.MaxAccounts > 0 && active >= p.MaxAccounts) || (active >= p.MinAccounts && g.ReadyCapacity >= g.TargetCapacity) {
+			if m.LowHostForced {
+				if !cookieLowHostEnabled(*p) || cookieLowHostSlotsUsed(g) > p.LowHostAccountSlots {
+					return fmt.Errorf("low Host admission revoked")
+				}
+			} else if (p.MaxAccounts > 0 && active >= p.MaxAccounts) || (active >= p.MinAccounts && g.ReadyCapacity-g.LowHostReadyCapacity >= g.TargetCapacity) {
 				m.State = "standby"
 				g.Members[a.ID] = m
 				return nil
@@ -241,7 +261,12 @@ func (s *OpenAIGatewayService) publishCookiePoolReady(ctx context.Context, a *Ac
 		}
 		if m.State == "preparing" {
 			g.ReadyCapacity += a.Concurrency
+			if m.LowHostForced {
+				g.LowHostReadyCapacity += a.Concurrency
+				m.LowHostBindingUntil, _ = time.Parse(time.RFC3339Nano, a.GetExtraString("codex_cookie_host_binding_expires_at"))
+			}
 		}
+		m.KeepDegraded = false
 		m.State = "active"
 		g.Members[a.ID] = m
 		g.UpdatedAt = time.Now()
@@ -257,6 +282,9 @@ func (s *OpenAIGatewayService) publishCookiePoolReady(ctx context.Context, a *Ac
 func (s *SettingService) validateCookieRotationPools(ctx context.Context, cfg *OpenAICookieSettings) error {
 	seen := map[int64]bool{}
 	for _, p := range cookiePoolPolicies(cfg) {
+		if p.LowHostThreshold < 0 || p.LowHostThreshold > 10000 || p.LowHostAccountSlots < 0 || p.LowHostAccountSlots > 10000 || (p.LowHostRotationEnabled && (p.LowHostThreshold < 2 || p.LowHostAccountSlots < 1)) {
+			return fmt.Errorf("低 Host 强制轮转阈值需为 2–10000，强制处理账号名额需为 1–10000")
+		}
 		if (p.RedundancyMode != "" && p.RedundancyMode != "percent" && p.RedundancyMode != "fixed") || p.RedundancyConcurrency < 0 || p.RedundancyConcurrency > 1000000 {
 			return fmt.Errorf("冗余方式需为比例或固定并发，固定冗余需为 0–1000000")
 		}
@@ -316,6 +344,7 @@ func reconcileCookiePool(g *CookieRotationPoolGroup, p CookieRotationPoolPolicy,
 		g.TargetCapacity = cookiePoolTargetCapacity(p, g.DemandConcurrency)
 	}
 	g.ReadyCapacity = 0
+	g.LowHostReadyCapacity = 0
 	g.UpdatedAt = now
 	eligible := map[int64]*Account{}
 	for i := range accounts {
@@ -327,8 +356,14 @@ func reconcileCookiePool(g *CookieRotationPoolGroup, p CookieRotationPoolPolicy,
 			eligible[a.ID] = a
 		}
 	}
+	// Reserve forced members before ordinary capacity selection. The helper only
+	// uses the already hydrated accounts/library and never performs repository IO.
+	forced := reconcileCookieLowHost(g, p, eligible, cfg, now, claimed)
 	ids := make([]int64, 0, len(eligible))
 	for id := range eligible {
+		if forced[id] {
+			continue
+		}
 		ids = append(ids, id)
 	}
 	sort.Slice(ids, func(i, j int) bool {
@@ -357,6 +392,10 @@ func reconcileCookiePool(g *CookieRotationPoolGroup, p CookieRotationPoolPolicy,
 		if m.State == "exhausted" {
 			if exhausted, known := cookieHostExhaustionStatus(a, cfg, now); known && !exhausted {
 				m.State = "waiting"
+				if cookieLowHostEnabled(p) {
+					m.KeepDegraded = true
+					m.RetryAt = time.Time{}
+				}
 				g.Members[id] = m
 			}
 		}
@@ -410,6 +449,7 @@ func reconcileCookiePool(g *CookieRotationPoolGroup, p CookieRotationPoolPolicy,
 			}
 		} else {
 			m.State, m.DrainUntil = "active", time.Time{}
+			m.KeepDegraded = false
 			g.ReadyCapacity += a.Concurrency
 			capacity += a.Concurrency
 			count++
@@ -448,13 +488,13 @@ func reconcileCookiePool(g *CookieRotationPoolGroup, p CookieRotationPoolPolicy,
 	for _, id := range ids {
 		a, m := eligible[id], g.Members[id]
 		identity := cookiePoolIdentity(a)
-		if claimed[identity] || candidateIdentities[identity] || m.State == "active" || m.State == "draining" || cookiePoolEffectiveRetryAt(m, p, g.ReadyCapacity < g.TargetCapacity || count < p.MinAccounts).After(now) {
+		if claimed[identity] || candidateIdentities[identity] || m.State == "active" || m.State == "draining" || cookiePoolEffectiveRetryAt(m, p, g.ReadyCapacity-g.LowHostReadyCapacity < g.TargetCapacity || count < p.MinAccounts).After(now) {
 			continue
 		}
 		if until, err := time.Parse(time.RFC3339Nano, a.GetExtraString("codex_cookie_validation_resume_at")); err == nil && until.After(now) {
 			continue
 		}
-		if !m.RetryAt.IsZero() && cookieHostsExhausted(a, cfg, now) {
+		if (!m.RetryAt.IsZero() || m.State == "exhausted") && cookieHostsExhausted(a, cfg, now) {
 			continue
 		}
 		candidateIdentities[identity] = true
@@ -479,7 +519,7 @@ func reconcileCookiePool(g *CookieRotationPoolGroup, p CookieRotationPoolPolicy,
 		}
 		selected[id] = true
 		if g.Members[id].State != "preparing" {
-			g.Members[id] = CookieRotationPoolMember{State: "preparing", Since: now}
+			g.Members[id] = CookieRotationPoolMember{State: "preparing", Since: now, KeepDegraded: g.Members[id].KeepDegraded}
 			g.Cursor = id
 		}
 		claimed[cookiePoolIdentity(eligible[id])] = true
@@ -500,6 +540,9 @@ func (s *OpenAIGatewayService) reconcileCookieRotationPools(ctx context.Context,
 	repo, ok := s.settingService.settingRepo.(CookieRotationPoolRepository)
 	if !ok {
 		return fmt.Errorf("cookie rotation pool storage unavailable")
+	}
+	if err := s.settingService.primeCookieCandidateCooldowns(ctx, accounts); err != nil {
+		return err
 	}
 	for i := range accounts {
 		if cookiePoolPolicy(&accounts[i], cfg) == nil {

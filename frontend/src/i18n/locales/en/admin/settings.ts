@@ -1,5 +1,24 @@
 export default {
     settings: {
+      requestScheduling: {
+        "title": "OpenAI request scheduling",
+        "description": "Account selection, concurrency queueing and pre-output waiting for HTTP Responses, Chat Completions and Messages.",
+        "applyHint": "Saved settings apply to new requests. In-flight requests keep their policy. Leave blank to inherit server defaults.",
+        "preset": "Apply low-load preset",
+        "mode": "Advanced scheduling mode",
+        "modeHint": "Combined score balances configured weights; low load first prioritizes available capacity. Disabling advanced scheduling restores legacy selection.",
+        "balanced": "Combined score",
+        "lowLoad": "Prefer low load",
+        "queue": "Queue slice (seconds)",
+        "queueHint": "1-10 seconds waiting for an account slot, then reselect internally. Requires advanced scheduling.",
+        "preOutput": "Pre-output budget (seconds)",
+        "preOutputHint": "1-3600 seconds including selection, queueing and retries. Stops on meaningful output. Non-streaming waits for the complete response.",
+        "switches": "Maximum account switches",
+        "switchesHint": "0-20, excluding the initial account. Five switches allow six different accounts.",
+        "cookieHint": "Live Cookie checks stay enabled: recheck binding, Cookie and cooldowns before dispatch; reselect on failure. Continuations that require their original account stay bound.",
+        "advanced": "Expand score weights"
+      },
+
       title: 'System Settings',
       description: 'Manage registration, email verification, default values, and SMTP settings',
       tabs: {

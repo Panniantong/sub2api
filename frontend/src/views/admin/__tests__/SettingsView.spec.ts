@@ -1293,6 +1293,59 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(wrapper.text()).not.toContain("OpenAI 高级调度器");
   });
 
+  it("keeps request scheduling in its own gateway module and saves the low-load preset", async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    await openGatewayTab(wrapper);
+    const card = wrapper.get('[data-testid="openai-request-scheduling-module"]');
+    const mode = card.get<HTMLSelectElement>('[data-testid="request-scheduling-mode"]');
+    expect(mode.element.value).toBe("balanced");
+    expect(mode.element.disabled).toBe(true);
+    expect(mode.findAll("option").map((o) => o.attributes("value"))).toEqual(["balanced", "low_load"]);
+    await card.get('[data-testid="low-load-preset"]').trigger("click");
+    expect(mode.element.disabled).toBe(false);
+    expect(mode.element.value).toBe("low_load");
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+      openai_advanced_scheduler_enabled: true,
+      openai_advanced_scheduler_mode: "low_load",
+      openai_advanced_scheduler_queue_seconds: "2",
+      openai_advanced_scheduler_pre_output_seconds: "25",
+      openai_advanced_scheduler_max_switches: "5",
+      openai_advanced_scheduler_weight_load: "4",
+      openai_advanced_scheduler_weight_session_sticky: "0",
+    }));
+    await openUsersTab(wrapper);
+    expect(card.isVisible()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("loads scheduling overrides and preserves zero account switches", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      openai_advanced_scheduler_enabled: true,
+      openai_advanced_scheduler_mode: "low_load",
+      openai_advanced_scheduler_queue_seconds: "3",
+      openai_advanced_scheduler_pre_output_seconds: "25",
+      openai_advanced_scheduler_max_switches: "0",
+    });
+    const wrapper = mountView();
+    await flushPromises();
+    await openGatewayTab(wrapper);
+    expect(wrapper.get<HTMLInputElement>('[data-testid="request-max-switches"]').element.value).toBe("0");
+    expect(wrapper.get<HTMLInputElement>('[data-testid="request-queue-seconds"]').element.value).toBe("3");
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+      openai_advanced_scheduler_mode: "low_load",
+      openai_advanced_scheduler_queue_seconds: "3",
+      openai_advanced_scheduler_pre_output_seconds: "25",
+      openai_advanced_scheduler_max_switches: "0",
+    }));
+    wrapper.unmount();
+  });
+
   it("summarizes target and other-model actions, then switches to all models", async () => {
     getSettings.mockResolvedValueOnce({
       ...baseSettingsResponse,

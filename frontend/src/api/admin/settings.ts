@@ -694,6 +694,11 @@ export interface SystemSettings {
   openai_advanced_scheduler_sticky_weighted_enabled?: boolean;
   openai_advanced_scheduler_subscription_priority_enabled?: boolean;
   openai_advanced_scheduler_lb_top_k?: string;
+  openai_advanced_scheduler_mode?: string;
+  openai_advanced_scheduler_queue_seconds?: string;
+  openai_advanced_scheduler_pre_output_seconds?: string;
+  openai_advanced_scheduler_max_switches?: string;
+  openai_advanced_scheduler_group_policies?: string;
   openai_advanced_scheduler_weight_priority?: string;
   openai_advanced_scheduler_weight_load?: string;
   openai_advanced_scheduler_weight_queue?: string;
@@ -1016,6 +1021,11 @@ export interface UpdateSettingsRequest {
   openai_advanced_scheduler_sticky_weighted_enabled?: boolean;
   openai_advanced_scheduler_subscription_priority_enabled?: boolean;
   openai_advanced_scheduler_lb_top_k?: string;
+  openai_advanced_scheduler_mode?: string;
+  openai_advanced_scheduler_queue_seconds?: string;
+  openai_advanced_scheduler_pre_output_seconds?: string;
+  openai_advanced_scheduler_max_switches?: string;
+  openai_advanced_scheduler_group_policies?: string;
   openai_advanced_scheduler_weight_priority?: string;
   openai_advanced_scheduler_weight_load?: string;
   openai_advanced_scheduler_weight_queue?: string;

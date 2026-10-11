@@ -1501,6 +1501,9 @@ func (s *OpenAIGatewayService) listSchedulableAccounts(ctx context.Context, grou
 		return nil, err
 	}
 	if platform != PlatformOpenAI || !s.cookieDegradationConfigured(ctx) {
+		if err := s.settingService.primeCookieCandidateCooldowns(ctx, accounts); err != nil {
+			return nil, err
+		}
 		return accounts, nil
 	}
 	if s.settingService != nil && platform == PlatformOpenAI && groupID != nil {
@@ -1520,6 +1523,9 @@ func (s *OpenAIGatewayService) listSchedulableAccounts(ctx context.Context, grou
 				accounts = append(accounts, candidates...)
 			}
 		}
+	}
+	if err := s.settingService.primeCookieCandidateCooldowns(ctx, accounts); err != nil {
+		return nil, err
 	}
 	seen := map[int64]bool{}
 	result := make([]Account, 0, len(accounts))

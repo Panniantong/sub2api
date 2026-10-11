@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strconv"
 	"time"
 )
 
@@ -29,6 +30,7 @@ type CookiePoolDashboardGroup struct {
 	WindowDemand    *int                         `json:"window_demand"`
 	TargetCapacity  int                          `json:"target_capacity"`
 	ReadyCapacity   int                          `json:"ready_capacity"`
+	LowHost         CookieLowHostDashboard       `json:"low_host"`
 	Active          int                          `json:"active"`
 	Draining        int                          `json:"draining"`
 	Preparing       int                          `json:"preparing"`
@@ -43,6 +45,31 @@ type CookiePoolDashboardGroup struct {
 }
 
 func (s *OpenAIGatewayService) CookieDashboard(ctx context.Context, detailGroups ...int64) (*CookieDashboard, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	group := int64(0)
+	if len(detailGroups) > 0 && detailGroups[0] > 0 {
+		group = detailGroups[0]
+	}
+	// Display-only coalescing: no TTL cache, no effect on dispatch freshness.
+	// One canceled viewer must not cancel another viewer's shared read. The
+	// shared operation has its own ten-second deadline and opens no transaction.
+	result := s.cookieDashboardReads.DoChan(strconv.FormatInt(group, 10), func() (any, error) {
+		return s.loadCookieDashboard(context.WithoutCancel(ctx), group)
+	})
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case r := <-result:
+		if r.Err != nil {
+			return nil, r.Err
+		}
+		return r.Val.(*CookieDashboard), nil
+	}
+}
+
+func (s *OpenAIGatewayService) loadCookieDashboard(ctx context.Context, detailGroups ...int64) (*CookieDashboard, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	accounts, err := s.accountRepo.ListByPlatform(ctx, PlatformOpenAI)
@@ -101,11 +128,11 @@ func (s *OpenAIGatewayService) CookieDashboard(ctx context.Context, detailGroups
 			if runtime := result.RotationPools.Groups[p.GroupID]; runtime != nil {
 				active := 0
 				for _, m := range runtime.Members {
-					if m.State == "active" {
+					if m.State == "active" && !m.LowHostForced {
 						active++
 					}
 				}
-				row.shortage = runtime.ReadyCapacity < runtime.TargetCapacity || active < p.MinAccounts
+				row.shortage = runtime.ReadyCapacity-runtime.LowHostReadyCapacity < runtime.TargetCapacity || active < p.MinAccounts
 				row.TargetCapacity = runtime.TargetCapacity
 				at := runtime.UpdatedAt
 				row.UpdatedAt = &at
@@ -126,6 +153,9 @@ func (s *OpenAIGatewayService) CookieDashboard(ctx context.Context, detailGroups
 			result.DegradedCurrentRequests = &demand.Current
 		}
 	}
+	// Each account is hydrated once below. All nested display calculations use
+	// that immutable value, avoiding repeated mailbox merges and repository calls.
+	settings.emailAccount = nil
 	for i := range accounts {
 		a := &accounts[i]
 		if seen[a.ID] || !isOpenAICodexTicketAccount(a) {
@@ -136,7 +166,8 @@ func (s *OpenAIGatewayService) CookieDashboard(ctx context.Context, detailGroups
 			return nil, err
 		}
 		seen[a.ID] = true
-		if cookieDashboardHealthyBinding(a, settings, byHost, result.UpdatedAt) {
+		healthy := cookieDashboardHealthyBinding(a, settings, byHost, result.UpdatedAt)
+		if healthy {
 			result.HealthyBoundAccounts++
 		}
 		if isOpenAICookieRotationAccount(a, settings) {
@@ -158,7 +189,7 @@ func (s *OpenAIGatewayService) CookieDashboard(ctx context.Context, detailGroups
 			case !row.Enabled || !a.IsSchedulable():
 				state = "unavailable"
 				row.Unavailable++
-			case (member.State == "active" || member.State == "draining") && cookieDashboardHealthyBinding(a, settings, byHost, result.UpdatedAt):
+			case (member.State == "active" || member.State == "draining") && healthy:
 				state = member.State
 				row.Active++
 				if member.State == "draining" {
@@ -178,11 +209,15 @@ func (s *OpenAIGatewayService) CookieDashboard(ctx context.Context, detailGroups
 				row.Standby++
 			}
 			reason, until := cookiePoolAccountWait(a, member, row, result.UpdatedAt)
+			low := cookieDashboardLowHostAccount(a, member, row, settings, healthy, degraded, result.UpdatedAt)
+			row.LowHost.add(low, a.Concurrency)
 			if state == "unavailable" {
 				row.WaitReasons[reason]++
 			}
 			if len(detailGroups) > 0 && detailGroups[0] == p.GroupID {
-				row.Accounts = append(row.Accounts, s.cookiePoolDashboardAccount(a, member, state, reason, until, settings, byHost, result.UpdatedAt))
+				detail := s.cookiePoolDashboardAccount(a, member, state, reason, until, settings, byHost, result.UpdatedAt)
+				detail.LowHost = low
+				row.Accounts = append(row.Accounts, detail)
 			}
 		}
 	}

@@ -149,15 +149,28 @@ func cookieDegradedTarget(account *Account, settings *OpenAICookieSettings, now 
 		}
 		account = hydrated
 	}
-	if cookiePoolPolicy(account, settings) != nil {
+	keepDegraded := false
+	if p := cookiePoolPolicy(account, settings); p != nil {
 		m, reason := cookiePoolMember(account, settings)
-		if m.State != "active" && m.State != "preparing" && reason != "cookie_pool_exhausted" {
+		keepDegraded = cookieLowHostEnabled(*p) && m.KeepDegraded
+		if keepDegraded {
+			// A quota pause applies to both service modes. The saved marker is
+			// only continuity for an already exhausted mailbox, not proof that
+			// an unavailable Cookie library is safe to use.
+			until, _ := time.Parse(time.RFC3339Nano, account.GetExtraString("codex_cookie_validation_resume_at"))
+			if until.After(now) {
+				return 0
+			}
+			_, known := cookieHostExhaustionStatus(account, settings, now)
+			keepDegraded = known
+		}
+		if m.State != "active" && m.State != "preparing" && reason != "cookie_pool_exhausted" && !keepDegraded {
 			return 0
 		}
 	}
 	_, reason := cookieHostBindingStatus(account, settings, now)
 	if reason == "cookie_host_unbound" || reason == "cookie_host_binding_invalid" || reason == "cookie_host_binding_expired" || reason == "cookie_host_cooldown" {
-		if cookieHostsExhausted(account, settings, now) {
+		if keepDegraded || cookieHostsExhausted(account, settings, now) {
 			return settings.DegradedGroupID
 		}
 	}

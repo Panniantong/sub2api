@@ -278,6 +278,11 @@ type SystemSettings struct {
 	OpenAIAdvancedSchedulerStickyWeightedEnabled           bool
 	OpenAIAdvancedSchedulerSubscriptionPriorityEnabled     bool
 	OpenAIAdvancedSchedulerLBTopK                          string
+	OpenAIAdvancedSchedulerMode                            string
+	OpenAIAdvancedSchedulerQueueSeconds                    string
+	OpenAIAdvancedSchedulerPreOutputSeconds                string
+	OpenAIAdvancedSchedulerMaxSwitches                     string
+	OpenAIAdvancedSchedulerGroupPolicies                   string
 	OpenAIAdvancedSchedulerWeightPriority                  string
 	OpenAIAdvancedSchedulerWeightLoad                      string
 	OpenAIAdvancedSchedulerWeightQueue                     string

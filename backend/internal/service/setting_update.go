@@ -516,6 +516,11 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyOpenAIAdvancedSchedulerStickyWeightedEnabled] = strconv.FormatBool(settings.OpenAIAdvancedSchedulerStickyWeightedEnabled)
 	updates[SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled] = strconv.FormatBool(settings.OpenAIAdvancedSchedulerSubscriptionPriorityEnabled)
 	updates[SettingKeyOpenAIAdvancedSchedulerLBTopK] = settings.OpenAIAdvancedSchedulerLBTopK
+	updates[SettingKeyOpenAIAdvancedSchedulerMode] = settings.OpenAIAdvancedSchedulerMode
+	updates[SettingKeyOpenAIAdvancedSchedulerQueueSeconds] = settings.OpenAIAdvancedSchedulerQueueSeconds
+	updates[SettingKeyOpenAIAdvancedSchedulerPreOutputSeconds] = settings.OpenAIAdvancedSchedulerPreOutputSeconds
+	updates[SettingKeyOpenAIAdvancedSchedulerMaxSwitches] = settings.OpenAIAdvancedSchedulerMaxSwitches
+	updates[SettingKeyOpenAIAdvancedSchedulerGroupPolicies] = settings.OpenAIAdvancedSchedulerGroupPolicies
 	updates[SettingKeyOpenAIAdvancedSchedulerWeightPriority] = settings.OpenAIAdvancedSchedulerWeightPriority
 	updates[SettingKeyOpenAIAdvancedSchedulerWeightLoad] = settings.OpenAIAdvancedSchedulerWeightLoad
 	updates[SettingKeyOpenAIAdvancedSchedulerWeightQueue] = settings.OpenAIAdvancedSchedulerWeightQueue
@@ -755,6 +760,13 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 	s.InvalidateClaudeCodeClientVersionCache()
 	openAIAdvancedSchedulerSettingSF.Forget(openAIAdvancedSchedulerSettingKey)
 	openAIAdvancedSchedulerSettingCache.Store(&cachedOpenAIAdvancedSchedulerSetting{
+		requestPolicy: parseOpenAIRequestSchedulingPolicy(map[string]string{
+			SettingKeyOpenAIAdvancedSchedulerMode:             settings.OpenAIAdvancedSchedulerMode,
+			SettingKeyOpenAIAdvancedSchedulerQueueSeconds:     settings.OpenAIAdvancedSchedulerQueueSeconds,
+			SettingKeyOpenAIAdvancedSchedulerPreOutputSeconds: settings.OpenAIAdvancedSchedulerPreOutputSeconds,
+			SettingKeyOpenAIAdvancedSchedulerMaxSwitches:      settings.OpenAIAdvancedSchedulerMaxSwitches,
+			SettingKeyOpenAIAdvancedSchedulerGroupPolicies:    settings.OpenAIAdvancedSchedulerGroupPolicies,
+		}),
 		lowUpstreamRatePriorityEnabled: settings.OpenAILowUpstreamRatePriorityEnabled,
 		oauthSchedulingRateMultiplier:  settings.OpenAIOAuthSchedulingRateMultiplier,
 		enabled:                        settings.OpenAIAdvancedSchedulerEnabled,

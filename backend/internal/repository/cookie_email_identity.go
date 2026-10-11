@@ -3,6 +3,8 @@ package repository
 import (
 	"context"
 	"errors"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/lib/pq"
@@ -68,6 +70,85 @@ func (r *settingRepository) SaveCookieEmailCooldown(ctx context.Context, email, 
 type cookieCooldownCacheEntry struct {
 	values  map[string]time.Time
 	expires time.Time
+}
+
+// Warm cold candidate mailboxes in one query. Final dispatch deliberately
+// bypasses this short candidate cache via CookieDispatchState.
+func (r *settingRepository) PrimeCookieEmailCooldowns(ctx context.Context, emails []string) error {
+	if len(emails) == 0 {
+		return nil
+	}
+	emails = append([]string(nil), emails...)
+	sort.Strings(emails)
+	// Share cold loads for the same pool. Waiters remain cancellable; the shared
+	// query is bounded independently so one disconnect cannot cancel its peers.
+	for attempt := 0; attempt < 3; attempt++ {
+		missing, _ := r.missingCookieCooldownEmails(emails)
+		if len(missing) == 0 {
+			return nil
+		}
+		ch := r.cooldownFlight.DoChan("candidate-pool:"+strings.Join(emails, "\x00"), func() (any, error) {
+			readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+			defer cancel()
+			return nil, r.primeCookieEmailCooldowns(readCtx, emails)
+		})
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case result := <-ch:
+			if !errors.Is(result.Err, errCookieCooldownChanged) {
+				return result.Err
+			}
+		}
+	}
+	return errCookieCooldownChanged
+}
+
+func (r *settingRepository) missingCookieCooldownEmails(emails []string) ([]string, uint64) {
+	r.cooldownMu.Lock()
+	defer r.cooldownMu.Unlock()
+	missing := make([]string, 0, len(emails))
+	now := time.Now()
+	previous := ""
+	for _, email := range emails {
+		if email == "" || email == previous {
+			continue
+		}
+		previous = email
+		if entry, ok := r.cooldownCache[email]; !ok || !now.Before(entry.expires) {
+			missing = append(missing, email)
+		}
+	}
+	return missing, r.cooldownGeneration
+}
+
+func (r *settingRepository) primeCookieEmailCooldowns(ctx context.Context, emails []string) error {
+	missing, generation := r.missingCookieCooldownEmails(emails)
+	if len(missing) == 0 {
+		return nil
+	}
+	values, err := r.CookieEmailCooldownsBatch(ctx, missing)
+	if err != nil {
+		return err
+	}
+	r.cooldownMu.Lock()
+	defer r.cooldownMu.Unlock()
+	if generation != r.cooldownGeneration {
+		return errCookieCooldownChanged
+	}
+	if r.cooldownCache == nil {
+		r.cooldownCache = make(map[string]cookieCooldownCacheEntry)
+	}
+	if len(r.cooldownCache)+len(missing) > 4096 {
+		clear(r.cooldownCache)
+	}
+	for _, email := range missing {
+		if len(r.cooldownCache) >= 4096 {
+			break
+		}
+		r.cooldownCache[email] = cookieCooldownCacheEntry{values: values[email], expires: time.Now().Add(5 * time.Second)}
+	}
+	return nil
 }
 
 func cloneCookieCooldowns(values map[string]time.Time) map[string]time.Time {

@@ -60,6 +60,9 @@ func decodeOpenAICodexCookieLibrary(raw string) []OpenAICodexCookieLibraryEntry 
 }
 
 func (s *SettingService) GetOpenAICodexCookieLibrary(ctx context.Context) ([]OpenAICodexCookieLibraryEntry, error) {
+	if v := s.dispatchSnapshot(ctx); v != nil {
+		return v.entries, nil
+	}
 	if snapshot := s.cookieAdminSnapshot(ctx); snapshot != nil {
 		snapshot.libraryOnce.Do(func() { snapshot.library, snapshot.libraryErr = s.readOpenAICodexCookieLibrary(ctx, true) })
 		return snapshot.library, snapshot.libraryErr

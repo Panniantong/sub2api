@@ -1835,6 +1835,9 @@ func (s *OpenAIGatewayService) openAICodexCookieForAccount(account *Account) str
 		return ""
 	}
 	host := openAICodexCookieHostFromAccount(account)
+	if host != "" && host == account.openaiCookieDispatchHost {
+		return account.openaiCookieDispatchCookie
+	}
 	if host == "" || s == nil || s.settingService == nil {
 		return openAICodexCookieFromAccount(account)
 	}

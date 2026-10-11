@@ -5295,6 +5295,25 @@
                 </div>
               </div>
 
+
+            </div>
+          </div>
+
+          <div class="card" data-testid="openai-request-scheduling-module">
+            <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">{{ t('admin.settings.requestScheduling.title') }}</h2>
+              <p class="mt-1 text-sm text-gray-500">{{ t('admin.settings.requestScheduling.description') }}</p>
+            </div>
+            <div class="space-y-5 p-6">
+              <OpenAIRequestSchedulingControls
+                :enabled="form.openai_advanced_scheduler_enabled"
+                v-model:mode="form.openai_advanced_scheduler_mode"
+                v-model:queue-seconds="form.openai_advanced_scheduler_queue_seconds"
+                v-model:pre-output-seconds="form.openai_advanced_scheduler_pre_output_seconds"
+                v-model:max-switches="form.openai_advanced_scheduler_max_switches"
+                v-model:group-policies="form.openai_advanced_scheduler_group_policies"
+                @preset="applyLowLoadSchedulingPreset"
+              />
               <div class="flex items-center justify-between border-t border-gray-100 pt-5 dark:border-dark-700">
                 <div>
                   <label
@@ -5400,6 +5419,8 @@
                   </p>
                 </div>
 
+                <details>
+                  <summary class="cursor-pointer text-sm">{{ t("admin.settings.requestScheduling.advanced") }}</summary>
                 <div class="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
                   <label
                     v-for="field in openAIAdvancedSchedulerWeightFields"
@@ -5418,6 +5439,7 @@
                     />
                   </label>
                 </div>
+                </details>
               </div>
             </div>
           </div>
@@ -9145,6 +9167,7 @@
 </template>
 
 <script setup lang="ts">
+import OpenAIRequestSchedulingControls from "@/components/admin/OpenAIRequestSchedulingControls.vue";
 import { ref, reactive, computed, onMounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { adminAPI } from "@/api";
@@ -9930,6 +9953,12 @@ type SettingsForm = Omit<
   openai_advanced_scheduler_sticky_weighted_enabled: boolean;
   openai_advanced_scheduler_subscription_priority_enabled: boolean;
   openai_advanced_scheduler_lb_top_k: string;
+  openai_advanced_scheduler_mode: string;
+  openai_advanced_scheduler_queue_seconds: string;
+  openai_advanced_scheduler_pre_output_seconds: string;
+  openai_advanced_scheduler_max_switches: string;
+  openai_advanced_scheduler_group_policies: string;
+
   openai_advanced_scheduler_weight_priority: string;
   openai_advanced_scheduler_weight_load: string;
   openai_advanced_scheduler_weight_queue: string;
@@ -10174,6 +10203,12 @@ const form = reactive<SettingsForm>({
   openai_advanced_scheduler_sticky_weighted_enabled: false,
   openai_advanced_scheduler_subscription_priority_enabled: false,
   openai_advanced_scheduler_lb_top_k: "",
+  openai_advanced_scheduler_mode: "",
+  openai_advanced_scheduler_queue_seconds: "",
+  openai_advanced_scheduler_pre_output_seconds: "",
+  openai_advanced_scheduler_max_switches: "",
+  openai_advanced_scheduler_group_policies: "",
+
   openai_advanced_scheduler_weight_priority: "",
   openai_advanced_scheduler_weight_load: "",
   openai_advanced_scheduler_weight_queue: "",
@@ -10333,6 +10368,28 @@ type OpenAIAdvancedSchedulerEffectiveKey =
   | "openai_advanced_scheduler_effective_weight_upstream_cost"
   | "openai_advanced_scheduler_effective_weight_previous_response"
   | "openai_advanced_scheduler_effective_weight_session_sticky";
+
+function applyLowLoadSchedulingPreset() {
+  Object.assign(form, {
+    openai_advanced_scheduler_enabled: true,
+    openai_advanced_scheduler_mode: 'low_load',
+    openai_advanced_scheduler_queue_seconds: '2',
+    openai_advanced_scheduler_pre_output_seconds: '25',
+    openai_advanced_scheduler_max_switches: '5',
+    openai_advanced_scheduler_lb_top_k: '7',
+    openai_advanced_scheduler_subscription_priority_enabled: false,
+    openai_advanced_scheduler_weight_load: '4',
+    openai_advanced_scheduler_weight_queue: '2.5',
+    openai_advanced_scheduler_weight_ttft: '2',
+    openai_advanced_scheduler_weight_error_rate: '1',
+    openai_advanced_scheduler_weight_priority: '0.5',
+    openai_advanced_scheduler_weight_reset: '0',
+    openai_advanced_scheduler_weight_quota_headroom: '0',
+    openai_advanced_scheduler_weight_upstream_cost: '0',
+    openai_advanced_scheduler_weight_previous_response: '0',
+    openai_advanced_scheduler_weight_session_sticky: '0',
+  });
+}
 
 const openAIAdvancedSchedulerWeightFields = computed<
   Array<{
@@ -11905,6 +11962,12 @@ async function saveSettings() {
       openai_oauth_scheduling_rate_multiplier:
         oauthSchedulingRate === "" ? null : oauthSchedulingRate,
       openai_advanced_scheduler_enabled: form.openai_advanced_scheduler_enabled,
+      openai_advanced_scheduler_mode: form.openai_advanced_scheduler_mode.trim(),
+      openai_advanced_scheduler_queue_seconds: form.openai_advanced_scheduler_queue_seconds.trim(),
+      openai_advanced_scheduler_pre_output_seconds: form.openai_advanced_scheduler_pre_output_seconds.trim(),
+      openai_advanced_scheduler_max_switches: form.openai_advanced_scheduler_max_switches.trim(),
+      openai_advanced_scheduler_group_policies: form.openai_advanced_scheduler_group_policies.trim(),
+
       openai_advanced_scheduler_sticky_weighted_enabled:
         form.openai_advanced_scheduler_sticky_weighted_enabled,
       openai_advanced_scheduler_subscription_priority_enabled:

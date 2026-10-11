@@ -530,6 +530,21 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.OpenAIAdvancedSchedulerLBTopK != after.OpenAIAdvancedSchedulerLBTopK {
 		changed = append(changed, "openai_advanced_scheduler_lb_top_k")
 	}
+	if before.OpenAIAdvancedSchedulerMode != after.OpenAIAdvancedSchedulerMode {
+		changed = append(changed, "openai_advanced_scheduler_mode")
+	}
+	if before.OpenAIAdvancedSchedulerQueueSeconds != after.OpenAIAdvancedSchedulerQueueSeconds {
+		changed = append(changed, "openai_advanced_scheduler_queue_seconds")
+	}
+	if before.OpenAIAdvancedSchedulerPreOutputSeconds != after.OpenAIAdvancedSchedulerPreOutputSeconds {
+		changed = append(changed, "openai_advanced_scheduler_pre_output_seconds")
+	}
+	if before.OpenAIAdvancedSchedulerGroupPolicies != after.OpenAIAdvancedSchedulerGroupPolicies {
+		changed = append(changed, "openai_advanced_scheduler_group_policies")
+	}
+	if before.OpenAIAdvancedSchedulerMaxSwitches != after.OpenAIAdvancedSchedulerMaxSwitches {
+		changed = append(changed, "openai_advanced_scheduler_max_switches")
+	}
 	if before.OpenAIAdvancedSchedulerWeightPriority != after.OpenAIAdvancedSchedulerWeightPriority {
 		changed = append(changed, "openai_advanced_scheduler_weight_priority")
 	}

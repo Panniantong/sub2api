@@ -166,7 +166,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 
 	maxAccountSwitches := h.maxAccountSwitches
 	if retries != nil {
-		maxAccountSwitches = min(maxAccountSwitches, boundedOpenAIMaxSwitches)
+		maxAccountSwitches = retries.switchLimit()
 	}
 	switchCount := 0
 	profitVetoCount := 0

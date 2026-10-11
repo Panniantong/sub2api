@@ -120,6 +120,10 @@ func (s *SettingService) GetOpenAIIntelligenceModel(ctx context.Context) string 
 var cookieSettingsMu sync.Mutex
 
 func (s *SettingService) GetOpenAICookieSettings(ctx context.Context) (*OpenAICookieSettings, error) {
+	if v := s.dispatchSnapshot(ctx); v != nil {
+		copy := *v.settings
+		return &copy, nil
+	}
 	if snapshot := s.cookieAdminSnapshot(ctx); snapshot != nil {
 		if snapshot.settings == nil {
 			return nil, snapshot.settingsErr

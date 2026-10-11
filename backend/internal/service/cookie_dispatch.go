@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/streamlatency"
 )
 
 // Refresh after admission/queueing, before constructing outbound headers. Use
@@ -13,12 +15,13 @@ func (s *OpenAIGatewayService) refreshCookieDispatchAccount(ctx context.Context,
 	if s == nil || s.settingService == nil || !isOpenAICodexTicketAccount(account) || account.openaiCookieValidationCookie != "" {
 		return account, nil
 	}
+	defer streamlatency.Observe(ctx, "cookie_dispatch_check_ms")()
 	// Keep account admission bounded while the background rotation validates a
 	// replacement. A slow repository causes quick reselection, never a long
 	// request wait; binding and schedulability checks remain authoritative.
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	_, err := s.settingService.GetOpenAICookieSettings(ctx)
+	settings, err := s.settingService.cookieAdminSettings(ctx)
 	if err != nil {
 		return nil, cookieDispatchUnavailable()
 	}
@@ -29,6 +32,10 @@ func (s *OpenAIGatewayService) refreshCookieDispatchAccount(ctx context.Context,
 	}
 	latest, err := s.accountRepo.GetByID(ctx, account.ID)
 	if err != nil || latest == nil || !latest.IsSchedulable() {
+		return nil, cookieDispatchUnavailable()
+	}
+	ctx, err = s.settingService.withCookieDispatchSnapshot(ctx, latest, settings)
+	if err != nil {
 		return nil, cookieDispatchUnavailable()
 	}
 	if s.openAICookieSchedulingBlockReason(ctx, latest) != "" {
@@ -50,9 +57,11 @@ func (s *OpenAIGatewayService) refreshCookieDispatchAccount(ctx context.Context,
 	}
 	if host := openAICodexCookieHostFromAccount(current); host != "" {
 		entry, err := s.settingService.LookupOpenAICodexCookie(ctx, host)
-		if err != nil || entry == nil {
+		if err != nil || entry == nil || entry.Cookie == "" {
 			return nil, cookieDispatchUnavailable()
 		}
+		current.openaiCookieDispatchHost = host
+		current.openaiCookieDispatchCookie = entry.Cookie
 	}
 	return current, nil
 }
@@ -70,7 +79,7 @@ func (s *OpenAIGatewayService) checkCookieDispatchTurn(ctx context.Context, acco
 	if err != nil {
 		return err
 	}
-	if latest != nil && account != nil && (openAICodexCookieHostFromAccount(latest) != openAICodexCookieHostFromAccount(account) || latest.openaiCookieDegraded != account.openaiCookieDegraded) {
+	if latest != nil && account != nil && (openAICodexCookieHostFromAccount(latest) != openAICodexCookieHostFromAccount(account) || latest.openaiCookieDegraded != account.openaiCookieDegraded || (account.openaiCookieDispatchHost != "" && latest.openaiCookieDispatchCookie != account.openaiCookieDispatchCookie)) {
 		return cookieDispatchUnavailable()
 	}
 	return nil

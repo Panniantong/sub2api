@@ -1,5 +1,24 @@
 export default {
     settings: {
+      requestScheduling: {
+        "title": "OpenAI 请求调度",
+        "description": "低负载选号、并发排队与首字等待。适用于 HTTP Responses、Chat Completions 和 Messages。",
+        "applyHint": "保存后新请求使用新配置，正在执行的请求不变。留空沿用服务默认值。",
+        "preset": "使用低负载预设",
+        "mode": "高级调度模式",
+        "modeHint": "综合评分兼顾各项权重；低负载优先先选并发占用较低的账户。关闭高级调度时沿用原调度。",
+        "balanced": "综合评分",
+        "lowLoad": "低负载优先",
+        "queue": "单次并发排队上限（秒）",
+        "queueHint": "1–10 秒。仅等待空闲并发槽位，超时内部重新选号；需要开启高级调度。",
+        "preOutput": "首字总等待预算（秒）",
+        "preOutputHint": "1–3600 秒。包含选号、排队与重试；有效输出后停止计时。非流式限制到完整响应。",
+        "switches": "最多换号次数",
+        "switchesHint": "0–20 次，不包含首账号。5 次表示最多使用 6 个不同账号。",
+        "cookieHint": "Cookie 实时校验始终开启：发出请求前检查最新绑定、Cookie 和冷却状态；无效时内部换号。必须依赖原账号上下文的请求保持绑定。",
+        "advanced": "展开评分权重"
+      },
+
       title: '系统设置',
       description: '管理注册、邮箱验证、默认值和 SMTP 设置',
       tabs: {

@@ -20,9 +20,12 @@ export interface CookieRotationPoolPolicy {
  preparation_multiplier?: number
  max_preparing_accounts?: number
  quota_priority?: '' | 'used_desc' | 'remaining_desc'
+ low_host_rotation_enabled?: boolean
+ low_host_threshold?: number
+ low_host_account_slots?: number
 }
 export interface CookieRotationPoolSnapshot {
- groups: Record<number, { target_capacity: number; ready_capacity: number; current_demand?: number; demand_concurrency?: number; demand_unavailable?: boolean; members: Record<number, { state: string }> }>
+ groups: Record<number, { target_capacity: number; ready_capacity: number; low_host_ready_capacity?: number; current_demand?: number; demand_concurrency?: number; demand_unavailable?: boolean; members: Record<number, { state: string; low_host_forced?: boolean }> }>
 }
 export interface CookieSettings {
  rotation_pools?: CookieRotationPoolPolicy[]
@@ -151,6 +154,7 @@ export interface CookieDashboard {
 }
 
 export interface CookiePoolDashboardGroup {
+  low_host?: CookieLowHostDashboard
   wait_reasons?: Record<string, number>
   accounts?: CookiePoolDashboardAccount[]
   policy: CookieRotationPoolPolicy
@@ -171,11 +175,22 @@ export interface CookiePoolDashboardGroup {
 }
 
 export interface CookiePoolDashboardAccount {
+  low_host?: { state: string; slot_occupied: boolean; degraded_continuing: boolean; binding_until?: string }
   id: number; name: string; email: string; state: string; concurrency: number; reason: string
   resume_at?: string; preparing_since?: string; preparing_deadline?: string
   bound_host: string; binding_expires_at?: string; validation_host: string; validation_stage: string; validation_updated_at?: string
   available_hosts: number
   hosts: { host: string; state: string; expires_at: string; cooldown_until?: string }[]
+}
+export interface CookieLowHostDashboard {
+  slots_used: number
+  preparing: number
+  active: number
+  retiring: number
+  waiting: number
+  blocked: number
+  ready_capacity: number
+  degraded_continuing: number
 }
 export async function getDashboard(details_group_id?: number) {
   return (await apiClient.get<CookieDashboard>('/admin/settings/cookie/dashboard', { timeout: 15000, params: details_group_id ? { details_group_id } : undefined })).data
